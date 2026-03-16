@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
@@ -28,7 +27,7 @@ SERVER_BASE_URL = "http://localhost:9897"
 
 def get_args():
     parser = argparse.ArgumentParser(
-        description="Sherpa-ONNX 关键词检测 - 使用 PyAudio 从麦克风实时检测关键词",
+        description="Sherpa-ONNX 关键词检测,使用 PyAudio 从麦克风实时检测关键词",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
 
@@ -60,7 +59,7 @@ def get_args():
         "--keywords-file",
         type=str,
         required=True,
-        help="关键词文件路径，每行一个关键词（需要先用 text2token 工具处理）"
+        help="关键词文件路径，每行一个关键词."
     )
 
     parser.add_argument(
@@ -117,7 +116,7 @@ def get_args():
         "--input-device-index",
         type=int,
         default=None,
-        help="PyAudio 输入设备 ID（用于选择 echo-cancel 等虚拟麦克风；不填则使用默认输入设备）"
+        help="PyAudio 输入设备 ID"
     )
 
     parser.add_argument(
@@ -172,7 +171,6 @@ def get_args():
 
 
 def main():
-    """主函数"""
     args = get_args()
 
     if args.debug:
@@ -272,22 +270,22 @@ def main():
                         if duration > 0:
                             time.sleep(min(duration, 5.0))
 
-                    threading.Thread(
-                        target=_play_response, daemon=True).start()
+                    threading.Thread(target=_play_response, daemon=True).start()
 
+                    # 4. 短暂暂停
                     interrupt_pause_seconds = float(
-                        os.environ.get(
-                            "INTERRUPT_PAUSE_SECONDS", "0.2"
-                        ) or "0.2"
+                        os.environ.get("INTERRUPT_PAUSE_SECONDS", "0.2")
+                        or "0.2"
                     )
                     if interrupt_pause_seconds > 0:
                         time.sleep(min(interrupt_pause_seconds, 0.5))
 
                     detector.reset_stream()
 
+                    # 开始录音
                     state.start_recording(state.get_pre_roll())
 
-            else:
+            else:  # ACTIVE
                 state.recorded_frames.append(audio_data)
                 state.chunk_count += 1
 
