@@ -1,6 +1,5 @@
 import logging
 from logging.handlers import RotatingFileHandler
-import yaml
 
 
 def setup_logger(config):

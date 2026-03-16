@@ -6,7 +6,7 @@ Keyword Spotting package based on Sherpa-ONNX
 """
 
 from .detector import KeywordDetector, DetectionResult
-from .audio import AudioRecorder, AudioPlayer
+from .audio import AudioRecorder
 from .server_notify import ServerNotifier
 from .utils import check_file_exists, rms
 
@@ -14,7 +14,6 @@ __all__ = [
     "KeywordDetector",
     "DetectionResult",
     "AudioRecorder",
-    "AudioPlayer",
     "ServerNotifier",
     "check_file_exists",
     "rms",
