@@ -9,17 +9,13 @@ import threading
 import time
 import wave
 
-from .detector import KeywordDetector, DetectionState
-from .audio import AudioRecorder
-from .server_notify import ServerNotifier, AudioPlayer
-from .utils import rms
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
-logger = logging.getLogger(__name__)
+from .detector import Detector, DetectionState
+from .audio import AudioRecorder
+from .client import ServerNotifier
+from utils import rms, get_logger
+
+logger = get_logger(__name__)
 
 TOP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SERVER_BASE_URL = "http://localhost:9897"
@@ -30,7 +26,7 @@ def get_args():
         description="Sherpa-ONNX 关键词检测,使用 PyAudio 从麦克风实时检测关键词",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
-
+    # 模型文件参数
     parser.add_argument(
         "--tokens",
         type=str,
@@ -59,9 +55,10 @@ def get_args():
         "--keywords-file",
         type=str,
         required=True,
-        help="关键词文件路径，每行一个关键词."
+        help="关键词文件路径，每行一个关键词（需要先用 text2token 工具处理）"
     )
 
+    # 推理参数
     parser.add_argument(
         "--num-threads",
         type=int,
@@ -73,7 +70,7 @@ def get_args():
         type=str,
         default="cpu",
         choices=["cpu", "cuda", "coreml"],
-        help="推理后端：cpu, cuda, coreml"
+        help="推理后端: cpu, cuda, coreml"
     )
     parser.add_argument(
         "--max-active-paths",
@@ -85,7 +82,7 @@ def get_args():
         "--num-trailing-blanks",
         type=int,
         default=1,
-        help="关键词后跟随的空白帧数（如果关键词之间有重叠 token，可设置为较大值如 8）"
+        help="关键词后跟随的空白帧数（如果关键词之间有重叠token，可设置为较大值如8）"
     )
     parser.add_argument(
         "--keywords-score",
@@ -100,6 +97,7 @@ def get_args():
         help="关键词触发阈值（概率），越大越难触发"
     )
 
+    # 音频参数
     parser.add_argument(
         "--sample-rate",
         type=int,
@@ -112,59 +110,12 @@ def get_args():
         default=0.1,
         help="每次读取的音频时长（秒）"
     )
+
     parser.add_argument(
         "--input-device-index",
         type=int,
         default=None,
-        help="PyAudio 输入设备 ID"
-    )
-
-    parser.add_argument(
-        "--pre-roll-seconds",
-        type=float,
-        default=0.5,
-        help="唤醒词前保留的音频时长（秒）"
-    )
-    parser.add_argument(
-        "--silence-rms-threshold",
-        type=float,
-        default=0.015,
-        help="静音 RMS 阈值"
-    )
-    parser.add_argument(
-        "--silence-count-threshold",
-        type=int,
-        default=15,
-        help="静音判定块数阈值"
-    )
-    parser.add_argument(
-        "--min-record-seconds",
-        type=float,
-        default=1.5,
-        help="最小录音时长（秒）"
-    )
-    parser.add_argument(
-        "--max-record-seconds",
-        type=float,
-        default=15.0,
-        help="最大录音时长（秒）"
-    )
-    parser.add_argument(
-        "--post-wake-grace-seconds",
-        type=float,
-        default=1.2,
-        help="唤醒后宽限时长（秒）"
-    )
-
-    parser.add_argument(
-        "--debug",
-        action="store_true",
-        help="启用调试日志"
-    )
-    parser.add_argument(
-        "--list-devices",
-        action="store_true",
-        help="列出音频设备并退出"
+        help="PyAudio 输入设备 ID（用于选择 echo-cancel 等虚拟麦克风；不填则使用默认输入设备）"
     )
 
     return parser.parse_args()
@@ -181,6 +132,7 @@ def main():
         recorder.list_devices()
         return
 
+    # 初始化模型
     detector = KeywordDetector(
         tokens=args.tokens,
         encoder=args.encoder,
@@ -197,30 +149,17 @@ def main():
 
     if not detector.validate_files():
         logger.error("请检查模型文件路径是否正确！")
-        logger.error("模型下载地址：https://k2-fsa.github.io/sherpa/onnx/kws/pretrained_models/index.html")
         sys.exit(1)
-
-    recorder = AudioRecorder(
-        sample_rate=args.sample_rate,
-        chunk_duration=args.chunk_duration,
-        input_device_index=args.input_device_index,
-    )
-
-    device_info = recorder.list_devices()
-    default_device_id = device_info['default_id']
 
     detector.create_spotter()
     detector.create_stream()
 
+    # 初始化外围组件
     notifier = ServerNotifier()
     player = AudioPlayer(sample_rate=args.sample_rate)
-
     notifier.kws_ready()
 
-    input_device_index = args.input_device_index \
-        if args.input_device_index is not None else default_device_id
-    recorder.start(device_index=input_device_index)
-
+    # 初始化状态机
     state = DetectionState(
         sample_rate=args.sample_rate,
         chunk_duration=args.chunk_duration,
@@ -232,106 +171,125 @@ def main():
         post_wake_grace_seconds=args.post_wake_grace_seconds,
     )
 
-    logger.info("=" * 60)
-    logger.info("关键词检测已启动！请对着麦克风说出关键词...")
-    logger.info(f"关键词文件：{args.keywords_file}")
-    logger.info("按 Ctrl+C 停止程序")
-    logger.info("=" * 60)
+    # 初始化录音器
+    recorder = AudioRecorder(
+        sample_rate=args.sample_rate,
+        chunk_duration=args.chunk_duration,
+        input_device_index=args.input_device_index,
+    )
 
     try:
-        while True:
-            samples = recorder.read_chunk()
-            audio_data = samples.tobytes()
+        # 使用上下文管理器自动启停麦克风
+        with recorder:
+            logger.info("=" * 60)
+            logger.info("关键词检测已启动！请对着麦克风说出关键词...")
+            logger.info(f"关键词文件：{args.keywords_file}")
+            logger.info("按 Ctrl+C 停止程序")
+            logger.info("=" * 60)
 
-            if state.state == "PASSIVE":
-                state.add_to_pre_roll(audio_data)
-                detector.accept_waveform(args.sample_rate, samples)
+            # 初始重置一次流
+            detector.reset_stream()
 
-                result = detector.detect()
-                if result:
-                    count = state.increment_detection_count()
-                    timestamp = state.get_timestamp()
+            while True:
+                # 修复 Bug: 分别获取用于保存的 bytes 和用于推理的 float32
+                audio_bytes, samples_float32 = recorder.read_chunk()
 
-                    logger.info("=" * 40)
-                    logger.info(f"🎯 检测到关键词！第 {count} 次")
-                    logger.info(f"   关键词：{result}")
-                    logger.info(f"   时间：{timestamp}")
-                    logger.info("=" * 40)
+                if state.state == "PASSIVE":
+                    state.add_to_pre_roll(audio_bytes)
+                    detector.accept_waveform(args.sample_rate, samples_float32)
 
-                    logger.info("中断语音队列")
-                    notifier.interrupt_play()
+                    result = detector.detect()
+                    if result:
+                        count = state.increment_detection_count()
+                        timestamp = state.get_timestamp()
 
-                    player.play_tone(
-                        freq_hz=880.0, duration_ms=120, volume=0.25)
+                        logger.info("=" * 40)
+                        logger.info(
+                            f"🎯 检测到关键词！第 {count} 次: {result} ({timestamp})")
+                        logger.info("=" * 40)
 
-                    def _play_response():
-                        time.sleep(0.15)
-                        duration = notifier.play_preset()
-                        if duration > 0:
-                            time.sleep(min(duration, 5.0))
+                        notifier.interrupt_play()
+                        player.play_tone(freq_hz=880.0, duration_ms=120,
+                                         volume=0.25)
 
-                    threading.Thread(target=_play_response, daemon=True).start()
+                        def _play_response():
+                            time.sleep(0.15)
+                            duration = notifier.play_preset()
+                            if duration > 0:
+                                time.sleep(min(duration, 5.0))
 
-                    # 4. 短暂暂停
-                    interrupt_pause_seconds = float(
-                        os.environ.get("INTERRUPT_PAUSE_SECONDS", "0.2")
-                        or "0.2"
-                    )
-                    if interrupt_pause_seconds > 0:
-                        time.sleep(min(interrupt_pause_seconds, 0.5))
+                        threading.Thread(target=_play_response,
+                                         daemon=True).start()
 
-                    detector.reset_stream()
+                        pause_sec = float(
+                            os.environ.get("INTERRUPT_PAUSE_SECONDS",
+                                           "0.2") or "0.2")
+                        if pause_sec > 0:
+                            time.sleep(min(pause_sec, 0.5))
 
-                    # 开始录音
-                    state.start_recording(state.get_pre_roll())
+                        # 【状态切换 1】: PASSIVE -> ACTIVE
+                        detector.reset_stream()  # 唤醒后立刻清空流特征，为可能的二次唤醒做准备
+                        state.start_recording(state.get_pre_roll())
 
-            else:  # ACTIVE
-                state.recorded_frames.append(audio_data)
-                state.chunk_count += 1
+                else:  # ACTIVE (录音状态)
+                    state.recorded_frames.append(audio_bytes)
+                    state.chunk_count += 1
 
-                detector.accept_waveform(args.sample_rate, samples)
-                result = detector.detect()
-                if result:
-                    count = state.increment_detection_count()
-                    timestamp = state.get_timestamp()
-                    logger.info("=" * 40)
-                    logger.info(f"🎯 ACTIVE 阶段检测到关键词！第 {count} 次")
-                    logger.info(f"   关键词：{result}")
-                    logger.info(f"   时间：{timestamp}")
-                    logger.info("=" * 40)
-                    logger.info("二次唤醒：中断语音队列并重置录音窗口")
-                    notifier.interrupt_play()
-                    detector.reset_stream()
-                    state.stop_recording()
-                    continue
+                    # 支持二次唤醒
+                    detector.accept_waveform(args.sample_rate, samples_float32)
+                    result = detector.detect()
+                    if result:
+                        count = state.increment_detection_count()
+                        timestamp = state.get_timestamp()
+                        logger.info("=" * 40)
+                        logger.info(
+                            f"🎯 ACTIVE 阶段二次唤醒！第 {count} 次: {result}")
+                        logger.info("=" * 40)
 
-                cur_rms = rms(samples)
-                state.update_silence(cur_rms < state.silence_rms_threshold)
+                        notifier.interrupt_play()
+                        detector.reset_stream()  # 二次唤醒立刻清空流
+                        state.stop_recording()  # 停止旧的
+                        state.start_recording((state.get_pre_roll())
+                        continue  # 跳过本次循环的后续逻辑，直接进入下一次录音周期
 
-                if state.should_stop_recording():
-                    fname = state.get_recording_filename(TOP_DIR)
+                    # ==========================================
+                    # VAD 静音检测与自动停止判定
+                    # ==========================================
 
-                    with wave.open(fname, 'wb') as wav_file:
-                        wav_file.setnchannels(1)
-                        wav_file.setsampwidth(2)
-                        wav_file.setframerate(args.sample_rate)
-                        wav_file.writeframes(b''.join(state.recorded_frames))
+                    # 传入 float32 格式的数据计算当前帧的 RMS 能量
+                    cur_rms = rms(samples_float32)
+                    state.update_silence(cur_rms < state.silence_rms_threshold)
 
-                    player.play_tone(freq_hz=520.0, duration_ms=180, volume=0.3)
+                    if state.should_stop_recording():
+                        # 获取生成的文件名并确保目录存在
+                        fname = state.get_recording_filename(TOP_DIR)
+                        os.makedirs(os.path.dirname(fname), exist_ok=True)
 
-                    threading.Thread(
-                        target=notifier.to_upload, args=(fname,), daemon=True
-                    ).start()
+                        # 使用 bytes 数据保存为 16-bit PCM WAV 文件
+                        with wave.open(fname, 'wb') as wav_file:
+                            wav_file.setnchannels(1)
+                            wav_file.setsampwidth(2) # 2 bytes = 16 bit
+                            wav_file.setframerate(args.sample_rate)
+                            wav_file.writeframes(b''.join(state.recorded_frames))
 
-                    state.stop_recording()
-                    detector.reset_stream()
+                        logger.info(f"💾 录音已保存：{fname}")
+
+                        # 异步上传音频，防止阻塞下一轮唤醒检测
+                        threading.Thread(
+                            target=notifier.to_upload, args=(fname,), daemon=True
+                        ).start()
+
+                        # 【状态切换 2】: ACTIVE -> PASSIVE
+                        state.stop_recording()   # 将状态切换回 PASSIVE
+                        detector.reset_stream()  # 录音结束后，重置流准备下一轮纯净的唤醒检测
+                        logger.info("🔄 录音结束，重置检测流，准备下一轮等待...")
 
     except KeyboardInterrupt:
         logger.info("\n程序已停止（用户中断）")
     finally:
-        recorder.stop()
-        notifier.close()
-        logger.info(f"总共检测到 {state.detection_count} 次关键词")
+        # 由于 AudioRecorder 使用了 with 上下文管理器，
+        # 退出代码块时会自动调用 __exit__ 并安全关闭麦克风，无需手动 recorder.stop()
+        logger.info(f"🏁 运行结束，本次总共检测到 {state.detection_count} 次关键词")
 
 
 if __name__ == "__main__":
