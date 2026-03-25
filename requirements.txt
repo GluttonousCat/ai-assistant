@@ -1,0 +1,12 @@
+numpy>=1.24.0
+pyaudio>=0.2.13
+fastapi~=0.115.11
+sherpa_onnx~=1.12.29
+webrtcvad~=2.0.10
+PyYAML~=6.0.2
+openwakeword~=0.6.0
+akshare~=1.18.44
+mysql-connector-python~=9.6.0
+tushare~=1.4.25
+pandas~=2.2.3
+SQLAlchemy~=2.0.48

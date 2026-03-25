@@ -1,15 +1,9 @@
-# config.yaml
-audio:
-  sample_rate: 16000
-  channels: 1
-  frame_duration_ms: 30
-  device_index: null
 
-engine:
-  vad_aggressiveness: 3
-  sensitivity: 0.5
-  model_path: "./models/wake_word.ppn"
 
-logging:
-  level: "INFO"
-  file: "./logs/app.log"
+# **** MYSQL CONFIG ****
+NEBULA_CONFIG:
+  host: localhost
+  port: 3306
+  user: root
+  password: @Lish145210
+
