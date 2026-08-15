@@ -59,10 +59,13 @@ class PgPool:
 
         cls._config = dict(cfg)
         try:
+            # search_path: 让无 schema 前缀的表名可解析 (LLM 生成 SQL 常省略 schema)
+            conn_options = "-c search_path=stock,fin,public"
             cls._pool = SimpleConnectionPool(
                 minconn=minconn,
                 maxconn=maxconn,
                 connect_timeout=10,
+                options=conn_options,
                 **_CONN_KW,
                 **cfg,
             )

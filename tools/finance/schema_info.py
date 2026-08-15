@@ -61,6 +61,22 @@ FIELD_DESCRIPTIONS: Dict[str, Dict[str, str]] = {
         "turnover_rate": "换手率(%)", "total_mv": "总市值(万元)",
         "circ_mv": "流通市值(万元)", "dv_ratio": "股息率(%)",
     },
+    "v_financial_summary": {
+        "revenue": "营业收入(元)", "n_income_attr_p": "归母净利润(元)",
+        "total_revenue": "营业总收入(元)", "operate_profit": "营业利润(元)",
+        "n_income": "净利润含少数股东(元)", "roe": "净资产收益率(%)",
+        "grossprofit_margin": "毛利率(%)", "netprofit_yoy": "净利润同比(%)",
+        "or_yoy": "营收同比(%)", "debt_to_assets": "资产负债率(%)",
+        "n_cashflow_act": "经营现金流净额(元)", "equity_attr_p": "净资产(元)",
+        "total_assets": "总资产(元)",
+        "end_date": "报告期(年报1231/半年0630/三季0930)",
+    },
+    "v_daily_valuation": {
+        "close": "收盘价", "pct_chg": "涨跌幅(%)", "vol": "成交量(手)",
+        "amount": "成交额(千元)", "pe_ttm": "市盈率TTM", "pb": "市净率",
+        "total_mv": "总市值(万元)", "circ_mv": "流通市值(万元)",
+        "turnover_rate": "换手率(%)", "trade_date": "交易日",
+    },
 }
 
 
