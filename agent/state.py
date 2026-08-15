@@ -39,6 +39,9 @@ class AgentState:
     user_input: str = ""
     parsed_intent: Optional[Dict] = None
 
+    # 财务分析结果 (Text-to-SQL)
+    fin_result: Optional[Dict] = None
+
     # Cookie管理
     cookies: Dict[str, CookieStatus] = field(default_factory=dict)
     active_cookie: Optional[str] = None
