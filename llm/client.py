@@ -22,12 +22,16 @@ class LLMClient:
         model: Optional[str] = None,
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
+        timeout: float = 30.0,
+        max_retries: int = 1,
     ):
         config = get_config()
         self.model = model or config.llm_model
         self.client = OpenAI(
             api_key=api_key or config.openai_api_key,
             base_url=base_url or config.openai_base_url,
+            timeout=timeout,
+            max_retries=max_retries,
         )
 
     @staticmethod
