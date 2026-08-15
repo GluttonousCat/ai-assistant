@@ -1,10 +1,7 @@
 # -*- encoding: utf-8 -*-
 """
-@date: 2026/03/24
-@author: GluttonousCat
+API 层
 """
-from api.router import *
-from api.dependency import *
-
+from api.router import router
 
 __all__ = ["router"]

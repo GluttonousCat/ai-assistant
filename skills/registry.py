@@ -1,0 +1,51 @@
+"""
+Skill 注册表
+"""
+from __future__ import annotations
+
+from typing import Dict, List, Optional
+
+from skills.base import BaseSkill, SkillContext
+
+
+class SkillRegistry:
+    """Skill 注册表"""
+
+    _instance: Optional["SkillRegistry"] = None
+    _skills: Dict[str, BaseSkill]
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._skills = {}
+        return cls._instance
+
+    def register(self, skill: BaseSkill):
+        """注册 Skill"""
+        self._skills[skill.name] = skill
+
+    def get(self, name: str) -> Optional[BaseSkill]:
+        """按名称获取 Skill"""
+        return self._skills.get(name)
+
+    def list_all(self) -> List[BaseSkill]:
+        """列出所有 Skill"""
+        return list(self._skills.values())
+
+    def match_by_intent(self, user_input: str) -> Optional[BaseSkill]:
+        """根据用户输入匹配最合适的 Skill"""
+        for skill in self._skills.values():
+            if skill.match_intent(user_input):
+                return skill
+        return None
+
+    def describe_all(self) -> str:
+        """生成所有 Skill 的描述文本 (供 LLM 路由使用)"""
+        lines = []
+        for skill in self._skills.values():
+            lines.append(f"- {skill.name}: {skill.description}")
+        return "\n".join(lines)
+
+
+def get_skill_registry() -> SkillRegistry:
+    return SkillRegistry()
