@@ -41,14 +41,17 @@ def _get_agent():
 
 
 def run_case(case: Dict, timeout: float = 30) -> Dict:
-    """执行单条用例, 记录多维度结果"""
+    """执行单条用例, 记录多维度结果
+    支持 v2 数据集 (带 gold 标注与 expects) 与旧格式兼容
+    """
     t0 = time.time()
     invoke = _get_agent()
+    expected_intent = case.get("expected_intent", case.get("intent"))
     result = {
         "id": case["id"],
         "question": case["question"],
-        "type": case["type"],
-        "expected_intent": case["expected_intent"],
+        "type": case.get("type", case.get("category")),
+        "expected_intent": expected_intent,
         "latency_ms": None,
         "actual_intent": None,
         "intent_ok": False,
@@ -57,7 +60,8 @@ def run_case(case: Dict, timeout: float = 30) -> Dict:
         "sql_blocked": False,       # 危险 SQL 被拦截
         "exec_ok": None,            # 执行是否无异常 (None=无SQL)
         "rows": None,
-        "has_data": False,          # 非空结果
+        "has_data": False,          # 非全NULL结果
+        "data_value_ok": None,      # None=无预期  True命中 False未命中 maybe=不评判
         "error": None,
         "response": "",
     }
@@ -66,7 +70,7 @@ def run_case(case: Dict, timeout: float = 30) -> Dict:
         result["latency_ms"] = int((time.time() - t0) * 1000)
         pi = state.parsed_intent or {}
         result["actual_intent"] = pi.get("type")
-        result["intent_ok"] = pi.get("type") == case["expected_intent"]
+        result["intent_ok"] = pi.get("type") == expected_intent
 
         fr = state.fin_result or {}
         sql = fr.get("sql")
@@ -74,17 +78,40 @@ def run_case(case: Dict, timeout: float = 30) -> Dict:
         if sql:
             result["sql_generated"] = True
 
-        # 危险 SQL: 来自边缘用例且被拦截 (fin_result None 且 response 含拒绝)
-        if case["type"] == "edge" and "DROP" in str(case.get("question", "")).upper():
-            result["sql_blocked"] = "SQL 校验" in str(state.response)
-        elif state.response and "❌" in state.response:
-            result["error"] = state.response
-            if sql is None:
-                result["sql_blocked"] = True  # 安全措施生效且未生成SQL
+        # 危险/攻击用例: 应被拒绝 (SQL未生成或校验拦截或响应为拒绝)
+        if case.get("category") in ("edge", "attack"):
+            exp_block = case.get("expects", {}).get("should_block", False)
+            responded_blocked = ("❌" in str(state.response)) or (sql is None and state.response)
+            result["sql_blocked"] = responded_blocked
+            result["exec_ok"] = not (str(state.response).startswith("❌"))
 
-        result["rows"] = fr.get("rows")
-        result["has_data"] = (fr.get("rows") or 0) > 0
-        result["exec_ok"] = not (state.response.startswith("❌"))
+        # 数据断言 (非全NULL才算有数据)
+        rows = fr.get("rows") or ()
+        # rows 可能是 int (旧) 或 list (fin_result 里 rows 存的行)
+        if isinstance(rows, int):
+            n_rows = rows
+        else:
+            n_rows = len(rows) if rows else 0
+        result["rows"] = n_rows
+
+        # v2: fin_result.rows 存的是行列表, 判断是否"全NULL/全空"
+        if sql and isinstance(fr.get("rows"), (list, tuple)) and fr.get("rows"):
+            vals = [v for row in fr["rows"] for v in (row.values() if isinstance(row, dict) else row)]
+            non_null = [v for v in vals if v is not None and str(v) not in ("", "-", "None")]
+            result["has_data"] = len(non_null) > 0
+        else:
+            result["has_data"] = n_rows > 0
+
+        # 与 gold 预期比对
+        exp = case.get("expects", {}).get("has_result")
+        if exp is True:
+            result["data_value_ok"] = result["has_data"]
+        elif exp is False:
+            result["data_value_ok"] = not result["has_data"]
+        else:  # maybe / 未标注
+            result["data_value_ok"] = "maybe"
+
+        result["exec_ok"] = not (str(state.response).startswith("❌"))
         result["response"] = state.response[:500]
     except Exception as e:
         result["error"] = f"{type(e).__name__}: {str(e)[:200]}"
@@ -100,27 +127,33 @@ def aggregate(results: List[Dict]) -> Dict:
     intent_ok = sum(1 for r in results if r["intent_ok"])
     agg["intent_accuracy"] = intent_ok / n if n else 0
 
-    # SQL 生成率 (query 类)
-    query_cases = [r for r in results if r["type"] in ("financial", "market", "combined")]
+    # SQL 生成率 (query / compare 类 有SQL预期)
+    query_cases = [r for r in results if r["type"] in ("financial", "market", "combined", "aliases", "rank")]
     if query_cases:
         sql_gen = sum(1 for r in query_cases if r["sql_generated"])
         agg["sql_generation_rate"] = sql_gen / len(query_cases)
-        # 执行成功率 (有SQL且无异常)
         exec_ok = sum(1 for r in query_cases if r["sql"] and r["exec_ok"])
         agg["execution_success_rate"] = exec_ok / len(query_cases)
-        # 数据命中 (非空)
-        has_data = sum(1 for r in query_cases if r["has_data"])
-        agg["data_hit_rate"] = has_data / len(query_cases)
     else:
         agg["sql_generation_rate"] = 0
         agg["execution_success_rate"] = 0
-        agg["data_hit_rate"] = 0
 
-    # 危险拦截
-    edge_cases = [r for r in results if r["type"] == "edge"]
+    # 数据命中 (gold 断言, 置信度: 仅对 expects=True/False 严格判定)
+    asserted = [r for r in results if r.get("data_value_ok") is not None
+                and r.get("data_value_ok") != "maybe"]
+    if asserted:
+        hit = sum(1 for r in asserted if r["data_value_ok"] is True)
+        agg["data_hit_rate"] = hit / len(asserted)
+        agg["data_asserted"] = len(asserted)
+    else:
+        agg["data_hit_rate"] = 0
+        agg["data_asserted"] = 0
+
+    # 攻击/边界处理 (应被拦截)
+    edge_cases = [r for r in results if r["type"] in ("edge", "attack")]
     if edge_cases:
         blocked = sum(1 for r in edge_cases
-                      if r["sql_blocked"] or r["expected_intent"] != r["actual_intent"])
+                      if r["sql_blocked"] or r["expected_intent"] == "unknown" and r["actual_intent"] == "unknown")
         agg["edge_handled_rate"] = blocked / len(edge_cases)
     else:
         agg["edge_handled_rate"] = 0
@@ -153,7 +186,7 @@ def save_results(results: List[Dict], agg: Dict):
         writer = csv.DictWriter(f, fieldnames=[
             "id", "question", "type", "expected_intent", "actual_intent",
             "intent_ok", "sql_generated", "exec_ok", "rows", "has_data",
-            "sql_blocked", "latency_ms", "error",
+            "data_value_ok", "sql_blocked", "latency_ms", "error",
         ])
         writer.writeheader()
         for r in results:
@@ -169,7 +202,7 @@ def print_report(agg: Dict):
     print(f"意图准确率:      {agg['intent_accuracy']*100:.1f}%")
     print(f"SQL 生成率:      {agg['sql_generation_rate']*100:.1f}%  (query类)")
     print(f"执行成功率:      {agg['execution_success_rate']*100:.1f}%")
-    print(f"数据命中率:      {agg['data_hit_rate']*100:.1f}%  (受回填进度影响)")
+    print(f"数据命中率:      {agg['data_hit_rate']*100:.1f}%  ({agg.get('data_asserted',0)} 条gold断言)")
     print(f"边界处理率:      {agg['edge_handled_rate']*100:.1f}%")
     print(f"平均延迟:        {agg['avg_latency_ms']:.0f}ms")
     print("-" * 60)
@@ -179,17 +212,35 @@ def print_report(agg: Dict):
     print("=" * 60)
 
 
-def main(n: int = 1000, save: bool = True, mode: str = "rule"):
+def main(n: int = 1000, save: bool = True, mode: str = "rule",
+         dataset: Optional[str] = None, seed: int = 42):
     """
     mode:
       'rule' - 禁用 LLM, 只测规则路径 (无配额限制, 快速)
       'llm'  - 启用 LLM, 测完整链路 (需有效 API key)
+    dataset: 固定数据集文件 (v2 json), 缺省用最新生成的
     """
-    from evals.generate_cases import generate_cases
+    from evals.gen_v2 import generate as generate_v2
+    from evals.dataset import EvalCase
 
-    print(f"生成 {n} 条评测用例... (mode={mode})")
-    cases = generate_cases(n)
-    print(f"开始评测 ({n} 条)...")
+    cases = None
+    if dataset is None:
+        # 优先加载已生成的数据集文件
+        import glob as _glob
+        files = sorted(_glob.glob(str(Path(__file__).parent / "datasets" / "eval_dataset_v2_*.json")))
+        if files:
+            with open(files[-1], encoding="utf-8") as f:
+                cases = json.load(f)["cases"]
+            print(f"加载数据集: {files[-1]} ({len(cases)} 条)")
+    if cases is None and dataset:
+        with open(dataset, encoding="utf-8") as f:
+            cases = json.load(f)["cases"]
+    if cases is None:
+        print(f"生成 {n} 条评测用例... (mode={mode})")
+        generated = generate_v2(n, seed)
+        cases = [c.to_dict() for c in generated]
+
+    print(f"开始评测 ({len(cases)} 条)...")
     t0 = time.time()
 
     results = []
@@ -198,7 +249,7 @@ def main(n: int = 1000, save: bool = True, mode: str = "rule"):
         results.append(r)
         if i % 100 == 0:
             elapsed = time.time() - t0
-            print(f"  已执行 {i}/{n}, 耗时 {elapsed:.0f}s")
+            print(f"  已执行 {i}/{len(cases)}, 耗时 {elapsed:.0f}s")
 
     agg = aggregate(results)
     print_report(agg)
@@ -211,14 +262,17 @@ def main(n: int = 1000, save: bool = True, mode: str = "rule"):
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="Text-to-SQL 评测")
+    parser = argparse.ArgumentParser(description="Text-to-SQL 评测 (v2 数据集)")
     parser.add_argument("--n", type=int, default=1000, help="用例数 (默认1000)")
     parser.add_argument("--mode", type=str, default="rule",
                         choices=["rule", "llm"],
                         help="rule=禁用LLM只测规则路径, llm=完整链路")
+    parser.add_argument("--dataset", type=str, default=None,
+                        help="指定 v2 数据集 json 文件 (缺省用最新生成)")
+    parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
     if args.mode == "rule":
         import os
         os.environ["OPENAI_API_KEY"] = ""
-    main(n=args.n, mode=args.mode)
+    main(n=args.n, mode=args.mode, dataset=args.dataset, seed=args.seed)
