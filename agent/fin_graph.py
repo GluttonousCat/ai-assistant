@@ -15,47 +15,28 @@ from typing import Dict, Literal, Optional
 from langgraph.graph import END, StateGraph
 
 from agent.state import AgentState
+from agent.intent import LayeredIntentClassifier, get_intent_classifier
 from skills.base import SkillContext
 from skills.fin_query.skill import FinQuerySkill
 
 
-# ============================================================
-# 意图识别
-# ============================================================
-
-INTENT_RULES: Dict[str, list] = {
-    "query": ["查询", "查一下", "多少", "营收", "净利润", "roe", "毛利率",
-              "排名", "筛选", "大于", "小于", "同比", "对比",
-              "股价", "收盘", "市盈", "市净", "市值", "涨跌幅", "换手"],
-    "detect": ["风险", "异常", "预警", "排雷", "检测"],
-    "verify": ["校验", "验证", "研报", "一致性"],
-    "report": ["生成", "报告", "分析报告", "深度报告"],
-}
-
-
-def classify_intent(user_input: str) -> str:
-    """关键词意图识别 (LLM 降级方案)"""
-    text = user_input.lower()
-    # 优先级: report > detect > verify > query
-    for intent, kws in INTENT_RULES.items():
-        if any(k in text for k in kws):
-            return intent
-    return "unknown"
-
-
 def parse_financial_intent_node(state: AgentState) -> AgentState:
-    """意图识别节点"""
-    intent = classify_intent(state.user_input)
-    state.log(f"财务意图识别: {intent}")
+    """意图识别节点 (分层: 规则 L1 + LLM L2)"""
+    clf = get_intent_classifier()
+    result = clf.classify(state.user_input)
+    state.log(
+        f"财务意图识别: {result.intent} "
+        f"(conf={result.confidence:.2f}, source={result.source})"
+    )
     # 存入 AgentState.parsed_intent (LangGraph schema 认可的字段)
-    state.parsed_intent = {"type": intent, "text": state.user_input}
+    state.parsed_intent = result.to_state_dict()
     return state
 
 
 def route_by_fin_intent(state: AgentState) -> Literal["execute_query", "respond"]:
-    """路由: 只有 query 走 SQL 链路, 其他当前返回占位"""
+    """路由: query/compare 走 SQL 链路, 其他当前返回占位"""
     intent = (state.parsed_intent or {}).get("type", "unknown")
-    if intent == "query":
+    if intent in ("query", "compare"):
         return "execute_query"
     return "respond"
 
@@ -79,7 +60,9 @@ def respond_node(state: AgentState) -> AgentState:
     """最终响应 (其他意图占位/兜底)"""
     intent = (state.parsed_intent or {}).get("type", "unknown")
     if not state.response:
-        if intent == "detect":
+        if intent == "compare":
+            state.response = "多维度对比分析功能开发中 (M2)"
+        elif intent == "detect":
             state.response = "财务异常检测功能开发中 (M3)"
         elif intent == "verify":
             state.response = "研报一致性校验功能开发中 (M4)"

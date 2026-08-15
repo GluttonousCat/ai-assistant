@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException
 
-from agent.fin_graph import invoke_financial_agent, classify_intent
+from agent.fin_graph import invoke_financial_agent
 from tools.finance.schema_info import get_schema_info
 
 fin_router = APIRouter(prefix="/api/v1", tags=["finance"])
