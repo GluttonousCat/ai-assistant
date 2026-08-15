@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from core.lifespan import lifespan
 from api import router
 from api.ws import ws_router
+from api.finance import fin_router
 
 app = FastAPI(
     title="ai-assistant",
@@ -27,6 +28,7 @@ app.add_middleware(
 
 app.include_router(router)
 app.include_router(ws_router)
+app.include_router(fin_router)
 
 
 if __name__ == "__main__":

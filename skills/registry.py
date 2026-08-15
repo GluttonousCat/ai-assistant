@@ -49,3 +49,24 @@ class SkillRegistry:
 
 def get_skill_registry() -> SkillRegistry:
     return SkillRegistry()
+
+
+def register_builtin_skills() -> SkillRegistry:
+    """注册项目内置 Skill
+    按里程碑增量注册: M1 财务查询, M3 异常检测, M4 研报校验
+    """
+    registry = get_skill_registry()
+
+    # M1: 财务查询 (Text-to-SQL)
+    try:
+        from skills.fin_query.skill import FinQuerySkill
+        registry.register(FinQuerySkill())
+    except Exception as e:
+        pass  # 依赖缺失时静默
+
+    return registry
+
+
+def get_ready_skills() -> SkillRegistry:
+    """获取已注册的 Skill 注册表 (含内置)"""
+    return register_builtin_skills()
