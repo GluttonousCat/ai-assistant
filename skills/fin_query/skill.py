@@ -77,7 +77,7 @@ METRIC_ALIAS_FULL = {
     "扣非净利润": {"field": "i.net_after_nr_lp_correct", "source": "financial"},
     "营业利润": {"field": "i.operate_profit", "source": "financial"},
     "利润总额": {"field": "i.total_profit", "source": "financial"},
-    "每股收益": {"field": "f.basic_eps", "source": "financial"},
+    "每股收益": {"field": "i.basic_eps", "source": "financial"},
     "毛利率": {"field": "f.grossprofit_margin", "source": "financial"},
     "净利率": {"field": "f.netprofit_margin", "source": "financial"},
     "净资产收益率": {"field": "f.roe", "source": "financial"},
@@ -146,6 +146,10 @@ def _rule_based_sql(user_input: str) -> Optional[str]:
     """
     text = user_input.strip()
 
+    # 0. 预处理: 截断"和/与"连接的第二个指标 (规则只支持单指标)
+    #    仅当"和/与"出现在指标之后 (双指标场景), 保留第一个
+    first_metric_clean = None
+
     # 1. 找到指标位置 (按指标关键词在文本中搜索)
     metric_pos = None
     matched_metric = None
@@ -159,14 +163,18 @@ def _rule_based_sql(user_input: str) -> Optional[str]:
     if metric_pos is None:
         return None
 
-    # 2. 提取股票名 (指标之前的内容, 去掉动作词和"的")
+    # 2. 提取股票名 (指标之前的内容, 去掉动作词/年份/时间词/"的")
     prefix = text[:metric_pos]
     # 完整动词优先, 避免 '查一下' 被 '查' 先吃掉
     prefix = re.sub(
-        r"(?:查一下|查一查|查询|看看|查看|帮我查一下|请查|查|看|的|、|和|与|最近|最新|\\s+)",
+        r"(?:查一下|查一查|查询|帮我查一下|帮我查|请问|看看|查看|请查|帮我|请|查|看|"
+        r"的|、|和|与|最近|最新|近|\\s+)",
         "", prefix,
     )
-    # 去掉无意义词
+    # 去掉年份和时间范围 (2020年 / 2020 年 / 最近两年 / 前三年)
+    prefix = re.sub(r"\d{4}\s*年", "", prefix)
+    prefix = re.sub(r"最近|最近一年|最近两年|最近三年|近一年|近两年|近三年|今年以来", "", prefix)
+    # 去掉开头残留空词
     prefix = re.sub(r"^(查询结果|请|帮我|一下)", "", prefix).strip()
     if not prefix:
         return None
@@ -289,8 +297,17 @@ class FinQuerySkill(BaseSkill):
 
     # ---------- SQL 生成 ----------
     def _generate_sql(self, user_input: str) -> tuple[Optional[str], str, List[str]]:
-        """LLM 优先, 规则降级"""
-        # 尝试 LLM
+        """规则优先 (词典+模板, 零成本), LLM 兜底"""
+        # 1. 规则引擎 (高频固定句式, 无需 LLM)
+        try:
+            from skills.fin_query.rule_engine import get_rule_engine
+            sql, meta = get_rule_engine().parse(user_input)
+            if sql:
+                return sql, f"规则查询 (类型={meta.get('type')})", []
+        except Exception as e:
+            logger.warning(f"规则引擎异常: {e}")
+
+        # 2. LLM 兜底
         if self.llm:
             try:
                 from skills.fin_query.prompts import SQL_GENERATION_PROMPT
@@ -307,12 +324,8 @@ class FinQuerySkill(BaseSkill):
                         parsed.get("tables_used", []),
                     )
             except Exception as e:
-                logger.warning(f"LLM SQL 生成失败, 降级规则: {e}")
+                logger.warning(f"LLM SQL 生成失败: {e}")
 
-        # 规则降级
-        sql = _rule_based_sql(user_input)
-        if sql:
-            return sql, "基于规则模板生成的查询", ["fin.income", "fin.fina_indicator", "stock.stock_basic"]
         return None, "", []
 
     # ---------- 执行 ----------
