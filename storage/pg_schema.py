@@ -1,0 +1,417 @@
+"""
+行情数据仓库表结构 (PostgreSQL)
+
+schema: stock
+包含:
+- stock_basic:   股票基础信息 (唯一股票池, 含复权因子)
+- trade_calendar: 交易日历
+- daily:          日K主表 (OHLCV, 前后复权价格预计算列)
+- adj_factor:     复权因子明细
+- daily_basic:    每日估值指标 (PE/PB/换手/市值)
+- sync_meta:      同步水位线 (断点续传)
+"""
+
+# 支持的数据类型常量
+DDL_STOCK_SCHEMA = """CREATE SCHEMA IF NOT EXISTS stock"""
+
+DDL_STOCK_BASIC = """
+CREATE TABLE IF NOT EXISTS stock.stock_basic (
+    ts_code      VARCHAR(16) PRIMARY KEY,   -- 代码 000001.SZ
+    symbol       VARCHAR(8)  NOT NULL,      -- 6位数字代码
+    name         VARCHAR(32),               -- 名称
+    area         VARCHAR(16),               -- 所在地域
+    industry     VARCHAR(32),               -- 所属行业
+    market       VARCHAR(8),                -- 市场: 主板/创业板/科创板
+    list_date    DATE,                      -- 上市日期
+    delist_date  DATE,                      -- 退市日期(空为在市)
+    is_hs        VARCHAR(4),                -- 是否沪深港通标的
+    status       VARCHAR(4),                -- L上市/D退市/P暂停
+    updated_at   TIMESTAMP DEFAULT now()
+);
+COMMENT ON TABLE stock.stock_basic IS '股票基础信息(股票池)';
+"""
+
+DDL_TRADE_CALENDAR = """
+CREATE TABLE IF NOT EXISTS stock.trade_calendar (
+    exchange    VARCHAR(8)  NOT NULL,   -- 交易所 SSE/SZSE
+    cal_date    DATE        NOT NULL,   -- 日历日期
+    is_open     SMALLINT,               -- 是否交易 1/0
+    pretrade_date DATE,                 -- 前一交易日
+    PRIMARY KEY (exchange, cal_date)
+);
+COMMENT ON TABLE stock.trade_calendar IS '交易日历';
+"""
+
+DDL_DAILY = """
+CREATE TABLE IF NOT EXISTS stock.daily (
+    trade_date  DATE    NOT NULL,
+    ts_code     VARCHAR(16) NOT NULL,
+    open        NUMERIC(12,3),
+    high        NUMERIC(12,3),
+    low         NUMERIC(12,3),
+    close       NUMERIC(12,3),
+    pre_close   NUMERIC(12,3),      -- 昨收(未复权)
+    change      NUMERIC(12,3),      -- 涨跌额
+    pct_chg     NUMERIC(8,3),       -- 涨跌幅%
+    vol         NUMERIC(18,2),      -- 成交量(手)
+    amount      NUMERIC(20,2),      -- 成交额(千元)
+    adj_factor  NUMERIC(12,5),      -- 复权因子
+    close_adj   NUMERIC(20,5),      -- 前复权收盘
+    high_adj    NUMERIC(20,5),      -- 前复权最高
+    low_adj     NUMERIC(20,5),      -- 前复权最低
+    open_adj    NUMERIC(20,5),      -- 前复权开盘
+    PRIMARY KEY (trade_date, ts_code)
+);
+CREATE INDEX IF NOT EXISTS idx_daily_ts_code ON stock.daily (ts_code, trade_date);
+CREATE INDEX IF NOT EXISTS idx_daily_trade_date ON stock.daily (trade_date);
+COMMENT ON TABLE stock.daily IS '日K主表(含前复权价格)';
+"""
+
+DDL_ADJ_FACTOR = """
+CREATE TABLE IF NOT EXISTS stock.adj_factor (
+    ts_code     VARCHAR(16) NOT NULL,
+    trade_date  DATE    NOT NULL,
+    adj_factor  NUMERIC(12,5) NOT NULL,
+    PRIMARY KEY (ts_code, trade_date)
+);
+COMMENT ON TABLE stock.adj_factor IS '复权因子明细(后复权因子)';
+"""
+
+DDL_DAILY_BASIC = """
+CREATE TABLE IF NOT EXISTS stock.daily_basic (
+    trade_date  DATE    NOT NULL,
+    ts_code     VARCHAR(16) NOT NULL,
+    close       NUMERIC(12,3),       -- 收盘价
+    turnover_rate   NUMERIC(12,4),   -- 换手率%
+    turnover_rate_f NUMERIC(12,4),   -- 换手率(自由流通)
+    volume_ratio    NUMERIC(12,4),   -- 量比
+    pe          NUMERIC(16,4),       -- 市盈率(TTM)
+    pe_ttm      NUMERIC(16,4),       -- 市盈率(TTM)
+    pb          NUMERIC(16,4),       -- 市净率
+    ps          NUMERIC(16,4),       -- 市销率TTM
+    ps_ttm      NUMERIC(16,4),
+    dv_ratio    NUMERIC(12,4),       -- 股息率%
+    dv_ttm      NUMERIC(12,4),
+    total_share NUMERIC(20,4),       -- 总股本(万股)
+    float_share NUMERIC(20,4),       -- 流通股本(万股)
+    free_share  NUMERIC(20,4),       -- 自由流通股本(万股)
+    total_mv    NUMERIC(20,4),       -- 总市值(万元)
+    circ_mv     NUMERIC(20,4),       -- 流通市值(万元)
+    PRIMARY KEY (trade_date, ts_code)
+);
+CREATE INDEX IF NOT EXISTS idx_daily_basic_ts_code ON stock.daily_basic (ts_code, trade_date);
+CREATE INDEX IF NOT EXISTS idx_daily_basic_trade_date ON stock.daily_basic (trade_date);
+COMMENT ON TABLE stock.daily_basic IS '每日估值与市场指标';
+"""
+
+DDL_SYNC_META = """
+CREATE TABLE IF NOT EXISTS stock.sync_meta (
+    table_name     VARCHAR(32) PRIMARY KEY,   -- daily / adj_factor / daily_basic
+    latest_date    DATE,                      -- 已同步到的最近交易日
+    total_rows     BIGINT DEFAULT 0,          -- 累计已同步行数
+    updated_at     TIMESTAMP DEFAULT now()
+);
+COMMENT ON TABLE stock.sync_meta IS '数据同步水位线(断点续传用)';
+"""
+
+# 建表顺序 (依赖关系: stock_basic 无依赖, daily_basic 独立, 均可并行)
+ALL_DDL = [
+    DDL_STOCK_SCHEMA,
+    DDL_STOCK_BASIC,
+    DDL_TRADE_CALENDAR,
+    DDL_DAILY,
+    DDL_ADJ_FACTOR,
+    DDL_DAILY_BASIC,
+    DDL_SYNC_META,
+]
+
+# 表名常量
+T_STOCK_BASIC = "stock.stock_basic"
+T_TRADE_CALENDAR = "stock.trade_calendar"
+T_DAILY = "stock.daily"
+T_ADJ_FACTOR = "stock.adj_factor"
+T_DAILY_BASIC = "stock.daily_basic"
+T_SYNC_META = "stock.sync_meta"
+
+
+def init_schema(pg_client) -> None:
+    """执行全部建表 DDL"""
+    for ddl in ALL_DDL:
+        pg_client.execute(ddl)
+    pg_client.conn.commit()
+
+# ============================================================
+# 财务数据仓库 (schema: fin)
+# ============================================================
+# 四大财务报表 + 财务指标, 全字段覆盖 Tushare 规范
+
+DDL_FIN_SCHEMA = """CREATE SCHEMA IF NOT EXISTS fin"""
+
+# ---------- 利润表 ----------
+DDL_INCOME = """
+CREATE TABLE IF NOT EXISTS fin.income (
+    ts_code          VARCHAR(16) NOT NULL,   -- TS代码
+    ann_date         DATE,                   -- 公告日期
+    f_ann_date       DATE,                   -- 实际公告日期
+    end_date         DATE NOT NULL,          -- 报告期
+    report_type      VARCHAR(2) NOT NULL DEFAULT '1',  -- 报告类型 1合并/6母公司/4调整合并
+    comp_type        VARCHAR(2),             -- 公司类型 1工商/2银行/3保险/4证券
+    end_type         VARCHAR(2),             -- 报告期类型
+    basic_eps        NUMERIC(20,6),          -- 基本每股收益
+    diluted_eps      NUMERIC(20,6),          -- 稀释每股收益
+    total_revenue    NUMERIC(24,4),          -- 营业总收入
+    revenue          NUMERIC(24,4),          -- 营业收入
+    int_income       NUMERIC(24,4),          -- 利息收入
+    prem_earned      NUMERIC(24,4),          -- 已赚保费
+    comm_income      NUMERIC(24,4),          -- 手续费及佣金收入
+    n_commis_income  NUMERIC(24,4),          -- 手续费及佣金净收入
+    n_oth_income     NUMERIC(24,4),          -- 其他经营净收益
+    n_oth_b_income   NUMERIC(24,4),          -- 加:其他业务净收益
+    prem_income      NUMERIC(24,4),          -- 保险业务收入
+    out_prem         NUMERIC(24,4),          -- 减:分出保费
+    une_prem_reser   NUMERIC(24,4),          -- 提取未到期责任准备金
+    reins_income     NUMERIC(24,4),          -- 其中:分保费收入
+    n_sec_tb_income  NUMERIC(24,4),          -- 代理买卖证券业务净收入
+    n_sec_uw_income  NUMERIC(24,4),          -- 证券承销业务净收入
+    n_asset_mg_income NUMERIC(24,4),         -- 受托客户资产管理业务净收入
+    oth_b_income     NUMERIC(24,4),          -- 其他业务收入
+    fv_value_chg_gain NUMERIC(24,4),         -- 加:公允价值变动净收益
+    invest_income    NUMERIC(24,4),          -- 加:投资净收益
+    ass_invest_income NUMERIC(24,4),         -- 其中:对联营企业和合营企业的投资收益
+    forex_gain       NUMERIC(24,4),          -- 加:汇兑净收益
+    total_cogs       NUMERIC(24,4),          -- 营业总成本
+    oper_cost        NUMERIC(24,4),          -- 减:营业成本
+    int_exp          NUMERIC(24,4),          -- 减:利息支出
+    comm_exp         NUMERIC(24,4),          -- 减:手续费及佣金支出
+    biz_tax_surchg   NUMERIC(24,4),          -- 减:营业税金及附加
+    sell_exp         NUMERIC(24,4),          -- 减:销售费用
+    admin_exp        NUMERIC(24,4),          -- 减:管理费用
+    fin_exp          NUMERIC(24,4),          -- 减:财务费用
+    assets_impair_loss NUMERIC(24,4),        -- 减:资产减值损失
+    prem_refund      NUMERIC(24,4),          -- 退保金
+    compens_payout   NUMERIC(24,4),          -- 赔付总支出
+    reser_insur_liab NUMERIC(24,4),          -- 提取保险责任准备金
+    div_payt         NUMERIC(24,4),          -- 保户红利支出
+    reins_exp        NUMERIC(24,4),          -- 分保费用
+    oper_exp         NUMERIC(24,4),          -- 营业支出
+    compens_payout_refu NUMERIC(24,4),       -- 减:摊回赔付支出
+    insur_reser_refu NUMERIC(24,4),          -- 减:摊回保险责任准备金
+    reins_cost_refund NUMERIC(24,4),         -- 减:摊回分保费用
+    other_bus_cost   NUMERIC(24,4),          -- 其他业务成本
+    operate_profit   NUMERIC(24,4),          -- 营业利润
+    non_oper_income  NUMERIC(24,4),          -- 加:营业外收入
+    non_oper_exp     NUMERIC(24,4),          -- 减:营业外支出
+    nca_disploss     NUMERIC(24,4),          -- 其中:减:非流动资产处置净损失
+    total_profit     NUMERIC(24,4),          -- 利润总额
+    income_tax       NUMERIC(24,4),          -- 所得税费用
+    n_income         NUMERIC(24,4),          -- 净利润(含少数股东损益)
+    n_income_attr_p  NUMERIC(24,4),          -- 净利润(不含少数股东损益)
+    minority_gain    NUMERIC(24,4),          -- 少数股东损益
+    oth_compr_income NUMERIC(24,4),          -- 其他综合收益
+    t_compr_income   NUMERIC(24,4),          -- 综合收益总额
+    compr_inc_attr_p NUMERIC(24,4),          -- 归属于母公司综合收益总额
+    compr_inc_attr_m_s NUMERIC(24,4),        -- 归属于少数股东综合收益总额
+    ebit             NUMERIC(24,4),          -- 息税前利润
+    ebitda           NUMERIC(24,4),          -- 息税折旧摊销前利润
+    insurance_exp    NUMERIC(24,4),          -- 保险业务支出
+    undist_profit    NUMERIC(24,4),          -- 年初未分配利润
+    distable_profit  NUMERIC(24,4),          -- 可分配利润
+    rd_exp           NUMERIC(24,4),          -- 研发费用
+    fin_exp_int_exp  NUMERIC(24,4),          -- 财务费用:利息费用
+    fin_exp_int_inc  NUMERIC(24,4),          -- 财务费用:利息收入
+    transfer_surplus_rese NUMERIC(24,4),     -- 盈余公积转入
+    transfer_housing_imprest NUMERIC(24,4),  -- 住房周转金转入
+    transfer_oth     NUMERIC(24,4),          -- 其他转入
+    adj_lossgain     NUMERIC(24,4),          -- 调整以前年度损益
+    withdra_legal_surplus NUMERIC(24,4),     -- 提取法定盈余公积
+    withdra_legal_pubfund NUMERIC(24,4),     -- 提取法定公益金
+    withdra_biz_devfund NUMERIC(24,4),       -- 提取企业发展基金
+    withdra_rese_fund NUMERIC(24,4),         -- 提取储备基金
+    withdra_oth_ersu NUMERIC(24,4),          -- 提取任意盈余公积金
+    workers_welfare  NUMERIC(24,4),          -- 职工奖金福利
+    distr_profit_shrhder NUMERIC(24,4),      -- 可供股东分配的利润
+    prfshare_payable_dvd NUMERIC(24,4),      -- 应付优先股股利
+    comshare_payable_dvd NUMERIC(24,4),      -- 应付普通股股利
+    capit_comstock_div NUMERIC(24,4),        -- 转作股本的普通股股利
+    net_after_nr_lp_correct NUMERIC(24,4),   -- 扣除非经常性损益后的净利润(更正前)
+    credit_impa_loss NUMERIC(24,4),          -- 信用减值损失
+    net_expo_hedging_benefits NUMERIC(24,4), -- 净敞口套期收益
+    oth_impair_loss_assets NUMERIC(24,4),    -- 其他资产减值损失
+    total_opcost     NUMERIC(24,4),          -- 营业总成本(二)
+    amodcost_fin_assets NUMERIC(24,4),       -- 以摊余成本计量的金融资产终止确认收益
+    oth_income       NUMERIC(24,4),          -- 其他收益
+    asset_disp_income NUMERIC(24,4),         -- 资产处置收益
+    continued_net_profit NUMERIC(24,4),      -- 持续经营净利润
+    end_net_profit   NUMERIC(24,4),          -- 终止经营净利润
+    update_flag      VARCHAR(4),             -- 更新标识
+    created_at       TIMESTAMP DEFAULT now(),
+    PRIMARY KEY (ts_code, end_date, report_type)
+);
+COMMENT ON TABLE fin.income IS '利润表(全字段)';
+"""
+
+
+# ---------- 资产负债表 ----------
+DDL_BALANCESHEET = """
+CREATE TABLE IF NOT EXISTS fin.balancesheet (
+    ts_code          VARCHAR(16) NOT NULL,
+    ann_date         DATE,
+    f_ann_date       DATE,
+    end_date         DATE NOT NULL,
+    report_type      VARCHAR(2) NOT NULL DEFAULT '1',
+    comp_type        VARCHAR(2),
+    end_type         VARCHAR(2),
+    total_share      NUMERIC(24,4),          -- 总股本
+    cap_rese         NUMERIC(24,4),          -- 资本公积金
+    undistr_porfit   NUMERIC(24,4),          -- 未分配利润
+    surplus_rese     NUMERIC(24,4),          -- 盈余公积金
+    special_rese     NUMERIC(24,4),          -- 专项储备
+    money_cap        NUMERIC(24,4),          -- 货币资金
+    trad_asset       NUMERIC(24,4),          -- 交易性金融资产
+    notes_receiv     NUMERIC(24,4),          -- 应收票据
+    accounts_receiv  NUMERIC(24,4),          -- 应收账款
+    oth_receiv       NUMERIC(24,4),          -- 其他应收款
+    prepayment       NUMERIC(24,4),          -- 预付款项
+    invent           NUMERIC(24,4),          -- 存货
+    oth_cur_assets   NUMERIC(24,4),          -- 其他流动资产
+    fix_assets       NUMERIC(24,4),          -- 固定资产
+    cip              NUMERIC(24,4),          -- 在建工程
+    intang_assets    NUMERIC(24,4),          -- 无形资产
+    r_and_d          NUMERIC(24,4),          -- 研发费用(资本化)
+    goodwill         NUMERIC(24,4),          -- 商誉
+    lt_equity_invest NUMERIC(24,4),          -- 长期股权投资
+    oth_eq_invest    NUMERIC(24,4),          -- 其他权益工具投资
+    oth_lt_invest    NUMERIC(24,4),          -- 其他长期投资
+    lt_rec            NUMERIC(24,4),         -- 长期应收款
+    dep_inv          NUMERIC(24,4),          -- 投资性房地产
+    oth_ncur_assets  NUMERIC(24,4),          -- 其他非流动资产
+    total_assets     NUMERIC(24,4),          -- 资产总计
+    st_borr          NUMERIC(24,4),          -- 短期借款
+    notes_payable    NUMERIC(24,4),          -- 应付票据
+    acct_payable     NUMERIC(24,4),          -- 应付账款
+    adv_receipts     NUMERIC(24,4),          -- 预收款项
+    employee_payable NUMERIC(24,4),          -- 应付职工薪酬
+    taxes_payable    NUMERIC(24,4),          -- 应交税费
+    oth_cur_liab     NUMERIC(24,4),          -- 其他流动负债
+    bond_payable     NUMERIC(24,4),          -- 应付债券
+    lt_payable       NUMERIC(24,4),          -- 长期应付款
+    lt_borr          NUMERIC(24,4),          -- 长期借款
+    total_liab       NUMERIC(24,4),          -- 负债合计
+    equity_attr_p    NUMERIC(24,4),          -- 归属于母公司股东权益
+    minority_int     NUMERIC(24,4),          -- 少数股东权益
+    total_hldr_eqy_exc_min_int NUMERIC(24,4), -- 股东权益合计(不含少数股东)
+    total_hldr_eqy_inc_min_int NUMERIC(24,4), -- 股东权益合计(含少数股东)
+    total_liab_hldr_eqy NUMERIC(24,4),       -- 负债和股东权益总计
+    -- 补充关键衍生字段
+    nca_disploss     NUMERIC(24,4),          -- 处置非流动资产损失
+    credit_impa_loss NUMERIC(24,4),          -- 信用减值损失
+    update_flag      VARCHAR(4),
+    created_at       TIMESTAMP DEFAULT now(),
+    PRIMARY KEY (ts_code, end_date, report_type)
+);
+COMMENT ON TABLE fin.balancesheet IS '资产负债表(全字段)';
+"""
+
+# ---------- 现金流量表 ----------
+DDL_CASHFLOW = """
+CREATE TABLE IF NOT EXISTS fin.cashflow (
+    ts_code          VARCHAR(16) NOT NULL,
+    ann_date         DATE,
+    f_ann_date       DATE,
+    end_date         DATE NOT NULL,
+    report_type      VARCHAR(2) NOT NULL DEFAULT '1',
+    comp_type        VARCHAR(2),
+    end_type         VARCHAR(2),
+    -- 经营活动现金流
+    n_cashflow_act   NUMERIC(24,4),          -- 经营活动产生的现金流量净额
+    n_cashflow_inv_act NUMERIC(24,4),        -- 投资活动产生的现金流量净额
+    n_cash_flows_fnc_act NUMERIC(24,4),      -- 筹资活动产生的现金流量净额
+    c_fr_sale_sg     NUMERIC(24,4),          -- 销售商品、提供劳务收到的现金
+    recp_tax_rends   NUMERIC(24,4),          -- 收到的税费返还
+    n_depos_incr_fi  NUMERIC(24,4),          -- 客户存款和同业存放款项净增加额
+    n_incr_loans_cb  NUMERIC(24,4),          -- 向中央银行借款净增加额
+    n_inc_borr_oth_fi NUMERIC(24,4),        -- 向其他金融机构借款净增加额
+    n_incr_disp_fiolig NUMERIC(24,4),        -- 处置固定资产等活动净增加额
+    c_paid_gs_for_rtr NUMERIC(24,4),        -- 购买商品、接受劳务支付的现金
+    n_incr_disp_fiolis NUMERIC(24,4),        -- 处置固定资产、无形资产净增加额
+    c_paid_for_intang_invest NUMERIC(24,4),  -- 购建固定资产等活动支付的现金
+    -- 实际字段以 Tushare 返回为准, 核心三大净额已覆盖
+    -- (完整字段过多, 采用通用列并兼容)
+    n_cashflow_act_pre NUMERIC(24,4),        -- 经营活动现金流量净额(上一期)
+    n_invest_income_subsidiary NUMERIC(24,4),-- 取得子公司投资支付
+    free_cashflow    NUMERIC(24,4),          -- 自由现金流(派生)
+    update_flag      VARCHAR(4),
+    created_at       TIMESTAMP DEFAULT now(),
+    PRIMARY KEY (ts_code, end_date, report_type)
+);
+COMMENT ON TABLE fin.cashflow IS '现金流量表(核心字段,按需扩展)';
+"""
+
+# ---------- 财务指标 ----------
+DDL_FINA_INDICATOR = """
+CREATE TABLE IF NOT EXISTS fin.fina_indicator (
+    ts_code          VARCHAR(16) NOT NULL,
+    ann_date         DATE,
+    end_date         DATE NOT NULL,
+    report_type      VARCHAR(2) NOT NULL DEFAULT '1',
+    comp_type        VARCHAR(2),
+    roe              NUMERIC(16,6),          -- 净资产收益率
+    roe_waa          NUMERIC(16,6),          -- 加权平均净资产收益率
+    roe_dt           NUMERIC(16,6),          -- 净资产收益率(扣除/摊薄)
+    roa              NUMERIC(16,6),          -- 总资产报酬率
+    r_roe             NUMERIC(16,6),
+    netprofit_yoy    NUMERIC(16,6),          -- 净利润同比增长率
+    or_yoy           NUMERIC(16,6),          -- 营业收入同比增长率
+    ope_or_yoy       NUMERIC(16,6),          -- 营业利润同比增长率
+    dt_netprofit_yoy NUMERIC(16,6),          -- 扣非净利润同比增长率
+    grossprofit_margin NUMERIC(16,6),        -- 销售毛利率
+    netprofit_margin NUMERIC(16,6),          -- 销售净利率
+    ocfps           NUMERIC(16,6),           -- 每股经营现金流
+    eps             NUMERIC(16,6),           -- 每股收益
+    bps             NUMERIC(16,6),           -- 每股净资产
+    assets_turn     NUMERIC(16,6),           -- 总资产周转率
+    inv_turn        NUMERIC(16,6),           -- 存货周转率
+    ca_turn         NUMERIC(16,6),           -- 应收账款周转率
+    debt_to_assets  NUMERIC(16,6),           -- 资产负债率
+    current_ratio   NUMERIC(16,6),           -- 流动比率
+    quick_ratio     NUMERIC(16,6),           -- 速动比率
+    update_flag     VARCHAR(4),
+    created_at      TIMESTAMP DEFAULT now(),
+    PRIMARY KEY (ts_code, end_date, report_type)
+);
+COMMENT ON TABLE fin.fina_indicator IS '财务指标(ROE/毛利率/周转率/偿债能力)';
+"""
+
+# ---------- 财务同步元表 ----------
+DDL_FIN_SYNC_META = """
+CREATE TABLE IF NOT EXISTS fin.sync_meta (
+    table_name   VARCHAR(32) PRIMARY KEY,
+    last_code    VARCHAR(16),                -- 已同步到的最近 ts_code (断点续传)
+    total_rows   BIGINT DEFAULT 0,
+    updated_at   TIMESTAMP DEFAULT now()
+);
+COMMENT ON TABLE fin.sync_meta IS '财务数据同步水位线(按股票续传)';
+"""
+
+FIN_ALL_DDL = [
+    DDL_FIN_SCHEMA,
+    DDL_INCOME,
+    DDL_BALANCESHEET,
+    DDL_CASHFLOW,
+    DDL_FINA_INDICATOR,
+    DDL_FIN_SYNC_META,
+]
+
+# 财务表名常量
+T_INCOME = "fin.income"
+T_BALANCESHEET = "fin.balancesheet"
+T_CASHFLOW = "fin.cashflow"
+T_FINA_INDICATOR = "fin.fina_indicator"
+T_FIN_SYNC_META = "fin.sync_meta"
+
+
+def init_fin_schema(pg_client) -> None:
+    """执行财务建表 DDL"""
+    for ddl in FIN_ALL_DDL:
+        pg_client.execute(ddl)
+    pg_client.conn.commit()

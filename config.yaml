@@ -1,9 +1,36 @@
+# ============================================================
+# ai-assistant 统一配置
+# 说明: 密钥类敏感信息请放在 .env (不纳入版本控制), 此处只放非敏感配置
+# ============================================================
 
+app:
+  name: ai-assistant
+  version: 2.0.0
+  host: 0.0.0.0
+  port: 8208
 
-# **** MYSQL CONFIG ****
-NEBULA_CONFIG:
-  host: localhost
-  port: 3306
-  user: root
-  password: @Lish145210
+# LLM 默认参数 (api_key 从 .env 的 OPENAI_API_KEY 读取)
+llm:
+  model: gpt-4o
+  temperature: 0.7
+  max_tokens: 4096
+  timeout: 60
 
+# 知识星球爬虫默认参数
+zsxq:
+  crawl_interval_min: 2.0     # 爬取最小间隔(秒)
+  crawl_interval_max: 5.0     # 爬取最大间隔(秒)
+  long_delay_interval: 15     # 每N页触发一次长休眠
+  download_min_delay: 60      # 文件下载最小间隔(秒)
+  download_max_delay: 180     # 文件下载最大间隔(秒)
+
+# Tushare 数据抓取参数
+tushare:
+  rate_limit_sleep: 0.5       # 每次抓取间隔(秒)
+  chunk_size: 1000            # 批量入库分块大小
+
+# 日志
+logging:
+  level: INFO
+  dir: logs
+  backup_count: 30
