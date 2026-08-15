@@ -66,43 +66,72 @@ def lookup_ts_code(name_or_code: str) -> Optional[str]:
     return None
 
 
-# 常用指标中文映射 -> 表.字段
+# 常用指标中文映射 -> (字段, 数据源类型)
+# source: financial=财务三表+指标表 / market=行情+估值表
+METRIC_ALIAS_FULL = {
+    "营收": {"field": "i.revenue", "source": "financial"},
+    "营业收入": {"field": "i.revenue", "source": "financial"},
+    "营业总收入": {"field": "i.total_revenue", "source": "financial"},
+    "归母净利润": {"field": "i.n_income_attr_p", "source": "financial"},
+    "净利润": {"field": "i.n_income_attr_p", "source": "financial"},
+    "扣非净利润": {"field": "i.net_after_nr_lp_correct", "source": "financial"},
+    "营业利润": {"field": "i.operate_profit", "source": "financial"},
+    "利润总额": {"field": "i.total_profit", "source": "financial"},
+    "每股收益": {"field": "f.basic_eps", "source": "financial"},
+    "毛利率": {"field": "f.grossprofit_margin", "source": "financial"},
+    "净利率": {"field": "f.netprofit_margin", "source": "financial"},
+    "净资产收益率": {"field": "f.roe", "source": "financial"},
+    "roe": {"field": "f.roe", "source": "financial"},
+    "净利润同比增长": {"field": "f.netprofit_yoy", "source": "financial"},
+    "营收同比增长": {"field": "f.or_yoy", "source": "financial"},
+    "资产负债率": {"field": "f.debt_to_assets", "source": "financial"},
+    "流动比率": {"field": "f.current_ratio", "source": "financial"},
+    "速动比率": {"field": "f.quick_ratio", "source": "financial"},
+    "总资产": {"field": "b.total_assets", "source": "financial"},
+    "总负债": {"field": "b.total_liab", "source": "financial"},
+    "净资产": {"field": "b.equity_attr_p", "source": "financial"},
+    "货币资金": {"field": "b.money_cap", "source": "financial"},
+    "应收账款": {"field": "b.accounts_receiv", "source": "financial"},
+    "存货": {"field": "b.invent", "source": "financial"},
+    "商誉": {"field": "b.goodwill", "source": "financial"},
+    "经营现金流": {"field": "c.n_cashflow_act", "source": "financial"},
+    "投资现金流": {"field": "c.n_cashflow_inv_act", "source": "financial"},
+    "筹资现金流": {"field": "c.n_cash_flows_fnc_act", "source": "financial"},
+    "市盈率": {"field": "db.pe_ttm", "source": "market"},
+    "市净率": {"field": "db.pb", "source": "market"},
+    "总市值": {"field": "db.total_mv", "source": "market"},
+    "市值": {"field": "db.total_mv", "source": "market"},
+    "流通市值": {"field": "db.circ_mv", "source": "market"},
+    "换手率": {"field": "db.turnover_rate", "source": "market"},
+    "换手": {"field": "db.turnover_rate", "source": "market"},
+    "收盘价": {"field": "d.close", "source": "market"},
+    "股价": {"field": "d.close", "source": "market"},
+    "涨跌幅": {"field": "d.pct_chg", "source": "market"},
+}
+
+# 兼容旧引用
 METRIC_ALIAS = {
-    "营收": "i.revenue",
-    "营业收入": "i.revenue",
-    "营业总收入": "i.total_revenue",
-    "归母净利润": "i.n_income_attr_p",
-    "净利润": "i.n_income_attr_p",
-    "扣非净利润": "i.net_after_nr_lp_correct",
-    "营业利润": "i.operate_profit",
-    "利润总额": "i.total_profit",
-    "每股收益": "f.basic_eps",
-    "毛利率": "f.grossprofit_margin",
-    "净利率": "f.netprofit_margin",
-    "净资产收益率": "f.roe",
-    "roe": "f.roe",
-    "净利润同比增长": "f.netprofit_yoy",
-    "营收同比增长": "f.or_yoy",
-    "资产负债率": "f.debt_to_assets",
-    "流动比率": "f.current_ratio",
-    "速动比率": "f.quick_ratio",
-    "总资产": "b.total_assets",
-    "总负债": "b.total_liab",
-    "净资产": "b.equity_attr_p",
-    "货币资金": "b.money_cap",
-    "应收账款": "b.accounts_receiv",
-    "存货": "b.invent",
-    "商誉": "b.goodwill",
-    "经营现金流": "c.n_cashflow_act",
-    "投资现金流": "c.n_cashflow_inv_act",
-    "筹资现金流": "c.n_cash_flows_fnc_act",
-    "市盈率": "v.pe_ttm",
-    "市净率": "v.pb",
-    "总市值": "v.total_mv",
-    "流通市值": "v.circ_mv",
-    "换手率": "v.turnover_rate",
-    "收盘价": "v.close",
-    "涨跌幅": "v.pct_chg",
+    k: v["field"] for k, v in METRIC_ALIAS_FULL.items()
+}
+
+# 关键词映射 (通用, 命中即用)
+TABLE_FIELD_MAP = {
+    "营收": ("i", "revenue", "financial"),
+    "收入": ("i", "revenue", "financial"),
+    "净利": ("i", "n_income_attr_p", "financial"),
+    "利润": ("i", "operate_profit", "financial"),
+    "毛利": ("f", "grossprofit_margin", "financial"),
+    "roe": ("f", "roe", "financial"),
+    "资产": ("b", "total_assets", "financial"),
+    "负债": ("b", "total_liab", "financial"),
+    "市值": ("db", "total_mv", "market"),
+    "市盈": ("db", "pe_ttm", "market"),
+    "市净": ("db", "pb", "market"),
+    "现金流": ("c", "n_cashflow_act", "financial"),
+    "股价": ("d", "close", "market"),
+    "收盘": ("d", "close", "market"),
+    "涨跌幅": ("d", "pct_chg", "market"),
+    "换手": ("db", "turnover_rate", "market"),
 }
 
 
@@ -113,7 +142,7 @@ METRIC_ALIAS = {
 def _rule_based_sql(user_input: str) -> Optional[str]:
     """
     规则模板 SQL 生成: 只支持预设查询模式
-    流程: 先识别指标名 -> 逆行提取股票名
+    流程: 先识别指标名 -> 逆行提取股票名 -> 按指标类型选数据源
     """
     text = user_input.strip()
 
@@ -134,11 +163,11 @@ def _rule_based_sql(user_input: str) -> Optional[str]:
     prefix = text[:metric_pos]
     # 完整动词优先, 避免 '查一下' 被 '查' 先吃掉
     prefix = re.sub(
-        r"(?:查一下|查一查|查询|看看|查看|帮我查一下|请查|查|看|的|、|和|与|\\s+)",
+        r"(?:查一下|查一查|查询|看看|查看|帮我查一下|请查|查|看|的|、|和|与|最近|最新|\\s+)",
         "", prefix,
     )
     # 去掉无意义词
-    prefix = re.sub(r"^(查询结果|请|帮我|最近|最新|一下)", "", prefix).strip()
+    prefix = re.sub(r"^(查询结果|请|帮我|一下)", "", prefix).strip()
     if not prefix:
         return None
     stock = prefix
@@ -146,10 +175,24 @@ def _rule_based_sql(user_input: str) -> Optional[str]:
     if not ts_code:
         return None
 
-    field = _match_metric_field(matched_metric)
+    field, source = _match_metric_field(matched_metric)
     if not field:
         return None
 
+    # 3. 按数据源生成 SQL
+    if source == "market":
+        # 行情类: daily + daily_basic (最新交易日)
+        return f"""SELECT d.trade_date, s.name AS stock_name, d.close, d.open, d.high, d.low,
+       d.vol, d.amount, d.pct_chg, db.pe_ttm, db.pb, db.total_mv, db.circ_mv
+FROM stock.daily d
+JOIN stock.stock_basic s ON d.ts_code = s.ts_code
+LEFT JOIN stock.daily_basic db
+    ON d.trade_date = db.trade_date AND d.ts_code = db.ts_code
+WHERE d.ts_code = '{ts_code}'
+ORDER BY d.trade_date DESC
+LIMIT 8"""
+
+    # 财务类: income + fina_indicator (合并报表)
     return f"""SELECT i.ts_code, s.name AS stock_name, i.end_date, {field}
 FROM fin.income i
 JOIN stock.stock_basic s ON i.ts_code = s.ts_code
@@ -160,38 +203,22 @@ ORDER BY i.end_date DESC
 LIMIT 8"""
 
 
-def _match_metric_field(metric: str) -> Optional[str]:
+def _match_metric_field(metric: str) -> tuple[Optional[str], str]:
     """
-    将指标名称映射到数据库字段 (支持 target 表组合)
+    将指标名称映射到 (数据库字段, 数据源类型)
+    source: 'financial' (财务三表+指标) / 'market' (行情+估值)
     """
     m = metric.lower()
-    # 优先精确匹配别名
-    for key, field in METRIC_ALIAS.items():
+    # 精确别名匹配 (带数据源标记)
+    for key, entry in METRIC_ALIAS_FULL.items():
         if m == key.lower() or m in key.lower():
-            return field
+            return entry["field"], entry["source"]
 
-    # 关键词映射 (指标 -> 表前缀 + 字段)
-    TABLE_FIELD_MAP = {
-        "营收": ("i", "revenue"),
-        "收入": ("i", "revenue"),
-        "净利": ("i", "n_income_attr_p"),
-        "利润": ("i", "operate_profit"),
-        "每股收益": ("f", "basic_eps"),
-        "毛利": ("f", "grossprofit_margin"),
-        "净利率": ("f", "netprofit_margin"),
-        "roe": ("f", "roe"),
-        "净资产收益": ("f", "roe"),
-        "资产": ("b", "total_assets"),
-        "负债": ("b", "total_liab"),
-        "市值": ("v", "total_mv"),
-        "市盈": ("v", "pe_ttm"),
-        "市净": ("v", "pb"),
-        "现金流": ("c", "n_cashflow_act"),
-    }
-    for key, (prefix, field) in TABLE_FIELD_MAP.items():
+    # 关键词映射
+    for key, (prefix, field, source) in TABLE_FIELD_MAP.items():
         if key in m:
-            return f"{prefix}.{field}"
-    return None
+            return f"{prefix}.{field}", source
+    return None, "financial"
 
 
 # ============================================================
