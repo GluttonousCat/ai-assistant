@@ -52,16 +52,22 @@ _TRADING_DAYS_CACHE: Optional[List[date]] = None
 
 def _to_date(v) -> date:
     """归一化为 date 对象 (支持 str/YYYYMMDD, pd.Timestamp, datetime)"""
+    if v is None:
+        return None
+    if isinstance(v, float) and pd.isna(v):
+        return None
     if isinstance(v, date) and not isinstance(v, datetime):
         return v
     if isinstance(v, str):
         v = v.strip()
+        if not v:
+            return None
         if len(v) == 8 and v.isdigit():
             return datetime.strptime(v, "%Y%m%d").date()
         return pd.to_datetime(v).date()
     if isinstance(v, (pd.Timestamp, datetime)):
         return v.date()
-    raise TypeError(f"无法解析日期: {v!r}")
+    return None
 
 
 # ============================================================
