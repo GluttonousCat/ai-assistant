@@ -20,6 +20,13 @@ from storage.pg import PgClient
 # 字符串匹配常量
 MAX_NAME_LEN = 12  # 股票别名最长长度 (防误匹配)
 
+
+def _strip_roman_suffix(name: str) -> str:
+    """去掉行业名末尾罗马数字: 白酒Ⅱ/白酒ⅱ/白酒II -> 白酒"""
+    for suf in ("Ⅲ", "Ⅱ", "ⅰ", "ⅱ", "III", "II", "ⅲ"):
+        name = name.replace(suf, "")
+    return name.strip()
+
 # 时间表达解析 (仅做结构化; 具体 SQL 由规则引擎组)
 # 返回: (kind, value)  kind: year/quarter/half/recent_years/previous_year/this_year/recent
 def parse_time_phrase(text: str) -> Optional[Tuple[str, object]]:
@@ -66,6 +73,8 @@ class StockKB:
         self._stock_alias: Dict[str, str] = {}
         # ts_code -> 标准名 (为 SQL 里的 stock_name)
         self._code_to_name: Dict[str, str] = {}
+        # 行业名(小写) -> (index_code, level)
+        self._industry_dict: Dict[str, Tuple[str, str]] = {}
         self._loaded = False
 
     def load(self, force: bool = False) -> None:
@@ -74,6 +83,7 @@ class StockKB:
             return
         self._stock_alias = {}
         self._code_to_name = {}
+        self._industry_dict = {}
         try:
             with PgClient() as pg:
                 # 基础表: 标准名 -> 代码 (所有在市股票)
@@ -91,6 +101,16 @@ class StockKB:
                 rows = pg.fetch_all("SELECT alias, ts_code FROM stock.stock_alias")
                 for r in rows:
                     self._stock_alias[r["alias"].lower()] = r["ts_code"]
+
+                # 行业分类 (L1/L2)
+                rows = pg.fetch_all(
+                    "SELECT index_code, industry_name, level FROM stock.index_classify "
+                    "WHERE level IN ('L1','L2')"
+                )
+                for r in rows:
+                    self._industry_dict[r["industry_name"].lower()] = (
+                        r["index_code"], r["level"]
+                    )
         except Exception as e:
             # 表不存在时降级为空
             import logging
@@ -231,6 +251,38 @@ class StockKB:
 
     def all_metric_aliases(self) -> List[str]:
         return list(self.METRIC_ALIASES.keys())
+
+    # ---------- 行业匹配 ----------
+    def match_industry(self, text: str) -> Optional[Tuple[str, str]]:
+        """
+        在文本中查找行业名 (申万 L1/L2)
+        返回 (index_code, industry_name) 或 None
+        仅匹配"行业"相关语境: 文本含行业名 + (行业/板块/领域) 词
+        """
+        self.load()
+        # 行业语境词: 用户说 "白酒行业" / "半导体板块"
+        if not self._industry_dict:
+            return None
+        # 触发词检查: 必须有"行业/板块/领域/赛道"等词, 避免把"茅台"的行业误判
+        ctx_words = ["行业", "板块", "领域", "赛道", "概念"]
+        if not any(w in text for w in ctx_words):
+            return None
+        text_l = text.lower()
+        best = None
+        for name, (code, level) in self._industry_dict.items():
+            # 行业名去罗马后缀: "白酒Ⅱ/白酒ⅱ" -> "白酒"
+            base = _strip_roman_suffix(name)
+            if base and base.lower() in text_l:
+                if best is None or len(base) > best[0]:
+                    best = (len(base), code, name, level)
+        if best:
+            return best[1], best[2], best[3]  # (index_code, name, level)
+        return None
+
+    def all_industries(self) -> List[Tuple[str, str, str]]:
+        """全部行业 (名称, 代码, 层级)"""
+        self.load()
+        return [(n, c, lv) for n, (c, lv) in self._industry_dict.items()]
 
 
 # 单例

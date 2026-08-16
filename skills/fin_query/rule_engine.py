@@ -68,6 +68,22 @@ class RuleEngine:
         # 2. 指标实体 (可能多个: 多指标)
         metrics = self._extract_metrics(text)
 
+        # 3. 行业实体 ("XX行业的YY指标")
+        industry = self._extract_industry(text)
+
+        # 无股票但有行业: 行业查询
+        if not stocks and industry and metrics:
+            from tools.finance.sql_builder import build_industry_query
+            index_code, ind_name, level = industry
+            field, prefix = metrics[0]
+            time_phrase = parse_time_phrase(text)
+            sql = build_industry_query(index_code, field, prefix, time_phrase,
+                                       level=level)
+            if sql:
+                return sql, {"type": "industry", "industry": ind_name,
+                             "metric": field}
+            return None, {"reason": "error"}
+
         if not stocks:
             return None, {"reason": "unsupported"}
         if not metrics:
@@ -155,6 +171,10 @@ class RuleEngine:
             if len(found) >= 3:
                 break
         return found
+
+    def _extract_industry(self, text: str) -> Optional[Tuple[str, str, str]]:
+        """提取行业 (index_code, 行业名, level)"""
+        return self.kb.match_industry(text)
 
 
 _engine: Optional[RuleEngine] = None

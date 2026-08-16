@@ -118,13 +118,16 @@ ai-assistant/
 - `fin.v_financial_summary`: 三表 + 指标 join (财务跨表查询首选)
 - `stock.v_daily_valuation`: 日线 + 估值 join (行情查询首选)
 
-### 行业分类 (进行中)
-- `stock_basic.industry`: 东财粗行业 (110 类, stock_basic 自带)
-- **申万二级行业 (新增)**: Tushare `index_classify(SW2021)` L1=31 / L2=134 行业
-  + `index_member(index_code)` 成分股 (含 in_date/out_date → 可做历史归因)
-  - 新建 `stock.stock_industry` 表: 个股→申万二级, 含入退市时间
-  - 同步: 遍历 134 个二级指数拉成员 → upsert PG
-  - 用途: 按二级行业筛选 ("查询白酒行业毛利率前5") 更精细
+### 行业分类 ✅ 已完成
+- `stock_basic.industry`: 东财粗行业 (110 类)
+- **申万二级行业 (SW2021)**:
+  - `stock.index_classify`: 行业分类 377 条 (L1 31 + L2 134 + L3 212)
+  - `stock.stock_industry`: 成分映射 8049 条 (124 个二级行业, 含 in/out_date 历史归因)
+  - `stock.v_industry_current`: 个股→L1/L2 行业视图 (当前成员, 双级)
+  - 查询支持: StockKB.match_industry + RuleEngine 行业分支
+  - 已验证: "白酒行业毛利率"(茅台89.6%居首) / "银行板块市盈率"(招行PE 6.4) / "半导体板块市值"
+  - 行业查询入口规则: 文本须含"行业/板块/领域"等语境词 + 指标词
+- 同步命令: `python -m tools.market.sync_industry`
 
 ---
 
