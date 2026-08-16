@@ -118,6 +118,14 @@ ai-assistant/
 - `fin.v_financial_summary`: 三表 + 指标 join (财务跨表查询首选)
 - `stock.v_daily_valuation`: 日线 + 估值 join (行情查询首选)
 
+### 行业分类 (进行中)
+- `stock_basic.industry`: 东财粗行业 (110 类, stock_basic 自带)
+- **申万二级行业 (新增)**: Tushare `index_classify(SW2021)` L1=31 / L2=134 行业
+  + `index_member(index_code)` 成分股 (含 in_date/out_date → 可做历史归因)
+  - 新建 `stock.stock_industry` 表: 个股→申万二级, 含入退市时间
+  - 同步: 遍历 134 个二级指数拉成员 → upsert PG
+  - 用途: 按二级行业筛选 ("查询白酒行业毛利率前5") 更精细
+
 ---
 
 ## 4. 核心能力实现细节
@@ -191,7 +199,7 @@ ai-assistant/
 | 意图准确率 | 96.0% |
 | SQL 生成率 | 98.5% |
 | 执行成功率 | 98.5% |
-| 数据命中率 | 98.5% (受回填进度限制, 完成后≈100%) |
+| 数据命中率 | 98.5% (回填未完成时; 全量数据下应≈100%) |
 | 平均延迟 | 191ms |
 
 对比: 旧正则方案 35% → 词典+模板 98.5%.
@@ -202,14 +210,42 @@ ai-assistant/
 
 ---
 
-## 7. 已知遗留问题 / 技术债
+## 7. 数据仓库全量回填完成 (2026-08-16)
 
-1. **财务数据未全量**: "生益/兆易/沪电" 查询 SQL 正确但 0 行 (财务回填未到这些股票, 非 bug)
-2. **multi_compare 意图准确 76%**: 部分对比查询被识别为 query (功能正常, 分类细分待优化)
-3. **edge 用例 62.5%**: 无股票实体的查询被拒是合理的, 但 eval 预期需调
-4. **git 历史含明文密码**: `config.yaml` 旧版本曾含 MySQL 密码 (工作区已清理, 历史残留, 建议 git filter-repo 或私有仓库不必处理)
-5. **LLM 配额**: DashScope key 之前 429 限流过, 评测建议 rule 模式 (--mode rule)
-6. **别名词典**: 仅 60+ 种子, 生产需扩充 (或 Phase2 用小模型 NER 泛化)
+### 行情 (stock schema) — 全量完成, 覆盖 1990-12-19 ~ 2026-08-14
+| 表 | 行数 | 说明 |
+|----|------|------|
+| daily | 10,592,038 | 日K (OHLCV+涨跌幅) |
+| adj_factor | 15,241,072 | 复权因子 |
+| daily_basic | 15,349,643 | 每日估值 |
+
+### 财务 (fin schema) — 全量完成
+| 表 | 行数 | 股票数 | 覆盖 |
+|----|------|--------|------|
+| income | 273,485 | 4,738 | 1990-12-31 ~ 2026-06-30 |
+| balancesheet | 247,003 | 4,948 | 1989-12-31 ~ |
+| cashflow | 264,798 | 5,002 | 2001-12-31 ~ (1998年前该表不存在) |
+| fina_indicator | 230,192 | 5,002 | 1990-06-30 ~ |
+
+### 视图: v_financial_summary (273k) / v_daily_valuation (1059万)
+
+### 补充手段
+- 90s 行情: `--start 19900101 --end 19991231` 分段补
+- 90s 财务: `tools/market/backfill_90s_fin.py`
+- 修复: `sync_tushare._to_date` 处理 None/NaN (90s 边界)
+
+---
+
+## 8. 已知遗留问题 / 技术债
+
+1. **multi_compare 意图准确 76%**: 部分对比查询被识别为 query (功能正常, 分类细分待优化)
+2. **edge 用例 62.5%**: 无股票实体的查询被拒是合理的, 但 eval 预期需调
+3. **git 历史含明文密码**: `config.yaml` 旧版本曾含 MySQL 密码 (工作区已清理, 历史残留, 建议 git filter-repo 或私有仓库不必处理)
+4. **LLM 配额**: DashScope key 之前 429 限流过, 评测建议 rule 模式 (--mode rule)
+5. **别名词典**: 仅 60+ 种子, 生产需扩充 (或 Phase2 用小模型 NER 泛化)
+6. **行业分类待增强**: `stock_basic.industry` 仅为申万一级 (银行/白酒);
+   计划新增 `stock.stock_industry` 表存 申万 SW2021 二级行业 (134个) 映射
+   (Tushare 无东财分类, 申万是 A 股权威标准)
 
 ---
 
