@@ -26,6 +26,8 @@ CREATE TABLE IF NOT EXISTS stock.stock_basic (
     delist_date  DATE,                      -- 退市日期(空为在市)
     is_hs        VARCHAR(4),                -- 是否沪深港通标的
     status       VARCHAR(4),                -- L上市/D退市/P暂停
+    industry_l1  VARCHAR(32),               -- 申万一级行业 (当前, 冗余快查)
+    industry_l2  VARCHAR(32),               -- 申万二级行业 (当前, 冗余快查)
     updated_at   TIMESTAMP DEFAULT now()
 );
 COMMENT ON TABLE stock.stock_basic IS '股票基础信息(股票池)';
