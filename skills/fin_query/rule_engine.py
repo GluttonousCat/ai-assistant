@@ -8,13 +8,14 @@
 - ("error", None)         -> 词典可用但参数异常 (如股票不存在)
 
 能力:
-- 单股单指标 [时间] 查询
-- 多股同指标对比 (识别 "和/与/、")
-- 单股多指标 (识别 "和/与" 连接第二个指标, 最多2个)
+- 单股单指标 [时间] 查询 (时间含 年报/季报/半年报/去年/最近N年)
+- 单股多指标 (最多 3 列, 不再丢弃后续指标)
+- 多股同指标对比 (识别 "和/与/、/谁更高")
 """
 from __future__ import annotations
 
 import re
+from datetime import date
 from typing import Dict, List, Optional, Tuple
 
 from tools.finance.stock_kb import get_stock_kb, parse_time_phrase
@@ -73,33 +74,35 @@ class RuleEngine:
             return None, {"reason": "unsupported"}
 
         time_phrase = parse_time_phrase(text)
+        # 相对时间 -> 绝对年份 ("去年" = 上一年年报)
+        if time_phrase and time_phrase[0] == "previous_year":
+            time_phrase = ("year", date.today().year - 1)
+        elif time_phrase and time_phrase[0] == "this_year":
+            # 今年尚未出年报, 退化为最新期
+            time_phrase = ("recent", None)
 
         # 3. 意图: 对比 (>=2 股票) or 单股
         if len(stocks) >= 2:
             # 取第一个指标做对比
             field, prefix = metrics[0]
-            sql = build_compare_query(stocks, field, prefix)
+            sql = build_compare_query(stocks, field, prefix, time_phrase)
             if sql:
                 return sql, {"type": "compare", "stocks": [s[1] for s in stocks],
                              "metric": field}
             return None, {"reason": "error"}
 
-        # 4. 单股: 单指标或多指标
+        # 4. 单股: 单指标或多指标 (多列 SELECT, 不丢弃)
         ts_code, name = stocks[0]
-        if len(metrics) == 1:
-            field, prefix = metrics[0]
-            sql = build_single_query(ts_code, name, field, prefix, time_phrase)
-            if sql:
-                return sql, {"type": "query", "stock": name, "metric": field}
-            return None, {"reason": "error"}
-        else:
-            # 多指标: 取第一个主指标 (简化, 后续扩展多列)
-            field, prefix = metrics[0]
-            sql = build_single_query(ts_code, name, field, prefix, time_phrase)
-            if sql:
-                return sql, {"type": "query", "stock": name, "metric": field,
-                             "extra_metrics": len(metrics)}
-            return None, {"reason": "error"}
+        field, prefix = metrics[0]
+        extra = [m for m in metrics[1:3]]
+        sql = build_single_query(ts_code, name, field, prefix, time_phrase,
+                                 extra_fields=extra)
+        if sql:
+            meta = {"type": "query", "stock": name, "metric": field}
+            if extra:
+                meta["extra_metrics"] = [e[0] for e in extra]
+            return sql, meta
+        return None, {"reason": "error"}
 
     # ---------- 实体提取 ----------
     def _extract_stocks(self, text: str) -> List[Tuple[str, str]]:
@@ -128,19 +131,29 @@ class RuleEngine:
         return found
 
     def _extract_metrics(self, text: str) -> List[Tuple[str, str]]:
-        """提取文本中的指标 (field, prefix)"""
+        """提取文本中的指标 (field, prefix), 最多 3 个.
+        按别名长度降序匹配, 已命中区间不再重复匹配
+        (避免 "赚了多少钱" 命中净利润后, 子串 "多少钱" 再命中股价)"""
         found = []
         seen = set()
+        occupied = []  # 已占用字符区间 [(start, end), ...]
+        text_l = text.lower()
         for alias, (field, prefix) in sorted(
             self.kb.METRIC_ALIASES.items(), key=lambda x: -len(x[0])
         ):
             if (field, prefix) in seen:
-                continue  # 同字段同源只取一次 (避免别名重复)
-            if alias.lower() in text.lower():
-                found.append((field, prefix))
-                seen.add((field, prefix))
-                if len(found) >= 2:
-                    break
+                continue
+            idx = text_l.find(alias.lower())
+            if idx < 0:
+                continue
+            span = (idx, idx + len(alias))
+            if any(s < span[1] and span[0] < e for s, e in occupied):
+                continue  # 与已命中区间重叠
+            found.append((field, prefix))
+            seen.add((field, prefix))
+            occupied.append(span)
+            if len(found) >= 3:
+                break
         return found
 
 

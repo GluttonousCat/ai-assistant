@@ -11,6 +11,7 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta
 
 from storage.sqlite.files import FilesDatabase
+from storage.sqlite.topics import TopicsDatabase
 from utils.paths import PathManager
 from utils.helpers import clean_cookie, sanitize_filename
 from tools.zsxq.anti_detect import AntiDetectManager
@@ -81,6 +82,74 @@ class FileDownloader:
                 return
             time.sleep(0.5)
 
+    # ---------- 话题附件下载 (topic_files, 研报多来自此) ----------
+    def download_topic_files(self, max_files: int = 1) -> Dict[str, int]:
+        """下载话题附件 (topic_files 表), 强制间隔与单文件限制"""
+        path_manager = PathManager()
+        topics_db_path = path_manager.get_topics_db_path(self.group_id)
+        topics_db = TopicsDatabase(topics_db_path)
+
+        # 下载地址: 优先本地 download_url, 否则从 API 获取
+        files = topics_db.get_topic_files(limit=max_files, status="pending")
+
+        stats = {'total': len(files), 'success': 0, 'failed': 0}
+        self.log(f"📥 下载话题附件 (本批次 {len(files)} 个)")
+
+        for row in files:
+            if self.is_stopped():
+                break
+
+            file_id = row['file_id']
+            name = row.get('name') or f"file_{file_id}"
+            self.log(f"📥 话题附件: {name}")
+
+            file_path = os.path.join(self.download_dir, sanitize_filename(name))
+            if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
+                topics_db.update_topic_file_status(file_id, 'completed', file_path)
+                stats['success'] += 1
+                continue
+
+            if self.download_topic_file(file_id, row, file_path):
+                topics_db.update_topic_file_status(file_id, 'completed', file_path)
+                stats['success'] += 1
+            else:
+                topics_db.update_topic_file_status(file_id, 'failed')
+                stats['failed'] += 1
+
+            topics_db.commit()
+            self._long_delay()
+
+        return stats
+
+    def download_topic_file(self, file_id: int, row: Dict, file_path: str) -> bool:
+        """下载单个话题附件, 复用小文件下载逻辑"""
+        url = row.get('download_url')
+        if not url:
+            self.log(f"   ❌ 无下载地址: file_id={file_id}")
+            return False
+
+        try:
+            resp = self.session.get(url, timeout=300, stream=True)
+            if resp.status_code != 200:
+                self.log(f"   ❌ 下载失败: HTTP {resp.status_code}")
+                return False
+
+            with open(file_path, 'wb') as f:
+                for chunk in resp.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+                    if self.is_stopped():
+                        break
+
+            self.log(f"   ✅ 下载完成: {os.path.basename(file_path)}")
+            self.download_count += 1
+            return True
+        except Exception as e:
+            self.log(f"   ❌ 下载异常: {e}")
+            if os.path.exists(file_path):
+                os.remove(file_path)
+            return False
+
     def fetch_file_list(self, count: int = 20, index: str = None,
                        sort: str = "by_create_time") -> Optional[Dict]:
         """获取文件列表"""
@@ -136,7 +205,7 @@ class FileDownloader:
     def download_file(self, file_info: Dict) -> bool:
         """下载单个文件"""
         file_data = file_info.get('file', {})
-        file_id = file_data.get('id')
+        file_id = file_data.get('file_id') or file_data.get('id')
         file_name = file_data.get('name', 'unknown')
         file_size = file_data.get('size', 0)
 
@@ -231,7 +300,7 @@ class FileDownloader:
                 topic_data = file_info.get('topic', {})
 
                 self.db.add_file(
-                    file_id=file_data.get('id'),
+                    file_id=file_data.get('file_id') or file_data.get('id'),
                     topic_id=topic_data.get('topic_id'),
                     name=file_data.get('name', ''),
                     size=file_data.get('size', 0),
@@ -244,9 +313,8 @@ class FileDownloader:
             stats['total'] += len(files)
 
             # 检查是否有新文件
-            self.cursor = self.db.cursor
-            self.cursor.execute("SELECT COUNT(*) FROM files WHERE download_status = 'pending'")
-            new_count = self.cursor.fetchone()[0]
+            self.db.cursor.execute("SELECT COUNT(*) FROM files WHERE download_status = 'pending'")
+            new_count = self.db.cursor.fetchone()[0]
             stats['new'] = new_count
 
             self.log(f"   ✅ 本页{len(files)}个，累计待下载{new_count}")
@@ -262,8 +330,8 @@ class FileDownloader:
         return stats
 
     def download_pending(self, max_files: int = 1) -> Dict[str, int]:
-        """下载待处理文件 - 强制限制为1个"""
-        max_files = 1  # 强制限制
+        """下载待处理文件"""
+        max_files = max(1, min(max_files, 20))  # 每次上限20个, 防误用
 
         self.log(f"📥 开始下载文件 (限制{max_files}个)")
 

@@ -33,24 +33,27 @@ logger = get_logger(__name__)
 
 # 核心词: 命中即高置信
 CORE_KEYWORDS: Dict[str, List[str]] = {
-    "query": ["营收", "净利润", "净利率", "毛利率", "roe", "净资产收益率",
-              "市盈率", "市净率", "股价", "收盘价", "市值", "涨跌幅", "换手率",
-              "资产负债率", "流动比率", "净资产", "每股收益", "营业利润",
-              "利润总额", "经营现金流", "总资产", "总负债", "商誉"],
+    "query": ["营收", "营业收入", "净利润", "净利率", "毛利率", "毛利", "roe", "净资产收益率",
+              "回报率", "市盈率", "市净率", "股价", "收盘价", "最新价", "市值", "涨跌幅",
+              "涨幅", "换手率", "资产负债率", "流动比率", "速动比率", "净资产", "每股收益",
+              "营业利润", "利润总额", "经营现金流", "总资产", "总负债", "商誉", "eps",
+              "成交额", "成交量"],
     "detect": ["财务风险", "异常检测", "预警", "排雷", "财务造假", "风险排查"],
     "verify": ["研报校验", "预测校验", "一致性验证", "研报验证"],
-    "report": ["分析报告", "深度报告", "生成报告", "完整报告"],
-    "compare": ["对比", "比较", "谁高", "谁更高", "vs", "哪个更好", "孰强"],
+    "report": ["分析报告", "深度报告", "生成报告", "完整报告", "研究报告"],
+    "compare": ["对比", "比较", "谁高", "谁更高", "vs", "哪个更好", "孰强", "对比一下"],
 }
 
-# 一般词: 命中给 0.7 基线
+# 一般词: 命中给 0.6 基线
 GENERAL_KEYWORDS: Dict[str, List[str]] = {
-    "query": ["查询", "查一下", "多少", "收入", "利润", "排名", "筛选",
-              "大于", "小于", "同比", "看", "看看", "股价",
-              "收盘", "市盈", "市净", "换手", "基本面"],
+    "query": ["查询", "查一下", "查查", "多少", "收入", "利润", "排名", "筛选",
+              "大于", "小于", "同比", "看", "看看", "看下",
+              "收盘", "市盈", "市净", "换手", "基本面", "赚了", "多少钱"],
     "detect": ["风险", "异常", "检测"],
     "verify": ["校验", "验证", "研报", "一致性"],
     "report": ["报告", "生成", "写一份", "总结"],
+    # compare 口语句式: "谁毛利率高"/"哪个更高"/"谁的营收更高" (宽泛词给 0.6, 由优先级裁决)
+    "compare": ["谁", "哪个", "更高", "更优", "孰"],
 }
 
 # 意图优先级 (同分时按此顺序)
@@ -139,7 +142,18 @@ class LayeredIntentClassifier:
             if score > 0:
                 scores[intent] = score
 
+        # compare 组合信号: 指标词 + 对比指示词 (谁/哪个/更高/vs) 共现 -> compare 强信号
+        # (否则 "谁毛利率更高" 会被 query 的指标核心词 0.9 压过)
+        if scores.get("query") and any(
+            w in text_l for w in ("谁", "哪个", "更高", "更优", "vs", "孰")
+        ):
+            scores["compare"] = max(scores.get("compare", 0.0), 0.95)
+
         if not scores:
+            # 实体兜底: 同时含股票+指标实体 (电报体 "茅台 毛利率") -> query
+            if self._has_stock_and_metric(text):
+                slots = self._extract_slots_rule(text)
+                return IntentResult("query", 0.7, "rule", slots=slots)
             return IntentResult("unknown", 0.0, "rule")
 
         # 取最高分意图
@@ -147,6 +161,16 @@ class LayeredIntentClassifier:
         conf = scores[best]
         slots = self._extract_slots_rule(text)
         return IntentResult(best, conf, "rule", slots=slots)
+
+    @staticmethod
+    def _has_stock_and_metric(text: str) -> bool:
+        """文本同时命中股票词典与指标词典 (轻量, 毫秒级)"""
+        try:
+            from tools.finance.stock_kb import get_stock_kb
+            kb = get_stock_kb()
+            return bool(kb.match_stock(text) and kb.match_metric(text))
+        except Exception:
+            return False
 
     # ---------- 规则槽位提取 (股票/指标/时间) ----------
     def _extract_slots_rule(self, text: str) -> Dict[str, Any]:

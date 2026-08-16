@@ -99,6 +99,10 @@ class FilesDatabase(BaseDatabase):
 
         return stats
 
+    def commit(self):
+        """提交事务"""
+        self.conn.commit()
+
     def get_time_range(self) -> Dict[str, Any]:
         """获取文件时间范围"""
         self.cursor.execute('''
@@ -116,6 +120,27 @@ class FilesDatabase(BaseDatabase):
             'newest': result[1],
             'total': result[2]
         }
+
+    def get_completed_files(self, limit: int = 500) -> List[Dict]:
+        """获取已下载完成文件 (供同步 PG 研报库)"""
+        self.cursor.execute('''
+            SELECT file_id, topic_id, name, size, hash, local_path, create_time
+            FROM files
+            WHERE download_status = 'completed' AND local_path IS NOT NULL
+            ORDER BY create_time DESC
+            LIMIT ?
+        ''', (limit,))
+        cols = [d[0] for d in self.cursor.description]
+        return [dict(zip(cols, row)) for row in self.cursor.fetchall()]
+
+    def get_file_by_id(self, file_id: int) -> Optional[Dict]:
+        """按 ID 获取文件"""
+        self.cursor.execute("SELECT * FROM files WHERE file_id = ?", (file_id,))
+        row = self.cursor.fetchone()
+        if not row:
+            return None
+        cols = [d[0] for d in self.cursor.description]
+        return dict(zip(cols, row))
 
     def start_collection_log(self) -> int:
         """开始收集日志"""

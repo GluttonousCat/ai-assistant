@@ -56,3 +56,23 @@ def sanitize_filename(filename: str) -> str:
     """清理文件名，移除非法字符"""
     safe = "".join(c for c in filename if c.isalnum() or c in '._-（）()[]{} ')
     return safe or "unnamed"
+
+
+def strip_zsxq_tags(text: str) -> str:
+    """清理知识星球话题文本中的富文本标签
+    例: <e type="web" href="https%3A%2F%2F...">百度网盘</e> → 百度网盘(链接)
+    """
+    if not text:
+        return text
+
+    # <e type="web" href="url">显示文本</e> → 显示文本(链接: url)
+    def _replace_web(m):
+        label = m.group(2) or ""
+        url = m.group(1) or ""
+        return f"{label}(link:{url})" if url else label
+
+    text = re.sub(r'<e\s+type="web"\s+href="([^"]*)"[^>]*>(.*?)</e>', _replace_web, text, flags=re.S)
+
+    # 移除其余所有标签
+    text = re.sub(r"<[^>]+>", "", text)
+    return text.strip()

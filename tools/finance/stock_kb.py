@@ -21,10 +21,25 @@ from storage.pg import PgClient
 MAX_NAME_LEN = 12  # 股票别名最长长度 (防误匹配)
 
 # 时间表达解析 (仅做结构化; 具体 SQL 由规则引擎组)
-# 返回: (kind, value)  kind: year/range/recent, value: int/日期对/None
+# 返回: (kind, value)  kind: year/quarter/half/recent_years/previous_year/this_year/recent
 def parse_time_phrase(text: str) -> Optional[Tuple[str, object]]:
-    """解析时间词: 2019年/2023年/最近两年/近三年/去年"""
+    """解析时间词: 2023年/2023年报/2023Q1/2023年一季报/2023年中报/最近N年/去年
+    季报优先于年份匹配 (避免 "2023年一季报" 被截成 2023 年报)"""
     text = text.strip()
+    # 季报: 2023Q1 / 2023年Q1 / 2023年一季报 / 2023一季报 / 2023年3季报
+    m = re.search(
+        r"(19|20)\d{2}\s*年?\s*[Qq]?\s*([一二三四1234])\s*季报?", text)
+    if m:
+        q = {"一": 1, "二": 2, "三": 3, "四": 4}[m.group(2)]
+        year = int(m.group(0)[:4])
+        if q == 4:
+            return ("year", year)  # 四季报 = 年报
+        return ("quarter", (year, q))
+    # 中报/半年报: 2023年中报 / 2023年半年报 / 2023H1
+    m = re.search(r"(19|20)\d{2}\s*年?\s*(?:半年报|中报|H1|h1)", text)
+    if m:
+        return ("half", int(m.group(0)[:4]))
+    # 年报/年份
     m = re.search(r"(19|20)\d{2}\s*年", text)
     if m:
         return ("year", int(m.group(0).strip()[:4]))
@@ -36,7 +51,7 @@ def parse_time_phrase(text: str) -> Optional[Tuple[str, object]]:
         return ("previous_year", None)
     if "今年" in text:
         return ("this_year", None)
-    if "最近" in text or "最新" in text:
+    if "最近" in text or "最新" in text or "最近一期" in text:
         return ("recent", None)
     return None
 
@@ -121,33 +136,50 @@ class StockKB:
         "营收": ("revenue", "i"),
         "收入": ("revenue", "i"),
         "营业总收入": ("total_revenue", "i"),
+        "营业额": ("revenue", "i"),
+        "卖了多少": ("revenue", "i"),
         # 利润类
         "归母净利润": ("n_income_attr_p", "i"),
         "净利润": ("n_income_attr_p", "i"),
         "净利": ("n_income_attr_p", "i"),
+        "赚了多少钱": ("n_income_attr_p", "i"),
+        "赚了多少": ("n_income_attr_p", "i"),
+        "利润是多少": ("n_income_attr_p", "i"),
         "扣非净利润": ("net_after_nr_lp_correct", "i"),
         "营业利润": ("operate_profit", "i"),
         "利润总额": ("total_profit", "i"),
         "每股收益": ("basic_eps", "i"),
+        "eps": ("basic_eps", "i"),
+        "每股赚多少": ("basic_eps", "i"),
         "稀释每股收益": ("diluted_eps", "i"),
         # 指标类 (fina_indicator)
         "roe": ("roe", "f"),
         "净资产收益率": ("roe", "f"),
+        "回报率": ("roe", "f"),
         "净利率": ("netprofit_margin", "f"),
         "销售净利率": ("netprofit_margin", "f"),
         "毛利率": ("grossprofit_margin", "f"),
         "销售毛利率": ("grossprofit_margin", "f"),
+        "毛利": ("grossprofit_margin", "f"),
         "资产负债率": ("debt_to_assets", "f"),
+        "负债率": ("debt_to_assets", "f"),
         "流动比率": ("current_ratio", "f"),
         "速动比率": ("quick_ratio", "f"),
         "净利润同比增长": ("netprofit_yoy", "f"),
+        "净利润同比": ("netprofit_yoy", "f"),
         "净利同比": ("netprofit_yoy", "f"),
+        "净利增速": ("netprofit_yoy", "f"),
         "营收同比增长": ("or_yoy", "f"),
         "营收同比": ("or_yoy", "f"),
+        "营收增速": ("or_yoy", "f"),
         # 资产类
         "总资产": ("total_assets", "b"),
+        "资产总额": ("total_assets", "b"),
         "总负债": ("total_liab", "b"),
+        "负债总额": ("total_liab", "b"),
         "净资产": ("equity_attr_p", "b"),
+        "股东权益": ("equity_attr_p", "b"),
+        "权益": ("equity_attr_p", "b"),
         "货币资金": ("money_cap", "b"),
         "应收账款": ("accounts_receiv", "b"),
         "存货": ("invent", "b"),
@@ -162,7 +194,16 @@ class StockKB:
         "收盘价": ("close", "d"),
         "股价": ("close", "d"),
         "最新价": ("close", "d"),
+        "现价": ("close", "d"),
+        "现在多少钱": ("close", "d"),
+        "多少钱": ("close", "d"),
         "涨跌幅": ("pct_chg", "d"),
+        "涨跌": ("pct_chg", "d"),
+        "涨幅": ("pct_chg", "d"),
+        "涨了没": ("pct_chg", "d"),
+        "涨了多少": ("pct_chg", "d"),
+        "成交量": ("vol", "d"),
+        "成交额": ("amount", "d"),
         "市盈率": ("pe_ttm", "db"),
         "pe": ("pe_ttm", "db"),
         "市净率": ("pb", "db"),

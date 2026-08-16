@@ -84,6 +84,22 @@ class TopicsDatabase(BaseDatabase):
             )
         ''')
 
+        # 话题内文件附件表 (知识星球帖子可直接附带文件, 多为研报/PDF)
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS topic_files (
+                file_id INTEGER PRIMARY KEY,
+                topic_id INTEGER,
+                name TEXT,
+                size INTEGER,
+                file_type TEXT,
+                download_url TEXT,
+                create_time TEXT,
+                download_status TEXT DEFAULT 'pending',
+                local_path TEXT,
+                imported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
         self.conn.commit()
 
     def topic_exists(self, topic_id: int) -> bool:
@@ -109,6 +125,10 @@ class TopicsDatabase(BaseDatabase):
 
         # 导入话题
         self._upsert_topic(topic_data)
+
+        # 导入话题内文件附件
+        if talk:
+            self.import_topic_files(topic_id, talk.get('files', []))
 
         # 导入评论
         comments = topic_data.get('show_comments', [])
@@ -188,10 +208,84 @@ class TopicsDatabase(BaseDatabase):
                 comment.get('likes_count', 0)
             ))
 
+    def import_topic_files(self, topic_id: int, files: List[Dict]):
+        """导入话题内文件附件 (研报/PDF 等)"""
+        for f in files:
+            file_id = f.get('file_id') or f.get('id')
+            if not file_id:
+                continue
+
+            url = ''
+            if f.get('download_url'):
+                url = f['download_url']
+            elif f.get('url'):
+                url = f['url']
+            elif f.get('file') and isinstance(f['file'], dict):
+                url = f['file'].get('download_url', '') or f['file'].get('url', '')
+
+            self.cursor.execute('''
+                INSERT OR IGNORE INTO topic_files
+                (file_id, topic_id, name, size, file_type, download_url, create_time, download_status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')
+            ''', (
+                file_id,
+                topic_id,
+                f.get('name', ''),
+                f.get('size', 0),
+                f.get('file_type', '') or f.get('type', ''),
+                url,
+                f.get('create_time', ''),
+            ))
+
+    def get_topic_files(self, topic_id: int = None, status: str = None,
+                        limit: int = 100) -> List[Dict]:
+        """查询话题附件, 支持按文件类型/下载状态筛选"""
+        sql = "SELECT * FROM topic_files WHERE 1=1"
+        params = []
+        if topic_id is not None:
+            sql += " AND topic_id = ?"
+            params.append(topic_id)
+        if status:
+            sql += " AND download_status = ?"
+            params.append(status)
+        sql += " ORDER BY create_time DESC LIMIT ?"
+        params.append(limit)
+
+        self.cursor.execute(sql, params)
+        cols = [d[0] for d in self.cursor.description]
+        return [dict(zip(cols, row)) for row in self.cursor.fetchall()]
+
+    def update_topic_file_status(self, file_id: int, status: str, local_path: str = None):
+        """更新附件下载状态"""
+        if local_path:
+            self.cursor.execute(
+                "UPDATE topic_files SET download_status = ?, local_path = ? WHERE file_id = ?",
+                (status, local_path, file_id))
+        else:
+            self.cursor.execute(
+                "UPDATE topic_files SET download_status = ? WHERE file_id = ?",
+                (status, file_id))
+
+    def get_report_candidates(self, file_types=('pdf', 'doc', 'docx', 'txt', 'md'),
+                              limit: int = 500) -> List[Dict]:
+        """获取可作为研报的附件 (按后缀过滤)"""
+        like_clause = " AND ("
+        like_clause += " OR ".join("lower(name) LIKE ?" for _ in file_types)
+        like_clause += ")"
+
+        sql = f"""SELECT * FROM topic_files
+                  WHERE download_status != 'failed'{like_clause}
+                  ORDER BY create_time DESC LIMIT ?"""
+        params = [f"%.{t}" for t in file_types] + [limit]
+
+        self.cursor.execute(sql, params)
+        cols = [d[0] for d in self.cursor.description]
+        return [dict(zip(cols, row)) for row in self.cursor.fetchall()]
+
     def get_stats(self) -> Dict[str, int]:
         """获取统计"""
         stats = {}
-        for table in ['topics', 'users', 'comments', 'images']:
+        for table in ['topics', 'users', 'comments', 'images', 'topic_files']:
             try:
                 self.cursor.execute(f'SELECT COUNT(*) FROM {table}')
                 stats[table] = self.cursor.fetchone()[0]
@@ -216,6 +310,37 @@ class TopicsDatabase(BaseDatabase):
             'oldest': result[0],
             'newest': result[1]
         }
+
+    def get_topic(self, topic_id: int) -> Optional[Dict]:
+        """按 ID 获取话题 (含全文)"""
+        self.cursor.execute("SELECT * FROM topics WHERE topic_id = ?", (topic_id,))
+        row = self.cursor.fetchone()
+        if not row:
+            return None
+        cols = [d[0] for d in self.cursor.description]
+        return dict(zip(cols, row))
+
+    def fetch_topics_after(self, min_topic_id: int = 0, limit: int = None) -> List[Dict]:
+        """按主键递增拉取话题, 用于同步全量"""
+        sql = "SELECT * FROM topics WHERE topic_id > ? ORDER BY topic_id ASC"
+        params: list = [min_topic_id]
+        if limit:
+            sql += " LIMIT ?"
+            params.append(limit)
+        self.cursor.execute(sql, params)
+        cols = [d[0] for d in self.cursor.description]
+        return [dict(zip(cols, row)) for row in self.cursor.fetchall()]
+
+    def get_topic_files_after(self, min_file_id: int = 0, limit: int = None) -> List[Dict]:
+        """按主键递增拉取附件, 用于同步全量"""
+        sql = "SELECT * FROM topic_files WHERE file_id > ? ORDER BY file_id ASC"
+        params: list = [min_file_id]
+        if limit:
+            sql += " LIMIT ?"
+            params.append(limit)
+        self.cursor.execute(sql, params)
+        cols = [d[0] for d in self.cursor.description]
+        return [dict(zip(cols, row)) for row in self.cursor.fetchall()]
 
     def commit(self):
         """提交事务"""
