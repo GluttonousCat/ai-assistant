@@ -682,3 +682,40 @@ def init_report_views(pg_client) -> None:
     for ddl in REPORT_VIEW_DDL:
         pg_client.execute(ddl)
     pg_client.conn.commit()
+
+
+# ============================================================
+# 申万行业分类 (SW2021) + 个股行业映射
+# ============================================================
+
+DDL_INDEX_CLASSIFY = """
+CREATE TABLE IF NOT EXISTS stock.index_classify (
+    index_code     VARCHAR(16) PRIMARY KEY,  -- 行业指数代码 (801125.SI)
+    industry_name  VARCHAR(32) NOT NULL,     -- 行业名称 (白酒Ⅱ)
+    level          VARCHAR(4),               -- L1/L2/L3
+    industry_code  VARCHAR(16),              -- 行业代码 (340500)
+    is_pub         SMALLINT,                 -- 是否公开行业
+    parent_code    VARCHAR(16),              -- 父级行业代码 (340000)
+    src            VARCHAR(16),              -- 来源 (SW2021)
+    upd_date       VARCHAR(16)               -- 更新日期
+);
+COMMENT ON TABLE stock.index_classify IS '申万行业分类 (SW2021)';
+"""
+
+DDL_STOCK_INDUSTRY = """
+CREATE TABLE IF NOT EXISTS stock.stock_industry (
+    index_code    VARCHAR(16) NOT NULL,   -- 二级行业指数代码
+    con_code      VARCHAR(16) NOT NULL,   -- 成分股 ts_code
+    in_date       VARCHAR(16),            -- 调入日期 (YYYYMMDD)
+    out_date      VARCHAR(16),            -- 调出日期 (空=仍在)
+    is_new        VARCHAR(2),             -- N=否 Y=是(新调入)
+    PRIMARY KEY (index_code, con_code)
+);
+CREATE INDEX IF NOT EXISTS idx_stock_ind_con ON stock.stock_industry (con_code);
+COMMENT ON TABLE stock.stock_industry IS '个股 -> 申万二级行业映射';
+"""
+
+
+# ============================================================
+# (行北行业 DDL 已在上面: DDL_INDEX_CLASSIFY + DDL_STOCK_INDUSTRY)
+# ============================================================

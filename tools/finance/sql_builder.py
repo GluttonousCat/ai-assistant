@@ -145,6 +145,59 @@ LIMIT 30"""
     return sql
 
 
+def build_industry_query(
+    index_code: str,
+    field: str,
+    prefix: str,
+    time_phrase=None,
+    top_n: int = 20,
+    level: str = "L2",
+) -> Optional[str]:
+    """
+    按申万行业查询: "XX行业的YY指标"
+    通过 stock.v_industry_current (个股->L1/L2行业) 关联财务/行情表
+    """
+    index_col = "index_l2" if level == "L2" else "index_l1"
+    period_filter = ""
+    if time_phrase:
+        kw, val = time_phrase
+        if kw == "year":
+            period_filter = f" AND i.end_date = '{val}-12-31'"
+
+    if prefix in ("d", "db"):
+        # 行业行情: 最新交易日
+        sql = f"""SELECT s.name AS stock_name,
+            COALESCE(i2.industry_l2, i2.industry_l1) AS industry,
+            d.trade_date, d.close, d.pct_chg, db.pe_ttm, db.total_mv
+FROM stock.v_industry_current i2
+JOIN stock.stock_basic s ON i2.ts_code = s.ts_code
+JOIN stock.daily d ON i2.ts_code = d.ts_code
+LEFT JOIN stock.daily_basic db
+    ON d.trade_date = db.trade_date AND d.ts_code = db.ts_code
+WHERE i2.{index_col} = '{index_code}'
+  AND d.trade_date = (SELECT MAX(trade_date) FROM stock.daily)
+ORDER BY d.close DESC
+LIMIT {top_n}"""
+        return sql
+
+    # 财务行业查询: 行业当前成员 + 指标的近期报告期
+    sql = f"""SELECT s.name AS stock_name,
+        COALESCE(i2.industry_l2, i2.industry_l1) AS industry,
+        i.end_date, {prefix}.{field} AS value
+FROM stock.v_industry_current i2
+JOIN stock.stock_basic s ON i2.ts_code = s.ts_code
+JOIN fin.income i ON i2.ts_code = i.ts_code
+LEFT JOIN fin.fina_indicator f
+    ON i.ts_code = f.ts_code AND i.end_date = f.end_date AND i.report_type = f.report_type
+WHERE i2.{index_col} = '{index_code}'
+  AND i.report_type = '1'{period_filter}
+  AND i.end_date = (SELECT MAX(end_date) FROM fin.income
+                     WHERE ts_code = i.ts_code AND report_type='1')
+ORDER BY value DESC NULLS LAST
+LIMIT {top_n}"""
+    return sql
+
+
 if __name__ == "__main__":
     kb = get_stock_kb()
     kb.load()

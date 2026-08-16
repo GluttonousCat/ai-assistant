@@ -149,6 +149,10 @@ class LayeredIntentClassifier:
         ):
             scores["compare"] = max(scores.get("compare", 0.0), 0.95)
 
+        # compare 强信号: 文本含 ≥2 个股票实体 ("X 和 Y 的指标")
+        if scores.get("query") and self._count_stocks(text) >= 2:
+            scores["compare"] = max(scores.get("compare", 0.0), 0.95)
+
         if not scores:
             # 实体兜底: 同时含股票+指标实体 (电报体 "茅台 毛利率") -> query
             if self._has_stock_and_metric(text):
@@ -161,6 +165,24 @@ class LayeredIntentClassifier:
         conf = scores[best]
         slots = self._extract_slots_rule(text)
         return IntentResult(best, conf, "rule", slots=slots)
+
+    @staticmethod
+    def _count_stocks(text: str) -> int:
+        """统计文本中出现的股票实体数 (去重)"""
+        try:
+            from tools.finance.stock_kb import get_stock_kb
+            kb = get_stock_kb()
+            kb.load()  # 确保词典已加载
+            text_l = text.lower()
+            codes = set()
+            for alias, code in sorted(
+                kb._stock_alias.items(), key=lambda x: -len(x[0])
+            ):
+                if alias and alias.lower() in text_l:
+                    codes.add(code)
+            return len(codes)
+        except Exception:
+            return 0
 
     @staticmethod
     def _has_stock_and_metric(text: str) -> bool:
