@@ -575,3 +575,110 @@ SEED_ALIASES: dict = {
     "万科A": "000002.SZ", "万科": "000002.SZ",
     "深振业A": "000006.SZ", "深振业": "000006.SZ",
 }
+
+# ============================================================
+# 研报数据仓库 (schema: fin) — PRD 2.2
+# ============================================================
+# 数据来源: 知识星球爬虫 (话题附件: PDF/DOCX/TXT) + 手动上传
+# 用途: F4 研报一致性校验 / F5 分析报告生成 的数据底座
+
+DDL_REPORT_META = """
+CREATE TABLE IF NOT EXISTS fin.report_meta (
+    report_id       SERIAL PRIMARY KEY,
+    topic_id        BIGINT,                    -- 知识星球话题ID (来源标识)
+    file_id         BIGINT,                    -- 知识星球文件ID
+    ts_code         VARCHAR(16),               -- 标的股票 (文本推断, 可空)
+    title           VARCHAR(256),              -- 文件标题
+    author          VARCHAR(64),               -- 分析师
+    org_name        VARCHAR(64),               -- 券商名称
+    publish_date    DATE,                      -- 发布日期
+    report_type     VARCHAR(16),               -- 研报类型 (深度/点评/季报)
+    source          VARCHAR(32) DEFAULT 'zsxq',-- 来源 (zsxq/upload)
+    file_path       TEXT,                      -- 本地文件路径
+    file_name       VARCHAR(256),              -- 原始文件名
+    file_size       BIGINT,                    -- 文件大小(字节)
+    content_text    TEXT,                      -- 提取的文本内容
+    content_chars   INTEGER DEFAULT 0,         -- 文本长度 (质量检查)
+    extraction_status VARCHAR(16) DEFAULT 'pending', -- pending/extracted/failed
+    created_at      TIMESTAMP DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_report_meta_ts_code ON fin.report_meta (ts_code);
+CREATE INDEX IF NOT EXISTS idx_report_meta_topic ON fin.report_meta (topic_id);
+COMMENT ON TABLE fin.report_meta IS '研报元数据与文本内容';
+"""
+
+DDL_REPORT_FORECAST = """
+CREATE TABLE IF NOT EXISTS fin.report_forecast (
+    id              SERIAL PRIMARY KEY,
+    report_id       INTEGER NOT NULL REFERENCES fin.report_meta(report_id),
+    ts_code         VARCHAR(16) NOT NULL,
+    forecast_type   VARCHAR(32),               -- 预测类型: revenue/net_profit/eps/target_price
+    forecast_period VARCHAR(16),               -- 预测期间: 2024/2025E
+    forecast_value  NUMERIC(24,4),             -- 预测值
+    forecast_unit   VARCHAR(16),               -- 单位: 亿元/元
+    confidence      NUMERIC(5,2),              -- 提取置信度 0-100
+    raw_text        TEXT,                      -- 原始文本片段
+    created_at      TIMESTAMP DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_report_forecast_report ON fin.report_forecast (report_id);
+COMMENT ON TABLE fin.report_forecast IS '研报关键预测数据提取结果';
+"""
+
+DDL_REPORT_SYNC_META = """
+CREATE TABLE IF NOT EXISTS fin.report_sync_meta (
+    key_name     VARCHAR(32) PRIMARY KEY,      -- last_topic_id / last_file_id
+    value_str    VARCHAR(64),
+    value_int    BIGINT,
+    updated_at   TIMESTAMP DEFAULT now()
+);
+COMMENT ON TABLE fin.report_sync_meta IS '研报同步水位线(zsxq→PG 断点续传)';
+"""
+
+REPORT_DDL = [
+    DDL_REPORT_META,
+    DDL_REPORT_FORECAST,
+    DDL_REPORT_SYNC_META,
+]
+
+T_REPORT_META = "fin.report_meta"
+T_REPORT_FORECAST = "fin.report_forecast"
+T_REPORT_SYNC_META = "fin.report_sync_meta"
+
+
+def init_report_schema(pg_client) -> None:
+    """部署研报相关表 (幂等)"""
+    for ddl in REPORT_DDL:
+        pg_client.execute(ddl)
+    pg_client.conn.commit()
+
+
+DDL_VIEW_REPORT_FILES = """
+CREATE OR REPLACE VIEW fin.v_report_ready AS
+SELECT
+    r.report_id,
+    r.ts_code,
+    r.title,
+    r.file_name,
+    r.file_size,
+    r.file_path,
+    r.report_type,
+    r.source,
+    r.extraction_status,
+    r.content_chars,
+    r.publish_date,
+    r.created_at
+FROM fin.report_meta r
+WHERE r.extraction_status = 'extracted'
+  AND r.ts_code IS NOT NULL
+  AND r.content_chars > 0;
+COMMENT ON VIEW fin.v_report_ready IS '已提取且含标的股票的研报(可直接用于F4校验)';
+"""
+
+REPORT_VIEW_DDL = [DDL_VIEW_REPORT_FILES]
+
+
+def init_report_views(pg_client) -> None:
+    """部署研报视图 (幂等)"""
+    for ddl in REPORT_VIEW_DDL:
+        pg_client.execute(ddl)
+    pg_client.conn.commit()

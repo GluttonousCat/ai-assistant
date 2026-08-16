@@ -25,6 +25,8 @@ from core.logger import get_logger
 from tools.zsxq.crawler import ZSXQCrawler
 from tools.zsxq.downloader import FileDownloader
 from storage.sqlite.account import AccountDatabase
+from storage.pg import PgClient
+from storage.pg_schema import T_REPORT_META, T_REPORT_FORECAST
 
 logger = get_logger(__name__)
 
@@ -63,6 +65,12 @@ async def health():
 
 
 # ---------- 知识星球爬虫 ----------
+@router.get("/crawl/status", tags=["zsxq"])
+async def crawl_status():
+    """后台任务状态 (简单内存态)"""
+    return {"tasks": tasks, "count": len(tasks)}
+
+
 @router.post("/crawl/latest", tags=["zsxq"])
 async def crawl_latest(request: CrawlRequest, background_tasks: BackgroundTasks):
     """爬取最新话题"""
@@ -133,6 +141,21 @@ async def download_files(request: FileDownloadRequest, background_tasks: Backgro
     return {"status": "started", "message": "开始下载文件（每次1个）"}
 
 
+@router.post("/files/download-topic-files", tags=["zsxq"])
+async def download_topic_files(request: FileDownloadRequest, background_tasks: BackgroundTasks):
+    """下载话题附件 (topic_files, 研报多为话题附件)"""
+    def task():
+        config = get_config()
+        cookie = config.zsxq_cookie
+        downloader = FileDownloader(cookie, str(request.group_id))
+        result = downloader.download_topic_files(max_files=request.max_files)
+        downloader.close()
+        return result
+
+    background_tasks.add_task(task)
+    return {"status": "started", "message": "开始下载话题附件（每次1个）"}
+
+
 @router.get("/stats/{group_id}", tags=["zsxq"])
 async def get_stats(group_id: str):
     """获取统计信息"""
@@ -143,6 +166,88 @@ async def get_stats(group_id: str):
         return {"group_id": group_id, "stats": stats}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------- 研报管理 (fin.report_meta) ----------
+@router.get("/reports", tags=["zsxq"])
+async def list_reports(source: str = None, status: str = None, limit: int = 100):
+    """研报列表 (fin.report_meta 查询)"""
+    sql = f"""SELECT report_id, topic_id, file_id, ts_code, title, source,
+                     extraction_status, content_chars, publish_date, created_at
+              FROM {T_REPORT_META} WHERE 1=1"""
+    params: list = []
+    if source:
+        sql += " AND source = %s"
+        params.append(source)
+    if status:
+        sql += " AND extraction_status = %s"
+        params.append(status)
+    sql += " ORDER BY report_id DESC LIMIT %s"
+    params.append(min(limit, 500))
+
+    with PgClient() as pg:
+        rows = pg.fetch_all(sql, params)
+        total = pg.fetch_one(f"SELECT count(*) AS c FROM {T_REPORT_META}")["c"]
+    return {"total": total, "reports": rows}
+
+
+@router.get("/reports/{report_id}", tags=["zsxq"])
+async def get_report(report_id: int, include_text: bool = False):
+    """研报详情 (默认不带全文)"""
+    with PgClient() as pg:
+        row = pg.fetch_one(
+            f"SELECT * FROM {T_REPORT_META} WHERE report_id = %s", (report_id,))
+        if not row:
+            raise HTTPException(status_code=404, detail="研报不存在")
+        if not include_text:
+            row.pop("content_text", None)
+    return row
+
+
+@router.post("/reports/upload", tags=["zsxq"])
+async def upload_report(request: dict):
+    """
+    手动上传研报文本入库 (研报校验数据源之一)
+    body: {"ts_code": "600519.SH", "title": "...", "content_text": "...", "source": "upload"}
+    """
+    ts_code = request.get("ts_code")
+    title = (request.get("title") or "").strip()
+    content = (request.get("content_text") or "").strip()
+
+    if not content:
+        raise HTTPException(status_code=400, detail="content_text 不能为空")
+
+    with PgClient() as pg:
+        cursor = pg.conn.cursor()
+        cursor.execute(
+            f"""INSERT INTO {T_REPORT_META}
+                (ts_code, title, content_text, content_chars, source, extraction_status)
+                VALUES (%s, %s, %s, %s, 'upload', 'extracted') RETURNING report_id""",
+            (ts_code, title if title else content[:80], content, len(content)),
+        )
+        report_id = cursor.fetchone()[0]
+
+    return {"status": "ok", "report_id": report_id}
+
+
+@router.post("/crawl/sync-reports", tags=["zsxq"])
+async def sync_zxsq_reports(group_id: str = None, background_tasks: BackgroundTasks = None):
+    """将本地爬取的 zsxq 数据同步到 PG 研报库"""
+    def task():
+        from scripts.sync_zxsq_to_pg import ZSXQ2PGSync
+        gid = group_id or get_config().zsxq_group_id
+        if not gid:
+            raise HTTPException(status_code=400, detail="未指定群组ID")
+        sync = ZSXQ2PGSync(gid)
+        sync.run()
+
+    if background_tasks:
+        background_tasks.add_task(task)
+        return {"status": "started", "message": "后台开始同步研报数据"}
+    else:
+        # 前台同步 (调试用)
+        task()
+        return {"status": "ok", "message": "同步完成"}
 
 
 # ---------- 账号管理 ----------
