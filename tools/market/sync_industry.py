@@ -94,6 +94,28 @@ def _concat(a, b):
     return pd.concat([a, b], ignore_index=True)
 
 
+def backfill_stock_basic() -> int:
+    """将当前行业回填到 stock_basic (industry_l1/l2 冗余列)"""
+    with PgClient() as pg:
+        pg.execute("""
+            ALTER TABLE stock.stock_basic
+            ADD COLUMN IF NOT EXISTS industry_l1 VARCHAR(32),
+            ADD COLUMN IF NOT EXISTS industry_l2 VARCHAR(32)
+        """)
+        pg.execute("""
+            UPDATE stock.stock_basic b
+            SET industry_l1 = v.industry_l1,
+                industry_l2 = v.industry_l2,
+                updated_at = now()
+            FROM stock.v_industry_current v
+            WHERE b.ts_code = v.ts_code
+        """)
+        n = pg.cur.rowcount
+        pg.conn.commit()
+    logger.info(f"stock_basic 行业回填: {n} 只更新")
+    return n
+
+
 def main():
     import tushare as ts
     config = get_config()
@@ -105,7 +127,8 @@ def main():
 
     n1 = sync_classify(pro)
     n2 = sync_members(pro)
-    print(f"=== 完成: 分类 {n1} 条, 成分映射 {n2} 条 ===")
+    n3 = backfill_stock_basic()
+    print(f"=== 完成: 分类 {n1} 条, 成分映射 {n2} 条, basic行业回填 {n3} 只 ===")
 
 
 if __name__ == "__main__":
