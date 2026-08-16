@@ -99,19 +99,19 @@ ai-assistant/
 |----|------|------|
 | stock_basic | 股票池 (主板/创业板/科创板, 剔除北交/B股/ST) | 5,005 |
 | stock_alias | 股票别名词典 (简称/外号) | 60+ 种子, 可扩充 |
-| trade_calendar | 交易日历 | 9,724 |
-| daily | 日K OHLCV+涨跌幅 | 300万 (26年全量) |
-| adj_factor | 复权因子 | 回填中 |
-| daily_basic | 每日估值 (PE/PB/市值/换手) | 回填中 (40%) |
+| trade_calendar | 交易日历 | 全量 1990~2026 |
+| daily | 日K OHLCV+涨跌幅 | 1059万 (1990-12-19 起) |
+| adj_factor | 复权因子 | 1524万 |
+| daily_basic | 每日估值 (PE/PB/市值/换手) | 1535万 |
 | sync_meta | 同步水位线 | - |
 
 ### fin schema (财务)
 | 表 | 说明 | 量级 |
 |----|------|------|
-| income | 利润表 (95 字段, 全字段) | 回填中 (3股) |
-| balancesheet | 资产负债表 (52 字段) | 回填中 |
-| cashflow | 现金流量表 | 回填中 |
-| fina_indicator | 财务指标 (ROE/毛利/增长/偿债) | 回填中 (83%) |
+| income | 利润表 (95 字段, 全字段) | 27.3万 (1990 起) |
+| balancesheet | 资产负债表 (52 字段) | 24.7万 (1989 起) |
+| cashflow | 现金流量表 | 26.5万 (2001 起, 历史合理) |
+| fina_indicator | 财务指标 (ROE/毛利/增长/偿债) | 23万 (1990 起) |
 | sync_meta | 同步水位线 (按 ts_code 续传) | - |
 
 ### 宽表视图
@@ -156,20 +156,26 @@ ai-assistant/
 
 ---
 
-## 5. 数据回填状态 (后台进行中)
-
-两个长任务后台跑 (断点续传, 可反复执行):
+## 5. 数据回填状态 ✅ 全部完成
 
 ### 行情回填 `python -m tools.market.sync_tushare`
-- **daily**: ✅ 完成 3,005,439 行 (2000~2026-08-14 全量)
-- **daily_basic**: ⏳ 2553/6450 天 (40%), 265 万行, 到 2010-07-28
-- **adj_factor**: ⏳ 等 daily_basic 完成后自动开始
+- **daily**: ✅ 完成, 10,592,038 行 (1990-12-19 ~ 2026-08-14)
+- **adj_factor**: ✅ 完成, 15,241,072 行
+- **daily_basic**: ✅ 完成, 15,349,643 行
 
-### 财务回填 `python -m tools.market.sync_financial`
-- **fina_indicator**: ⏳ 4150/5002 只 (83%), 34 万行
-- **income/balancesheet/cashflow**: ⏳ 排队 (当前仅 3 股测试数据)
+### 财务回填 `python -m tools.market.sync_financial` + `backfill_90s_fin.py`
+- **fina_indicator**: ✅ 完成, 230,192 行, 5,002 只 (1990-06-30 起)
+- **income**: ✅ 完成, 273,485 行, 4,738 只 (1990-12-31 起)
+- **balancesheet**: ✅ 完成, 247,003 行, 4,948 只 (1989-12-31 起)
+- **cashflow**: ✅ 完成, 264,798 行, 5,002 只 (2001-12-31 起, 现金流量表 1998 年才在我国强制披露, 90s 无数据属历史合理)
 
-**预计总耗时**: 财务 3 张大表约 2-3 小时, daily_basic 约 1 小时, adj_factor 约 1 小时.
+### 90 年代补充 (1990-1999)
+- 行情: daily 598,210 / adj_factor 616,973 / daily_basic 589,869 行
+- 财务: income 7,168 / balancesheet 6,719 / fina_indicator 7,765 行 (cashflow 跳过)
+- 补充脚本: `tools/market/backfill_90s_fin.py` (一次性)
+- 修复: `sync_tushare._to_date` 处理 None/NaN (90s 边界日期)
+
+**数据仓库现覆盖 A 股全生命周期 (1989-12-31 ~ 2026-08-14)**
 
 ---
 
