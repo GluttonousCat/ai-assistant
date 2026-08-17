@@ -29,6 +29,12 @@ tushare:
   rate_limit_sleep: 0.5       # 每次抓取间隔(秒)
   chunk_size: 1000            # 批量入库分块大小
 
+# 每日增量同步调度 (后端常驻即自动执行)
+schedule:
+  sync_hour: 21               # 每交易日 21:00 自动增量回填 (Tushare 15-16点入库当日)
+  sync_minute: 0
+  enabled: true               # false 则关闭调度器
+
 # 日志
 logging:
   level: INFO

@@ -279,3 +279,24 @@ async def agent_chat(request: dict):
         "message": "Agent 对话将在阶段二接入",
         "received": request.get("text", ""),
     }
+
+
+# ---------- 数据同步调度 ----------
+@router.post("/admin/sync-today", tags=["admin"])
+async def sync_today():
+    """手动触发每日增量同步 (交易日 18:00 自动执行的同款)"""
+    from core.scheduler import get_scheduler
+    result = await get_scheduler().trigger_now()
+    return {"status": "done", "result": result}
+
+
+@router.get("/admin/scheduler-status", tags=["admin"])
+async def scheduler_status():
+    """调度器状态"""
+    from core.scheduler import get_scheduler
+    s = get_scheduler()
+    return {
+        "running": s._task is not None and not s._task.done(),
+        "last_run": s.last_run.isoformat() if s.last_run else None,
+        "last_result": s.last_result,
+    }
