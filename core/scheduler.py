@@ -85,9 +85,45 @@ class DailySyncScheduler:
         logger.info(f"每日增量同步完成: {result}")
         return result
 
+    async def _catchup_if_missed(self):
+        """
+        启动补跑: 若今天是交易日且已过调度时间, 但数据未同步到今天 -> 立即补跑一次
+        判断依据: PG 里 stock.daily 最新日期 < 今天 (数据未到位), 而非内存 last_run
+        """
+        now = datetime.now()
+        today_target = now.replace(
+            hour=SYNC_HOUR, minute=SYNC_MINUTE, second=0, microsecond=0
+        )
+        # 必须是交易日 + 已过今日调度时间
+        if not is_trading_day(now.date()):
+            return
+        if now < today_target:
+            return
+
+        # 查数据库: 今天数据是否已存在 (daily 最新 >= 今天)
+        try:
+            from storage.pg import PgClient
+            with PgClient() as pg:
+                row = pg.fetch_one("SELECT MAX(trade_date) m FROM stock.daily")
+                latest = row["m"] if row else None
+            if latest is not None and latest >= now.date():
+                logger.info(f"今日数据已存在 (daily 最新 {latest}), 跳过启动补跑")
+                return
+            logger.info(
+                f"启动时已错过今日调度且数据未到今日 (daily 最新 {latest}), "
+                f"立即补跑一次增量同步"
+            )
+            await self._run_sync()
+        except Exception as e:
+            logger.error(f"启动补跑失败: {e}")
+
     async def _loop(self):
         """调度循环"""
         logger.info(f"增量同步调度器已启动 (每日 {SYNC_HOUR}:{SYNC_MINUTE:02d})")
+
+        # 启动时检查: 若今天是交易日且已过调度时间但今日尚未同步, 立即补跑
+        await self._catchup_if_missed()
+
         while not self._stop_event.is_set():
             next_run = self._next_run_time()
             # 只在交易日跑

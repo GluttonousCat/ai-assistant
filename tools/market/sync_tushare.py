@@ -361,6 +361,11 @@ class TusharePgSyncer:
         self.config = get_config()
         if not self.config.tushare_token:
             raise ValueError("未配置 TUSHARE_TOKEN (.env)")
+        # Tushare API 直连, 绕过系统代理 (代理偶发断连导致回填崩溃)
+        import os
+        for _k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+            os.environ.pop(_k, None)
+        os.environ.setdefault("NO_PROXY", "*")
 
     def run(self, start=None, end=None,
             tables: Optional[Iterable[str]] = None) -> Dict[str, int]:
