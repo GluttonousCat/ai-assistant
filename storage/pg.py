@@ -90,9 +90,9 @@ class PgPool:
             return cls._pool.getconn()
 
     @classmethod
-    def put_conn(cls, conn) -> None:
+    def put_conn(cls, conn, close: bool = False) -> None:
         if cls._pool is not None and conn is not None:
-            cls._pool.putconn(conn)
+            cls._pool.putconn(conn, close=close)
 
     @classmethod
     def close(cls) -> None:
@@ -114,22 +114,55 @@ class PgClient:
 
     def __enter__(self) -> "PgClient":
         self.conn = PgPool.get_conn()
+        # 连接健康检查: 网络断开后的池内连接已失效, 检测到则换新
+        try:
+            cur = self.conn.cursor()
+            cur.execute("SELECT 1")
+            cur.close()
+            self.conn.rollback()  # 清除 SELECT 1 产生的事务状态
+        except Exception:
+            logger.warning("PG 池内连接已失效, 丢弃并换新")
+            try:
+                self.conn.close()
+            except Exception:
+                pass
+            PgPool.put_conn(self.conn)  # 归还坏连接 (pool 会丢弃)
+            self.conn = PgPool.get_conn()
         self.conn.autocommit = False
         self.cur = self.conn.cursor()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        conn_broken = False
         try:
             if exc_type is not None:
-                self.conn.rollback()
-                logger.error(f"PG 执行出错, 已回滚: {exc_val}")
+                # 连接级错误 (断网/服务端断开) 无需回滚, 标记坏连接
+                msg = str(exc_val) if exc_val else ""
+                if "server closed" in msg or "connection" in msg.lower():
+                    conn_broken = True
+                    logger.error(f"PG 连接级错误: {msg[:120]}")
+                else:
+                    self.conn.rollback()
+                    logger.error(f"PG 执行出错, 已回滚: {exc_val}")
             else:
                 self.conn.commit()
+        except Exception as e:
+            conn_broken = True
+            logger.warning(f"PG 提交/回滚失败 (连接可能已断): {e}")
         finally:
             try:
                 if self.cur:
                     self.cur.close()
-            finally:
+            except Exception:
+                pass
+            if conn_broken:
+                # 坏连接直接关闭, 不放回池
+                try:
+                    self.conn.close()
+                except Exception:
+                    pass
+                PgPool.put_conn(self.conn, close=True)
+            else:
                 PgPool.put_conn(self.conn)
 
     # ---------- DDL / 通用执行 ----------
