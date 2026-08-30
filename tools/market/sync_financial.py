@@ -25,6 +25,7 @@ from core.config import get_config
 from core.logger import get_logger
 from storage.pg import PgClient
 from storage.pg_schema import init_fin_schema
+import core.net  # noqa: F401  (强制直连, 绕过不稳定代理)
 
 logger = get_logger(__name__)
 
@@ -174,20 +175,79 @@ def fetch_stock_fin(pro, api_name: str, ts_code: str, fields: List[str],
         return pd.DataFrame()
 
 
+def fetch_recent_financial(pro, table: str, codes: List[str],
+                           start: str) -> int:
+    """
+    增量拉取: 用 ann_date (公告日) 过滤, 只拉 start 之后公告的财报.
+    财报公告是突发事件 (季报/年报/更正), 每日跑一次即可保持最新.
+    返回新增行数. 单接口 200次/分钟限频, 与全量回填共用节流.
+    """
+    api_name, fields = FIN_TABLE_FIELDS[table]
+    total = 0
+    for i, ts_code in enumerate(codes, 1):
+        df = fetch_stock_fin(pro, api_name, ts_code, fields, start=start)
+        if df is None or df.empty:
+            continue
+        for c in ("ann_date", "f_ann_date", "end_date"):
+            _normalize_date_col(df, c)
+        with PgClient() as pg:
+            table_cols = {c["name"] for c in pg.get_columns("fin", table)}
+        keep = [c for c in df.columns if c in table_cols]
+        df = df[keep]
+        with PgClient() as pg:
+            pg.upsert_df(
+                df, "fin", table,
+                conflict_keys=["ts_code", "end_date", "report_type"],
+            )
+            total += len(df)
+        if i % 200 == 0:
+            logger.info(f"  [增量] {table}: 已处理 {i}/{len(codes)} 只, 新增 {total} 行")
+        time.sleep(API_SLEEP)
+    logger.info(f"[增量] {table}: 新公告财报 {total} 行 (start={start})")
+    return total
+
+
+def run_financial_incremental(days: int = 10) -> Dict[str, int]:
+    """
+    每日增量: 拉取最近 N 天公告的财报 (覆盖周末/节假日堆积的公告).
+    逐股拉取限制在 API 限频内, 全市场 ~5000 只 x 4 表约 20 分钟.
+    """
+    import tushare as ts
+    config = get_config()
+    pro = ts.pro_api(config.tushare_token)
+
+    with PgClient() as pg:
+        init_fin_schema(pg)
+
+    codes = get_whitelist_codes()
+    if not codes:
+        raise RuntimeError("白名单为空, 请先运行行情同步")
+
+    start = (date.today() - timedelta(days=days)).strftime("%Y%m%d")
+    result: Dict[str, int] = {}
+    for t in FIN_TABLE_FIELDS:
+        result[t] = fetch_recent_financial(pro, t, codes, start)
+    return result
+
+
 def backfill_fin_table(pro, table: str, codes: List[str],
-                       limit: Optional[int] = None) -> int:
+                       limit: Optional[int] = None,
+                       force_full: bool = False) -> int:
     """回填单张财务表 (逐股票)"""
     api_name, fields = FIN_TABLE_FIELDS[table]
-    logger.info(f"回填 {table}: {len(codes)} 只股票, limit={limit}")
+    logger.info(f"回填 {table}: {len(codes)} 只股票, limit={limit}, force_full={force_full}")
 
-    # 断点: 从上次 ts_code 之后继续
-    last_code = get_fin_progress(table)
-    if last_code and last_code in codes:
-        idx = codes.index(last_code)
-        codes = codes[idx + 1:]
-        logger.info(f"断点续传: 从 {last_code} 之后继续, 剩余 {len(codes)} 只")
-    elif last_code:
-        logger.info(f"断点续传: 上次进度 {last_code} 已不在白名单, 全量重跑")
+    # 断点: 从上次 ts_code 之后继续 (force_full=True 时忽略)
+    if not force_full:
+        last_code = get_fin_progress(table)
+        if last_code and last_code in codes:
+            idx = codes.index(last_code)
+            codes = codes[idx + 1:]
+            logger.info(f"断点续传: 从 {last_code} 之后继续, 剩余 {len(codes)} 只")
+        elif last_code:
+            logger.info(f"断点续传: 上次进度 {last_code} 已不在白名单, 全量重跑")
+    else:
+        logger.info("强制全量回填 (忽略断点)")
 
     if limit:
         codes = codes[:limit]
@@ -229,7 +289,8 @@ def backfill_fin_table(pro, table: str, codes: List[str],
 
 def run_financial(start_ts_code: Optional[str] = None,
                   tables: Optional[Iterable[str]] = None,
-                  limit: Optional[int] = None) -> Dict[str, int]:
+                  limit: Optional[int] = None,
+                  force_full: bool = False) -> Dict[str, int]:
     """执行财务数据全量回填"""
     import tushare as ts
     config = get_config()
@@ -253,7 +314,8 @@ def run_financial(start_ts_code: Optional[str] = None,
     tables = set(tables or list(FIN_TABLE_FIELDS.keys()))
     result: Dict[str, int] = {}
     for t in tables:
-        result[t] = backfill_fin_table(pro, t, codes, limit=limit)
+        result[t] = backfill_fin_table(pro, t, codes, limit=limit,
+                                       force_full=force_full)
     return result
 
 
@@ -266,9 +328,12 @@ if __name__ == "__main__":
                         help="起始 ts_code (断点续传)")
     parser.add_argument("--limit", type=int, default=None,
                         help="限制处理股票数 (测试用)")
+    parser.add_argument("--full", action="store_true",
+                        help="强制全量回填 (忽略断点)")
     args = parser.parse_args()
 
     tbls = [t.strip() for t in args.tables.split(",") if t.strip()]
-    print(f"开始财务回填: tables={tbls}, limit={args.limit}")
-    result = run_financial(start_ts_code=args.start, tables=tbls, limit=args.limit)
+    print(f"开始财务回填: tables={tbls}, limit={args.limit}, full={args.full}")
+    result = run_financial(start_ts_code=args.start, tables=tbls,
+                           limit=args.limit, force_full=args.full)
     print(f"财务回填完成: {result}")

@@ -32,6 +32,7 @@ from core.config import get_config
 from core.logger import get_logger
 from storage.pg import PgClient
 from storage.pg_schema import T_SYNC_META, T_TRADE_CALENDAR, init_schema
+import core.net  # noqa: F401  (强制直连, 绕过不稳定代理)
 
 logger = get_logger(__name__)
 
