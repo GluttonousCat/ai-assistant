@@ -1,0 +1,106 @@
+# AGENTS.md — Alpha Finance Radar 项目上下文入口
+
+> 本文件是给 AI Agent（及新成员）的**项目第一入口**。读完本文件即可建立全局认知，
+> 再按需深入 `docs/` 对应模块文档。人类同事请从 [docs/README.md](docs/README.md) 进。
+> 更新：2026-09-02
+
+## 1. 项目是什么
+
+**Alpha Finance Radar**（`ai-assistant`）——部署在开发者家用 Windows 电脑上的
+个人智能投研平台，公网经域名 `app.alpharadar.link` 访问（Cloudflare Tunnel，无公网 IP）。
+
+三大数据/能力支柱：
+1. **Tushare A 股数据**：日线行情 + 财务三表 + 估值，PG 数仓（`stock`/`fin` schema）
+2. **知识星球研报**：爬虫每日抓取 → LLM 解读入库（券商研报结构化：机构/标的/评级/盈利预测）
+3. **Agent 问答**：自然语言 → 意图路由 → Text-to-SQL 查询 / 研报解读，SSE 流式输出
+
+另含独立量化子系统 `range_trading/`（震荡区间+趋势双系统全市场扫描，见 docs/quant/）。
+
+## 2. 技术栈与目录（关键 30 秒）
+
+```
+FastAPI (Python 3.12) + React 19 (web/, 无TS无路由库) + PostgreSQL (远程) + SQLite (爬虫本地)
+LLM: deepseek-v4-flash-0731(文本,关思考) + qwen3.8-flash(视觉) — 走 Dashscope 网关
+
+agent/      LangGraph 意图路由图 (fin_graph: query/compare→SQL, report→研报)
+skills/     fin_query(Text-to-SQL) / report(研报) / scanned_report(扫描件OCR)
+tools/      zsxq爬虫 / market行情同步 / finance(SQL guard, KB, pdf_vision视觉OCR)
+storage/    pg.py(连接池) / sqlite(爬虫) / pg_schema.py(全部DDL,改表先看这)
+api/        路由+鉴权中间件(JWT) / ws / finance(SSE流式) / reports
+core/       config(.env+yaml) / security(JWT+bcrypt) / scheduler(Tushare 21:00)
+            zsxq_scheduler(爬虫 07:00/23:00) / lifespan
+web/src/    Login / Platform(侧边栏壳) / AgentChat(SSE) / Reports / App(区间看板)
+scripts/    同步与一次性脚本(sync_zxsq_to_pg, merge_report_duplicates, ...)
+```
+
+分层调用：`api → agent → skills → tools → storage`。Skill 编排 Tools，专业知识在 prompt。
+
+## 3. 数据流水线（研报链路，最常改动）
+
+```
+07:00/23:00 调度 → 爬话题 + 逐个下载PDF(反检测,60-120s/个)
+  → 每下载1个立即(逐篇流水, 下载完即"已分析"前端可用):
+     sync_zxsq_to_pg 入库(返回新report_id) → LLM Analysis(仅文件名→标题/机构/标的/行业/地区/市场)
+     → 深度提取(正文→评级/盈利预测/tags, 单篇) → merge_report_duplicates 去重(txt并入PDF)
+  ※ 深度提取也可由研报中心「AI 分析」按钮 SSE 流式触发(弹窗展示 Agent 流程+模型输出,
+    POST /api/reports/{id}/analyze/stream; 与批量链路共用 _apply_extract_result)
+  ※ 轮末批量提取(限额8/15篇)与 analyze_pending 仅作兜底清积压, 不在主链路上
+图片型PDF(无文本层) → 后台线程 qwen 视觉OCR(状态 pending_ocr, 前端隐藏)
+  → OCR完成后自动接续单篇深度提取(不等下一轮调度)
+```
+关键表：`fin.report_meta`（file_name 原名/title 清洗后/org/target/industry/region/market）、
+`fin.report_forecast`（盈利预测）。market 词表：A股/H股/TW股/日股/韩股/美股/欧洲股/东南亚股/商品/宏观/其他。
+
+## 4. 模型路由（改模型只动 config.yaml）
+
+`config.yaml llm.models.<用途>`：default/agent/extract/analysis=deepseek-v4-flash-0731（**必须
+`enable_thinking=False`**，否则 content 为空），vision=qwen3.8-flash（deepseek 不收图片）。
+代码用 `get_agent_llm()/get_extract_llm()/get_vision_llm()` 工厂，禁止硬编码模型名。详见
+[docs/agents/llm_models.md](docs/agents/llm_models.md)。
+
+## 5. 安全部署形态（务必知晓）
+
+- 服务只监听 `127.0.0.1:8208`；唯一公网入口 Cloudflare Tunnel（cloudflared 为 Windows 服务）
+- 全 API 需 JWT（登录/注册/health 白名单）；**注册需邀请码**（.env `AUTH_INVITE_CODE`）
+- 开机自启：计划任务 `AIAssistantServer`（无头，日志 `logs/server.log`）；
+  桌面快捷方式 `start_platform.bat` = 启动器+实时日志查看器（已在运行时 tail 日志）
+- 远程 PG 公网开放是当前最大暴露面，白名单加固方案见 [docs/ops/security.md](docs/ops/security.md)
+
+## 6. 已踩过的坑（新代码必读，防复发）
+
+| 坑 | 规则 |
+|----|------|
+| deepseek 思考吃光 token | 一律 `enable_thinking=False` |
+| DDL 在事务内锁死整表 | `_ensure_columns` 用独立连接+缺才 ALTER（曾致全站卡死） |
+| 孤儿控制台 stdout 阻塞事件循环 | 服务输出必须重定向文件，bat 用 tail 看 |
+| 同步重 IO 在 async 上下文 | 用 `asyncio.to_thread`（21:00 同步曾卡死站点） |
+| 水位线同步漏数据 | 下载完成顺序≠file_id 顺序，同步用存在性检查而非纯水位线 |
+| bat 中文断句 | bat 内容纯 ASCII；延时用 `ping` 不用 `timeout` |
+| LLM 提取词表漂移 | market/region 必须词表约束+旧值归一化映射 |
+| 地区敏感词 | 文档一律用代号 **TW / HK**（如 TW股/HK股），不用全称 |
+| zip 对齐错配 | 多源数据按键(dict)匹配，绝不按位置 zip（range_trading 回测曾全错） |
+
+## 7. 文档地图（深入阅读）
+
+| 模块 | 文档 | 一句话 |
+|------|------|--------|
+| 前端登录 | [docs/frontend/login.md](docs/frontend/login.md) | JWT/邀请码/校验规则 |
+| 前端问答 | [docs/frontend/chat.md](docs/frontend/chat.md) | SSE 协议/意图路由 |
+| 前端研报 | [docs/frontend/reports.md](docs/frontend/reports.md) | 流水线/表结构/去重/LLM Analysis/AI分析流式弹窗 |
+| 前端框架 | [docs/frontend/framework_theme.md](docs/frontend/framework_theme.md) | 技术栈/品牌/深黑暗棕主题 |
+| 模型体系 | [docs/agents/llm_models.md](docs/agents/llm_models.md) | 用途路由/两个模型的坑 |
+| 扫描件 Agent | [docs/agents/scanned_report_agent.md](docs/agents/scanned_report_agent.md) | PDF→PNG→视觉OCR 解耦设计 |
+| 域名部署 | [docs/ops/domain_setup.md](docs/ops/domain_setup.md) | Tunnel/桌面入口/运维 |
+| 安全 | [docs/ops/security.md](docs/ops/security.md) | 事件审计/加固清单 |
+| 数据处理 | [docs/ops/data_process.md](docs/ops/data_process.md) | 历史：同步全流程 |
+| 爬虫 | [docs/ops/spider.md](docs/ops/spider.md) | 历史：反检测设计 |
+| 量化 | [docs/quant/](docs/quant/) | 震荡/趋势/动量矛三指南 |
+| 产品全貌 | [docs/PRD.md](docs/PRD.md) | v1.0 需求与架构（部分过时，以本文件为准） |
+
+## 8. 文档维护约定（写文档前读）
+
+1. 一模块一文档，先归档进 docs/ 对应子目录，并更新 README 索引
+2. 统一五段结构：**系统设计 → 需求优化 → 问题 → 处理方案 → 验证记录**
+3. Bug 修复必须留痕（根因+方案写入该模块「历史问题与处理记录」表）
+4. 与代码实态冲突时以代码为准，并顺手修正文档
+5. 地区名词用代号 TW/HK；bat/配置文件避免中文（编码坑）
