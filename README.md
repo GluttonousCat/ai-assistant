@@ -1,128 +1,68 @@
-# ai-assistant
+# Alpha Finance Radar
 
-智能投研助手 —— 知识星球爬虫 + Tushare 数据分析 + Agent ChatBI。
+个人智能投研平台 —— Tushare 财务数据 × 知识星球研报 × Agent 分析，部署在家用 Windows 电脑，
+公网经 [app.alpharadar.link](https://app.alpharadar.link) 访问（Cloudflare Tunnel，无需公网 IP）。
 
 ## 功能
 
-- **知识星球爬虫**: 话题/评论/文件采集（反检测、增量爬取）
-- **Tushare 行情**: A股日线数据抓取入库（MySQL）
-- **K线技术分析**: ADX / POC / Wyckoff 信号
-- **Agent 对话**: LangGraph 驱动，意图识别 -> 路由 -> 工具执行
-- **四大 Skill**（开发中）: ChatBI 数据问答 / 公司基本面分析 / 研报解读 / K线技术分析
+- **用户系统**：JWT 登录注册（邀请码门槛），三级角色 —— 超级管理员（用户管理）/ 管理员（区间看板）/ 研究员
+- **Agent 问答**：自然语言 → 意图路由 → Text-to-SQL 财务查询 / 研报解读，SSE 流式打字机输出
+- **研报中心**：知识星球研报自动抓取入库，LLM 提取机构/标的/行业/地区/市场 + 评级与盈利预测，
+  支持扫描件 PDF（视觉 OCR）、去重合并、多市场筛选
+- **区间看板**：震荡区间 + 趋势 + 动量矛三系统全市场扫描（管理员可见），含信号跟踪与回测
+- **数据调度**：交易日 21:00 Tushare 行情+财报增量；每日 07:00/23:00 研报抓取（下载一个即分析入库）
 
-## 项目结构
+## 技术栈
+
+FastAPI (Python 3.12) · React 19 (Vite) · PostgreSQL · SQLite（爬虫本地）
+LLM：deepseek-v4-flash-0731（文本，关思考）+ qwen3.8-flash（视觉）—— 按用途路由，换模型只改 `config.yaml`
+
+## 目录
 
 ```
-ai-assistant/
-├── app.py              # FastAPI 入口
-├── config.yaml         # 非敏感配置
-├── .env                # 密钥（不纳入版本控制, 参考 .env.example）
-│
-├── agent/              # Agent 层（大脑）: state / graph / nodes
-├── skills/             # Skill 层（领域方法论）: chatbi / company / report / kline
-├── tools/              # Tool 层（原子能力）: zsxq 爬虫 / market 行情 / kline 指标
-├── llm/                # LLM 客户端封装
-├── storage/            # 数据层: sqlite(业务) + mysql(行情)
-├── api/                # API 层: router + schemas + ws
-├── core/               # 基础设施: config / logger / lifespan
-├── utils/              # 通用工具: paths / helpers
-└── cli/                # 交互式命令行
+agent/      LangGraph 意图路由图          skills/     fin_query / report / scanned_report
+api/        路由 + JWT 鉴权中间件          tools/      爬虫 / 行情同步 / SQL guard / 视觉OCR
+core/       配置 / 安全 / 双调度器          storage/    PG 连接池 + 全部 DDL
+web/        React 前端（登录/问答/研报/看板） range_trading/  量化扫描子系统
 ```
 
-分层调用关系: `api -> agent -> skills -> tools -> storage`
+分层调用：`api → agent → skills → tools → storage`。新 Agent 请先读 [AGENTS.md](AGENTS.md)。
 
 ## 快速开始
 
-### 1. 安装依赖
-
 ```bash
-pip install -e .
-# 或开发模式
-pip install -e ".[dev]"
+pip install -e .            # 安装依赖
+cd web && npm install && npm run build   # 构建前端
+
+cp .env.example .env        # 配置密钥（PG / Tushare / LLM / 爬虫 Cookie / 邀请码）
+
+python -m uvicorn app:app --host 127.0.0.1 --port 8208   # 启动
 ```
 
-### 2. 配置密钥
+数据回填（首次）：
 
 ```bash
-cp .env.example .env
-# 编辑 .env, 填入 OPENAI_API_KEY / TUSHARE_TOKEN / MYSQL_PASSWORD / ZSXQ_COOKIE
+python -m tools.market.sync_tushare      # 日线行情 2000-至今
+python -m tools.market.sync_financial    # 财务三表 + 指标
 ```
 
-### 3. 启动服务
+日常运行无需干预：开机计划任务自启（`start_platform.bat` 为手动启动 + 实时日志入口），
+首次启动用户表为空时自动创建种子管理员（见 `AUTH_ADMIN_USER`）。
 
-```bash
-uvicorn app:app --reload --port 8208
-```
+## 文档
 
-### 4. 交互式 CLI（知识星球爬虫）
+| 入口 | 内容 |
+|------|------|
+| [AGENTS.md](AGENTS.md) | Agent / 新成员第一入口（全貌 + 踩坑清单） |
+| [docs/README.md](docs/README.md) | 模块文档索引（登录 / 问答 / 研报 / 模型 / 部署 / 安全 / 量化） |
 
-```bash
-python -m cli.interactive
-```
+## 部署形态
 
-### 5. Tushare → PostgreSQL 全量日K回填
-
-```bash
-# 全量回填 daily / adj_factor / daily_basic (2000-至今)
-python -m tools.market.sync_tushare
-
-# 指定区间 / 指定表 (支持断点续传, 可重复执行)
-python -m tools.market.sync_tushare --start 20200101 --end 20231231
-python -m tools.market.sync_tushare --tables daily,adj_factor
-```
-
-要求: Tushare token 积分 >= 2000 (daily 200次/分钟, adj_factor/daily_basic 200次/分钟)
-
-### 6. Tushare → PostgreSQL 财务数据回填 (fin schema)
-
-```bash
-# 全量回填 income / balancesheet / cashflow / fina_indicator (全部股票)
-python -m tools.market.sync_financial
-
-# 仅回填利润表 / 限制前100只测试
-python -m tools.market.sync_financial --tables income
-python -m tools.market.sync_financial --limit 100
-```
-
-财务接口 (income/balancesheet/cashflow/fina_indicator) 需 2000 积分, 按股票逐只获取。
-数据按报告期入库 (report_type=1 合并报表), 支持断点续传 (按 ts_code)。
-
-### 6. PG 行情数据仓库 (stock schema)
-
-| 表 | 说明 | 数据源 |
-|----|------|--------|
-| stock_basic   | 股票池 (主板/创业板/科创板, 剔除北交/B股/ST) | stock_basic |
-| trade_calendar | 交易日历 | trade_cal |
-| daily         | 日K行情 (OHLCV + 涨跌幅) | daily |
-| adj_factor    | 复权因子 | adj_factor |
-| daily_basic   | 每日估值 (PE/PB/换手/市值) | daily_basic |
-| sync_meta     | 同步水位线 (断点续传) | - |
-
-## 主要接口
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | /crawl/latest | 爬取最新话题 |
-| POST | /crawl/historical | 爬取历史数据 |
-| POST | /crawl/incremental | 增量爬取 |
-| POST | /files/collect | 收集文件列表 |
-| POST | /files/download | 下载文件（每次1个） |
-| GET  | /stats/{group_id} | 数据统计 |
-| POST/GET | /accounts | 账号管理 |
-| WS   | /ws/{session_id} | Agent 实时对话 |
-| POST | /agent/chat | Agent 对话（阶段二接入） |
-
-## 开发路线
-
-- [x] **阶段一**: 结构重构（迁移/精简/修bug/密钥外置）
-- [ ] **阶段二**: Agent 骨架（LLM 意图识别 + Skill 注册 + 主图路由）
-- [ ] **阶段三**: ChatBI（Text-to-SQL 数据问答）
-- [ ] **阶段四**: K线分析（日K已有, 接入分钟K）
-- [ ] **阶段五**: Company / Report 分析
+服务仅监听 `127.0.0.1:8208`，唯一公网入口为 Cloudflare Tunnel；所有 API 需 JWT；
+详细运维（域名 / 桌面入口 / 日志查看 / 安全加固）见 [docs/ops/](docs/ops/)。
 
 ## 知识星球使用说明
 
-1. 浏览器登录 wx.zsxq.com, 复制 Cookie
-2. 写入 `.env` 的 `ZSXQ_COOKIE`, 或通过 `/accounts` 接口添加
-3. 群组 ID 在星球页面 URL 中获取
-4. 爬取频率已内置反检测延迟, 请勿调低
+1. 浏览器登录 wx.zsxq.com，复制 Cookie 写入 `.env` 的 `ZSXQ_COOKIE`
+2. 群组 ID 在星球页面 URL 中获取，写入 `ZSXQ_GROUP_ID`
+3. 爬取频率已内置反检测延迟，请勿调低
