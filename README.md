@@ -1,7 +1,6 @@
 # Alpha Finance Radar
 
-个人智能投研平台 —— Tushare 财务数据 × 知识星球研报 × Agent 分析，部署在家用 Windows 电脑，
-公网经 [app.alpharadar.link](https://app.alpharadar.link) 访问（Cloudflare Tunnel，无需公网 IP）。
+个人智能投研平台 —— Tushare 财务数据 × 知识星球研报 × Agent 分析。
 
 ## 功能
 
@@ -11,11 +10,6 @@
   支持扫描件 PDF（视觉 OCR）、去重合并、多市场筛选
 - **区间看板**：震荡区间 + 趋势 + 动量矛三系统全市场扫描（管理员可见），含信号跟踪与回测
 - **数据调度**：交易日 21:00 Tushare 行情+财报增量；每日 07:00/23:00 研报抓取（下载一个即分析入库）
-
-## 技术栈
-
-FastAPI (Python 3.12) · React 19 (Vite) · PostgreSQL · SQLite（爬虫本地）
-LLM：deepseek-v4-flash-0731（文本，关思考）+ qwen3.8-flash（视觉）—— 按用途路由，换模型只改 `config.yaml`
 
 ## 目录
 
@@ -46,20 +40,14 @@ python -m tools.market.sync_tushare      # 日线行情 2000-至今
 python -m tools.market.sync_financial    # 财务三表 + 指标
 ```
 
-日常运行无需干预：开机计划任务自启（`start_platform.bat` 为手动启动 + 实时日志入口），
-首次启动用户表为空时自动创建种子管理员（见 `AUTH_ADMIN_USER`）。
+首次启动用户表为空时自动创建种子管理员（见 `.env` 的 `AUTH_ADMIN_USER`）。
 
 ## 文档
 
 | 入口 | 内容 |
 |------|------|
 | [AGENTS.md](AGENTS.md) | Agent / 新成员第一入口（全貌 + 踩坑清单） |
-| [docs/README.md](docs/README.md) | 模块文档索引（登录 / 问答 / 研报 / 模型 / 部署 / 安全 / 量化） |
-
-## 部署形态
-
-服务仅监听 `127.0.0.1:8208`，唯一公网入口为 Cloudflare Tunnel；所有 API 需 JWT；
-详细运维（域名 / 桌面入口 / 日志查看 / 安全加固）见 [docs/ops/](docs/ops/)。
+| [docs/README.md](docs/README.md) | 模块文档索引（登录 / 问答 / 研报 / 模型 / 安全 / 量化） |
 
 ## 知识星球使用说明
 

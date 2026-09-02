@@ -1,7 +1,7 @@
-# 域名配置文档：alpharadar.link
+# 域名配置文档（内部运维，地址已脱敏）
 
 > 智能投研助手平台公网访问方案（Cloudflare Tunnel）
-> 平台本地服务 → 公网域名 `https://app.alpharadar.link`
+> 平台本地服务 → 公网域名 `<your-domain>`
 > 文档更新：2026-08-30
 
 ## 一、方案概述
@@ -35,9 +35,9 @@
 
 | 项 | 值 |
 |----|----|
-| 主域名 | `alpharadar.link`（Cloudflare Registrar 注册） |
-| 访问地址 | **https://app.alpharadar.link** |
-| Public Hostname | Subdomain `app` + Domain `alpharadar.link` |
+| 主域名 | `<your-domain>`（Cloudflare Registrar 注册，真实地址见本地 .env/hosts） |
+| 访问地址 | **<your-domain>** |
+| Public Hostname | Subdomain `app` + Domain `<your-domain>` |
 | Service | `HTTP` → `localhost:8208` |
 | SSL | Cloudflare 自动签发（Edge Certificates，全额 TLS） |
 
@@ -70,7 +70,7 @@ curl http://127.0.0.1:20241/ready
 curl http://127.0.0.1:8208/health
 ```
 
-公网验证：浏览器访问 `https://app.alpharadar.link/health` 返回 `{"status":"ok",...}`。
+公网验证：浏览器访问 `<your-domain>/health` 返回 `{"status":"ok",...}`。
 
 ### 服务管理
 
@@ -119,7 +119,7 @@ Start-ScheduledTask AIAssistantServer   # 手动拉起后端（开机登录后�
 1. 登录后右上角无入口的话，直接调 API 改密：
    ```powershell
    # 登录拿 token 后修改
-   curl -X POST https://app.alpharadar.link/api/auth/change-password `
+   curl -X POST <your-domain>/api/auth/change-password `
      -H "Authorization: Bearer <token>" -H "Content-Type: application/json" `
      -d '{"old_password":"admin123","new_password":"新的强密码"}'
    ```
@@ -127,7 +127,7 @@ Start-ScheduledTask AIAssistantServer   # 手动拉起后端（开机登录后�
 
 ### 进阶（可选）：Cloudflare Access 双因素门禁
 
-在 Zero Trust → Access → Applications 为 `app.alpharadar.link` 添加 Self-hosted 应用，
+在 Zero Trust → Access → Applications 为 `<your-domain>` 添加 Self-hosted 应用，
 策略选 Email OTP（你的邮箱）。效果：访问域名前先过 Cloudflare 的邮箱验证码，
 登录页完全不对外暴露，等于免费的双因素。
 
@@ -144,7 +144,7 @@ Start-ScheduledTask AIAssistantServer   # 手动拉起后端（开机登录后�
    ```
    装完即 Windows 服务，随开机自启
 4. **配路由**：控制台该隧道 → Public Hostname → Add：
-   Subdomain `app` / Domain `alpharadar.link` / Type `HTTP` / URL `localhost:8208`
+   Subdomain `app` / Domain `<your-domain>` / Type `HTTP` / URL `localhost:8208`
 5. **后端加固**：后端只绑回环 `--host 127.0.0.1`（本仓库的 `AIAssistantServer` 计划任务已是此配置）
 6. 验证：`https://app.<域名>/health` 返回 ok
 
@@ -166,7 +166,7 @@ Start-ScheduledTask AIAssistantServer   # 手动拉起后端（开机登录后�
 
 - ✅ 隧道在线：`/ready` 返回 `readyConnections: 4`
 - ✅ 本地服务：`127.0.0.1:8208/health` → 200
-- ✅ 公网访问：`https://app.alpharadar.link/health` → `{"status":"ok"}`（HTTPS 生效）
+- ✅ 公网访问：`<your-domain>/health` → `{"status":"ok"}`（HTTPS 生效）
 - ✅ 回环加固生效：局域网 IP 访问 8208 不可达，仅 Tunnel 可进
 - ✅ 公网登录：`POST /api/auth/login` 拿到 JWT
 - ✅ 公网鉴权：带 token 的 `/api/reports` → 200；无效 token / 无 token → 401

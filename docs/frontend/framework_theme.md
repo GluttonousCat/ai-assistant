@@ -44,7 +44,7 @@ hash 路由（`window.location.hash`）：`#chat`（默认）→ Agent 对话；
 | 侧边栏品牌名 / 副名 | Alpha Finance Radar / Insight Engine |
 | 问答页标题 | Alpha Radar · 投研 Agent |
 
-命名逻辑：**Alpha**（超额收益）+ **Finance**（财务/金融域）+ **Radar**（雷达，呼应域名 alpharadar.link 的扫描/发现意象）；副名 Insight Engine 表「洞察引擎」。改文案只需 grep 这几处字符串。
+命名逻辑：**Alpha**（超额收益）+ **Finance**（财务/金融域）+ **Radar**（雷达，呼应 Radar 扫描/发现意象）；副名 Insight Engine 表「洞察引擎」。改文案只需 grep 这几处字符串。
 
 ## 三、视觉主题（本轮需求 3）：深黑 + 暗棕
 
