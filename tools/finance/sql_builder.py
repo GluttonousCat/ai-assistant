@@ -85,7 +85,8 @@ LIMIT 30"""
 
     period_filter = _financial_period_filter(time_phrase)
 
-    return f"""SELECT i.ts_code, s.name AS stock_name, i.end_date, {cols}
+    # 不 SELECT ts_code: 前端表格无需展示内部代码, 名称列已可定位标的
+    return f"""SELECT s.name AS stock_name, i.end_date, {cols}
 FROM fin.income i
 JOIN stock.stock_basic s ON i.ts_code = s.ts_code
 LEFT JOIN fin.fina_indicator f
@@ -96,7 +97,7 @@ LEFT JOIN fin.cashflow c
     ON i.ts_code = c.ts_code AND i.end_date = c.end_date AND i.report_type = c.report_type
 WHERE i.ts_code = '{ts_code}' AND i.report_type = '1'{period_filter}
 ORDER BY i.end_date DESC
-LIMIT 12"""
+LIMIT 48"""
 
 
 def build_compare_query(codes: List[Tuple[str, str]], field: str, prefix: str,

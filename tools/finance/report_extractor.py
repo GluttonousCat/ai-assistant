@@ -91,6 +91,76 @@ class ReportExtractor:
             logger.error("pdf 提取库均不可用 (fitz/pdfplumber/pypdf)")
             return ""
 
+    # ---------- 图片型 PDF: 视觉模型 OCR ----------
+    def is_image_pdf(self, path: str, max_pages_check: int = 3) -> bool:
+        """判断是否为图片型 PDF (前几页零文本层 + 每页有大图)"""
+        try:
+            import fitz
+        except ImportError:
+            return False
+        try:
+            with fitz.open(path) as doc:
+                n = min(len(doc), max_pages_check)
+                if n == 0:
+                    return False
+                for i in range(n):
+                    page = doc[i]
+                    if page.get_text().strip():
+                        return False
+                    if not page.get_images():
+                        return False
+                return True
+        except Exception:
+            return False
+
+    def extract_pdf_visual(self, path: str, max_pages: int = 10,
+                           dpi: int = 130) -> Optional[str]:
+        """
+        图片型 PDF 识别: 页面渲染为 PNG -> 视觉模型逐页提取文字.
+        仅在普通文本提取为空且 is_image_pdf 为真时调用 (成本高).
+        返回拼接文本; 无视觉模型配置或失败返回 None.
+        """
+        try:
+            import fitz
+            import base64
+        except ImportError:
+            logger.warning("视觉提取需要 PyMuPDF (fitz)")
+            return None
+
+        from core.config import get_config
+        if not get_config().openai_api_key:
+            return None
+
+        from llm.client import get_vision_llm
+        llm = get_vision_llm()
+
+        pages_text: list = []
+        with fitz.open(path) as doc:
+            n = min(len(doc), max_pages)
+            for i in range(n):
+                pix = doc[i].get_pixmap(dpi=dpi)
+                b64 = base64.b64encode(pix.tobytes("png")).decode("ascii")
+                try:
+                    text = llm.invoke([
+                        {"role": "system", "content":
+                            "你是 OCR 引擎。逐字提取图片中的全部文字内容 (研报正文、表格数据), "
+                            "保持原始顺序, 不要总结、不要评论、不要添加解释。表格转为可读文本行。"},
+                        {"role": "user", "content": [
+                            {"type": "image_url", "image_url": {
+                                "url": f"data:image/png;base64,{b64}"}},
+                            {"type": "text", "text": "提取这页的全部文字。"},
+                        ]},
+                    ])
+                    if text and text.strip():
+                        pages_text.append(text.strip())
+                except Exception as e:
+                    logger.warning("视觉提取第 %d 页失败: %s", i + 1, e)
+
+        if not pages_text:
+            return None
+        result = "\n".join(pages_text)
+        return result if len(result) > 50 else None
+
     def _extract_docx(self, path: str) -> str:
         # .doc (老格式) 为二进制, zipfile 解不出时抛出, 由调用方标记失败
         try:

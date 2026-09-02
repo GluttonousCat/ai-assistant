@@ -200,15 +200,15 @@ WHERE d.ts_code = '{ts_code}'
 ORDER BY d.trade_date DESC
 LIMIT 8"""
 
-    # 财务类: income + fina_indicator (合并报表)
-    return f"""SELECT i.ts_code, s.name AS stock_name, i.end_date, {field}
+    # 财务类: income + fina_indicator (合并报表); 不带 ts_code 内部代码列
+    return f"""SELECT s.name AS stock_name, i.end_date, {field}
 FROM fin.income i
 JOIN stock.stock_basic s ON i.ts_code = s.ts_code
 LEFT JOIN fin.fina_indicator f
     ON i.ts_code = f.ts_code AND i.end_date = f.end_date AND i.report_type = f.report_type
 WHERE i.ts_code = '{ts_code}' AND i.report_type = '1'
 ORDER BY i.end_date DESC
-LIMIT 8"""
+LIMIT 48"""
 
 
 def _match_metric_field(metric: str) -> tuple[Optional[str], str]:

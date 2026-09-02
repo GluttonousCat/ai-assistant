@@ -18,6 +18,7 @@ from agent.state import AgentState
 from agent.intent import LayeredIntentClassifier, get_intent_classifier
 from skills.base import SkillContext
 from skills.fin_query.skill import FinQuerySkill
+from skills.report.skill import ReportSkill
 
 
 def parse_financial_intent_node(state: AgentState) -> AgentState:
@@ -33,11 +34,13 @@ def parse_financial_intent_node(state: AgentState) -> AgentState:
     return state
 
 
-def route_by_fin_intent(state: AgentState) -> Literal["execute_query", "respond"]:
-    """路由: query/compare 走 SQL 链路, 其他当前返回占位"""
+def route_by_fin_intent(state: AgentState) -> Literal["execute_query", "report", "respond"]:
+    """路由: query/compare 走 SQL 链路, report 走研报分析, 其他返回占位"""
     intent = (state.parsed_intent or {}).get("type", "unknown")
     if intent in ("query", "compare"):
         return "execute_query"
+    if intent == "report":
+        return "report"
     return "respond"
 
 
@@ -56,6 +59,23 @@ def execute_query_node(state: AgentState) -> AgentState:
     return state
 
 
+def report_node(state: AgentState) -> AgentState:
+    """研报分析节点 (ReportSkill: 综合解读/问答/提取由输入形态决定)"""
+    skill = ReportSkill()
+    params = dict((state.parsed_intent or {}).get("slots") or {})
+    ctx = SkillContext(user_input=state.user_input, params=params)
+    ctx = skill(ctx)
+
+    if ctx.error:
+        state.response = f"❌ {ctx.error}"
+        return state
+
+    result = ctx.result or {}
+    state.fin_result = result if isinstance(result, dict) else {"summary": result}
+    state.response = result.get("summary", "") if isinstance(result, dict) else str(result)
+    return state
+
+
 def respond_node(state: AgentState) -> AgentState:
     """最终响应 (其他意图占位/兜底)"""
     intent = (state.parsed_intent or {}).get("type", "unknown")
@@ -69,7 +89,7 @@ def respond_node(state: AgentState) -> AgentState:
         elif intent == "report":
             state.response = "报告生成功能开发中 (M5)"
         elif intent == "unknown":
-            state.response = "无法识别意图。支持的自然语言查询示例：\n- 查询平安银行的营收\n- 看看贵州茅台的毛利率\n- 查询宁德时代的净利润"
+            state.response = "无法识别意图。支持的自然语言查询示例：\n- 查询平安银行的营收\n- 看看贵州茅台的毛利率\n- 解读贵州茅台的研报"
     return state
 
 
@@ -83,6 +103,7 @@ def create_financial_agent():
 
     workflow.add_node("parse_intent", parse_financial_intent_node)
     workflow.add_node("execute_query", execute_query_node)
+    workflow.add_node("report", report_node)
     workflow.add_node("respond", respond_node)
 
     workflow.set_entry_point("parse_intent")
@@ -90,10 +111,11 @@ def create_financial_agent():
     workflow.add_conditional_edges(
         "parse_intent",
         route_by_fin_intent,
-        {"execute_query": "execute_query", "respond": "respond"},
+        {"execute_query": "execute_query", "report": "report", "respond": "respond"},
     )
 
     workflow.add_edge("execute_query", "respond")
+    workflow.add_edge("report", "respond")
     workflow.add_edge("respond", END)
 
     return workflow.compile()

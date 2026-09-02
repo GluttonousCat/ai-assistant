@@ -7,6 +7,10 @@ from typing import Dict, List, Optional
 
 from skills.base import BaseSkill, SkillContext
 
+from core.logger import get_logger
+
+logger = get_logger(__name__)
+
 
 class SkillRegistry:
     """Skill 注册表"""
@@ -62,7 +66,21 @@ def register_builtin_skills() -> SkillRegistry:
         from skills.fin_query.skill import FinQuerySkill
         registry.register(FinQuerySkill())
     except Exception as e:
-        pass  # 依赖缺失时静默
+        logger.warning(f"FinQuerySkill 注册失败: {e}")
+
+    # M4: 研报分析 (知识星球研报解读)
+    try:
+        from skills.report.skill import ReportSkill
+        registry.register(ReportSkill())
+    except Exception as e:
+        logger.warning(f"ReportSkill 注册失败: {e}")
+
+    # M4+: 扫描件研报分析 (图片型 PDF 视觉识别)
+    try:
+        from skills.scanned_report.skill import ScannedReportSkill
+        registry.register(ScannedReportSkill())
+    except Exception as e:
+        logger.warning(f"ScannedReportSkill 注册失败: {e}")
 
     return registry
 
