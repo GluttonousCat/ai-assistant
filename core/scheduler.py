@@ -31,6 +31,14 @@ SYNC_HOUR = int(_cfg().get("schedule.sync_hour", 21))
 SYNC_MINUTE = int(_cfg().get("schedule.sync_minute", 0))
 # 增量回溯天数 (交易日)
 BACKFILL_DAYS = 5
+# 财报公告回溯天数 (日历天; 覆盖周末/节假日公告堆积)
+FIN_BACKFILL_DAYS = 10
+
+
+def _run_financial_incremental(days: int) -> dict:
+    """线程池入口: 财报增量同步 (阻塞操作)"""
+    from tools.market.sync_financial import run_financial_incremental
+    return run_financial_incremental(days=days)
 
 
 class DailySyncScheduler:
@@ -56,7 +64,7 @@ class DailySyncScheduler:
         return max(0.0, (target - datetime.now()).total_seconds())
 
     async def _run_sync(self) -> dict:
-        """执行一次增量同步"""
+        """执行一次增量同步 (行情 + 财报公告)"""
         logger.info("开始每日增量同步")
         from tools.market.sync_tushare import TusharePgSyncer
 
@@ -71,14 +79,25 @@ class DailySyncScheduler:
 
         syncer = TusharePgSyncer()
         try:
-            # 单次 run 多表 (内部复用连接/白名单/日历)
-            result = syncer.run(
-                start=start, end=end,
-                tables=["daily", "daily_basic", "adj_factor"],
+            # 单次 run 多表 (内部复用连接/白名单/日历); 阻塞 IO 放线程池
+            result = await asyncio.to_thread(
+                syncer.run, start, end,
+                ["daily", "daily_basic", "adj_factor"],
             )
         except Exception as e:
             logger.error(f"增量同步异常: {e}")
             result = {"error": str(e)}
+
+        # 财报增量: 拉取最近 FIN_BACKFILL_DAYS 天公告的财报 (放到线程池, 不阻塞事件循环)
+        try:
+            fin_result = await asyncio.to_thread(
+                _run_financial_incremental, FIN_BACKFILL_DAYS)
+            if isinstance(result, dict):
+                result["financial"] = fin_result
+        except Exception as e:
+            logger.error(f"财报增量同步异常: {e}")
+            if isinstance(result, dict):
+                result["financial"] = {"error": str(e)}
 
         self.last_run = datetime.now()
         self.last_result = result

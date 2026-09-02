@@ -56,18 +56,44 @@ class FilesDatabase(BaseDatabase):
         ''', (file_id, topic_id, name, size, file_hash, download_count, create_time))
 
     def get_pending_files(self, limit: int = 1, order_by: str = 'create_time DESC') -> List[tuple]:
-        """获取待下载文件"""
+        """获取待下载文件 (排除音频等非研报文件)"""
         self.cursor.execute(f'''
             SELECT file_id, name, size, download_count, create_time
             FROM files
             WHERE download_status = 'pending'
+              AND lower(name) NOT LIKE '%.mp3'
+              AND lower(name) NOT LIKE '%.m4a'
+              AND lower(name) NOT LIKE '%.wav'
+              AND lower(name) NOT LIKE '%.aac'
+              AND lower(name) NOT LIKE '%.flac'
             ORDER BY {order_by}
+            LIMIT ?
+        ''', (limit,))
+        return self.cursor.fetchall()
+
+    def get_retry_files(self, limit: int = 3) -> List[tuple]:
+        """获取失败待重试文件 (最近失败优先; 失败次数<=5 防无限重试)"""
+        self.cursor.execute('''
+            SELECT file_id, name, size, download_count, create_time
+            FROM files
+            WHERE download_status = 'failed' AND fail_count <= 5
+              AND lower(name) NOT LIKE '%.mp3'
+            ORDER BY download_time DESC
             LIMIT ?
         ''', (limit,))
         return self.cursor.fetchall()
 
     def update_status(self, file_id: int, status: str, local_path: str = None):
         """更新下载状态"""
+        if status == 'failed':
+            self.cursor.execute('''
+                UPDATE files SET download_status='failed',
+                    fail_count = COALESCE(fail_count, 0) + 1,
+                    download_time = CURRENT_TIMESTAMP
+                WHERE file_id = ?
+            ''', (file_id,))
+            self.conn.commit()
+            return
         if local_path:
             self.cursor.execute('''
                 UPDATE files

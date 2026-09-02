@@ -29,6 +29,69 @@ from storage.sqlite.files import FilesDatabase
 from utils.paths import PathManager
 
 
+def _process_one_report(group_id: str) -> str:
+    """
+    单篇研报入库流水线: PG 同步(增量, 拿到新入库 report_id)
+      → 新研报逐篇 [LLM 元数据 + 深度提取(评级/盈利预测/tags)]
+      → 去重合并.
+    在每个文件下载完成后立即调用, 不等整批结束 —— 深度提取跟上下载节奏,
+    每篇处理完即 analysis_status='done', 前端立即可用.
+    (图片型 PDF 由深度提取转后台 OCR, OCR 完成后自动接续提取, 见 ReportSkill)
+    返回 'ok' / 'noop' / 'error: ...' / 'ok+extracted N'
+    """
+    new_ids: list = []
+    try:
+        from scripts.sync_zxsq_to_pg import ZSXQ2PGSync
+        sync = ZSXQ2PGSync(str(group_id))
+        new_ids = sync.run() or []  # 增量水位线: 只处理新下载的文件, 秒级
+    except Exception as e:
+        return f"error: pg_sync {e}"
+
+    extracted = 0
+    try:
+        if new_ids:
+            # 只对刚入库的 PDF/docx 做单篇 LLM 分析 (精准定位, 不受旧积压影响);
+            # 话题文本条目 (txt) 由 merge 归并进同话题 PDF, 不单独消耗 LLM
+            from storage.pg import PgClient
+            with PgClient() as pg:
+                rows = pg.fetch_all(
+                    "SELECT report_id, file_name FROM fin.report_meta "
+                    "WHERE report_id = ANY(%s)", (list(new_ids),))
+            docs = [r for r in rows if (r.get("file_name") or "").lower()
+                    .endswith((".pdf", ".docx", ".doc"))]
+            if docs:
+                from skills.base import SkillContext
+                from skills.report.skill import ReportSkill
+                from tools.finance.report_meta_analysis import analyze_report_meta
+                for r in docs:
+                    rid = r["report_id"]
+                    try:
+                        analyze_report_meta(rid)  # 元数据秒级 (仅文件名)
+                        ctx = ReportSkill()(SkillContext(user_input="", params={
+                            "mode": "extract", "report_id": rid, "limit": 1}))
+                        if ctx.error:
+                            print(f"⚠️ 研报 #{rid} 深度提取失败: {ctx.error}")
+                        else:
+                            extracted += 1
+                    except Exception as e:
+                        print(f"⚠️ 研报 #{rid} 单篇分析失败: {e}")
+        else:
+            # 无新文件: 顺手清理积压元数据 (最旧优先)
+            from tools.finance.report_meta_analysis import analyze_pending
+            analyze_pending(limit=5)
+    except Exception as e:
+        return f"error: analysis ({e})"
+
+    try:
+        from scripts.merge_report_duplicates import merge
+        merge()
+    except Exception as e:
+        return f"error: merge {e}"
+    if not new_ids:
+        return "noop"
+    return "ok" + (f"+extracted {extracted}" if extracted else "")
+
+
 def run_once(group_id: str, max_fetch: int = 10, max_pages: int = 10,
              download_only_files: bool = False, crawl_topics: bool = True) -> dict:
     """执行一次抓取, 返回统计"""
@@ -57,20 +120,51 @@ def run_once(group_id: str, max_fetch: int = 10, max_pages: int = 10,
         collect = dl.collect_files(max_pages=max_pages)
         result["collect"] = collect
 
-    # 2. 下载待下载文件 (限制数量, 避免单次运行过长)
+    # 2. 下载待下载文件 (逐个: 下载一个 → 立即分析入库; 长休眠与分析并行覆盖)
     before_stats = dl.db.get_stats()
     pending_before = before_stats.get("pending", 0)
     result["pending_before"] = pending_before
 
+    processed = 0
     if pending_before > 0 and max_fetch > 0:
-        dl.download_pending(max_files=max_fetch)
+        # 关闭下载器内置的"每文件后长休眠", 由本循环控制节奏:
+        # 下载完立即入库分析, 分析耗时被长休眠自然覆盖
+        dl.long_sleep_min = 60
+        dl.long_sleep_max = 120
+
+        n_done = 0
+        while n_done < max_fetch:
+            # 先重试此前失败的任务 (每轮最多 3 个, fail_count<=5), 再下新文件
+            retried = 0
+            try:
+                for row in dl.db.get_retry_files(limit=3):
+                    if dl.is_stopped():
+                        break
+                    file_id, name, size, download_count, create_time = row
+                    dl.db.update_status(file_id, 'pending')
+                    retried += 1
+                if retried:
+                    print(f"🔁 重置 {retried} 个失败任务重试")
+            except Exception as e:
+                print(f"⚠️ 重试重置失败: {e}")
+
+            # 逐个下载 (download_pending 内部会按 pending 状态取)
+            stats = dl.download_pending(max_files=1)
+            if stats.get("total", 0) == 0:
+                break
+            n_done += 1
+            # 立即处理刚下载的文件
+            status = _process_one_report(group_id)
+            processed += 1
+            print(f"🔬 已入库分析 {processed} 篇 ({status})")
 
     after_stats = dl.db.get_stats()
     result["download"] = after_stats
+    result["processed_inline"] = processed
 
     dl.close()
 
-    # 3. 同步到 PG 研报库
+    # 3. 收尾: 兜底同步 + 深度提取 (拿到本轮漏网/去重后的研报)
     try:
         from scripts.sync_zxsq_to_pg import ZSXQ2PGSync
         sync = ZSXQ2PGSync(str(group_id))

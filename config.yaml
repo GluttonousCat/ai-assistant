@@ -9,9 +9,24 @@ app:
   host: 0.0.0.0
   port: 8208
 
-# LLM 默认参数 (api_key 从 .env 的 OPENAI_API_KEY 读取)
+# LLM 多模型路由
+# 约定: 文本模型统一 deepseek-v4-flash-0731; 多模态(视觉)统一 qwen3.8-flash。
+# 各环节按"用途"取模型; 未配置的用途回落 default。后续分流只需改这里, 不动代码。
+# 每个用途可单独覆盖 model / api_key / base_url (或环境变量 LLM_<用途>_API_KEY / LLM_<用途>_BASE_URL)。
 llm:
-  model: gpt-4o
+  models:
+    default:
+      model: deepseek-v4-flash-0731   # 文本兜底 (与 .env LLM_MODEL 一致, 兼容其覆盖)
+    agent:                        # Skill/Agent 推理 (意图识别 L2 / SQL 生成 / 研报解读)
+      model: deepseek-v4-flash-0731
+    extract:                      # 研报结构化提取 (文件名元数据 / 长文本 JSON)
+      model: deepseek-v4-flash-0731
+    analysis:                     # 轻量元数据分析 (LLM Analysis)
+      model: deepseek-v4-flash-0731
+    vision:                       # 多模态: 扫描件 PDF 逐页识别 / 图片理解
+      model: qwen3.8-flash        # deepseek 不接收图片输入, 视觉用途必须走 qwen 多模态
+    embedding:                    # 向量 (预留)
+      model: text-embedding-v3
   temperature: 0.7
   max_tokens: 4096
   timeout: 60
@@ -22,7 +37,7 @@ zsxq:
   crawl_interval_max: 5.0     # 爬取最大间隔(秒)
   long_delay_interval: 15     # 每N页触发一次长休眠
   download_min_delay: 60      # 文件下载最小间隔(秒)
-  download_max_delay: 180     # 文件下载最大间隔(秒)
+  download_max_delay: 120     # 文件下载最大间隔(秒)
 
 # Tushare 数据抓取参数
 tushare:
@@ -34,6 +49,11 @@ schedule:
   sync_hour: 21               # 每交易日 21:00 自动增量回填 (Tushare 15-16点入库当日)
   sync_minute: 0
   enabled: true               # false 则关闭调度器
+
+# 知识星球研报抓取调度 (每天两轮: 爬话题+文件 -> 同步PG -> LLM提取)
+zsxq_schedule:
+  enabled: true
+  run_hours: [7, 23]          # 07:00 覆盖前一天晚间内容(开机自启后自动补跑), 23:00 覆盖当天
 
 # 日志
 logging:

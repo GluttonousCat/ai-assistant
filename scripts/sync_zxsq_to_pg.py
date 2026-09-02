@@ -56,25 +56,33 @@ class ZSXQ2PGSync:
         self.extractor = get_extractor()
         self.db = TopicsDatabase(self.db_path)
         self.files_db = FilesDatabase(self.files_db_path) if os.path.exists(self.files_db_path) else None
+        # 本次同步新入库的 report_id (run() 返回给下载流水线做单篇处理)
+        self._new_ids: list = []
 
     # ---------- 同步主入口 ----------
-    def run(self):
+    def run(self) -> list:
+        """
+        增量同步 sqlite -> PG. 返回本次新入库的 report_id 列表
+        (供下载流水线对刚入库的研报立即做单篇 LLM 分析).
+        """
         if not os.path.exists(self.db_path) and self.files_db is None:
             print(f"❌ 话题库/文件库均不存在: {self.db_path}")
             print("   请先运行爬虫: python -m cli.interactive 或 API /crawl/*")
-            return
+            return []
 
         # 部署 PG 表
         with PgClient() as pg:
             init_report_schema(pg)
             init_report_views(pg)
 
+        self._new_ids = []
         if os.path.exists(self.db_path):
             self._sync_topics()
             self._sync_files()
         if self.files_db is not None:
             self._sync_group_files()
         self._print_summary()
+        return self._new_ids
 
     # ---------- 话题文本同步 ----------
     def _sync_topics(self):
@@ -150,12 +158,13 @@ class ZSXQ2PGSync:
                 if not content:
                     status = "failed"
 
-                pg.execute(
+                inserted = pg.fetch_all(
                     f"""INSERT INTO {T_REPORT_META}
                         (topic_id, file_id, title, file_name, file_path, file_size,
                          content_text, content_chars, source, extraction_status,
                          publish_date)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'zsxq', %s, %s)""",
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'zsxq', %s, %s)
+                        RETURNING report_id""",
                     (
                         row.get("topic_id"),
                         file_id,
@@ -169,10 +178,31 @@ class ZSXQ2PGSync:
                         self._parse_date(row.get("create_time")),
                     ),
                 )
+                if inserted:
+                    self._new_ids.append(inserted[0]["report_id"])
                 total += 1
 
             self._set_sync_marker(pg, "last_file_id", value_int=max_file_id)
             print(f"📎 附件已同步 (本批次 {total} 个)")
+
+            # 回填: 先同步时文件未下载 (pending), 现在文件已到 -> 提取正文更新
+            backfilled = 0
+            pendings = pg.fetch_all(
+                f"SELECT report_id, file_path FROM {T_REPORT_META} "
+                f"WHERE source='zsxq' AND extraction_status='pending' LIMIT 100")
+            for pr in pendings:
+                fp = pr.get("file_path")
+                if not fp or not os.path.exists(fp):
+                    continue
+                text = self.extractor.extract(fp)
+                if text:
+                    pg.execute(
+                        f"UPDATE {T_REPORT_META} SET content_text=%s, content_chars=%s, "
+                        f"extraction_status='extracted' WHERE report_id=%s",
+                        (text[:MAX_TEXT_CHARS], len(text), pr["report_id"]))
+                    backfilled += 1
+            if backfilled:
+                print(f"📎 附件正文回填 {backfilled} 个 (此前文件未就绪)")
 
     # ---------- 群文件同步 (files 库, 猫哥研报圈等以文件为主的群) ----------
     def _sync_group_files(self):
@@ -185,7 +215,12 @@ class ZSXQ2PGSync:
         with PgClient() as pg:
             marker_key = f"group_file_id_{self.group_id}"
             last_file_id = self._get_sync_marker(pg, marker_key)
-            rows = [r for r in self.files_db.get_completed_files() if r["file_id"] > last_file_id]
+            # 音频文件不入研报库 (mp3/m4a/wav/aac/flac)
+            _audio_exts = ('.mp3', '.m4a', '.wav', '.aac', '.flac')
+            # 全量取 completed (不用水位线: 下载完成顺序与 file_id 无关,
+            # 水位线已越过的老文件完成后会被永久漏掉); 幂等靠下方 exists 检查
+            rows = [r for r in self.files_db.get_completed_files()
+                    if not (r.get("name") or "").lower().endswith(_audio_exts)]
 
             total = 0
             max_file_id = last_file_id
@@ -214,12 +249,13 @@ class ZSXQ2PGSync:
                 if not content:
                     status = "failed"
 
-                pg.execute(
+                inserted = pg.fetch_all(
                     f"""INSERT INTO {T_REPORT_META}
                         (topic_id, file_id, title, file_name, file_path, file_size,
                          content_text, content_chars, source, extraction_status,
                          publish_date)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'zsxq_file', %s, %s)""",
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'zsxq_file', %s, %s)
+                        RETURNING report_id""",
                     (
                         row.get("topic_id"),
                         file_id,
@@ -233,6 +269,8 @@ class ZSXQ2PGSync:
                         self._parse_date(row.get("create_time")),
                     ),
                 )
+                if inserted:
+                    self._new_ids.append(inserted[0]["report_id"])
                 total += 1
 
             self._set_sync_marker(pg, marker_key, value_int=max_file_id)

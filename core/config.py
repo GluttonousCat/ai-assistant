@@ -94,7 +94,30 @@ class Config:
 
     @property
     def llm_model(self) -> str:
-        return self.env("LLM_MODEL", self.get("llm.model", "gpt-4o"))
+        return self.env("LLM_MODEL", self.get("llm.models.default.model", "gpt-4o"))
+
+    # ---------- LLM 多模型路由 ----------
+    def llm_model_for(self, purpose: str) -> str:
+        """按用途取模型名: llm.models.<purpose>.model, 不存在回落 default.
+        环境变量 LLM_MODEL 兼容旧配置 (作为 default 的覆盖)."""
+        if purpose in ("", "default"):
+            return self.llm_model
+        model = self.get(f"llm.models.{purpose}.model")
+        return model if model else self.llm_model
+
+    def llm_model_override(self, purpose: str) -> Optional[Dict[str, str]]:
+        """按用途取 api_key/base_url 覆盖 (缺省用全局 .env 配置)"""
+        if purpose in ("", "default"):
+            return None
+        entry = self.get(f"llm.models.{purpose}")
+        if not isinstance(entry, dict):
+            return None
+        override: Dict[str, str] = {}
+        for k in ("api_key", "base_url"):
+            v = entry.get(k) or self.env(f"LLM_{purpose.upper()}_{k.upper()}", "")
+            if v:
+                override[k] = v
+        return override or None
 
     @property
     def tushare_token(self) -> str:

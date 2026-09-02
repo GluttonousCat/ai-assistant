@@ -75,6 +75,6 @@ class AntiDetectManager:
 
     def long_delay(self):
         """长休眠"""
-        delay = random.uniform(180, 300)  # 3-5分钟
-        print(f"🛌 长休眠: {delay:.1f}秒 ({delay/60:.1f}分钟)")
+        delay = random.uniform(60, 120)  # 60-120秒
+        print(f"🛌 长休眠: {delay:.1f}秒")
         time.sleep(delay)

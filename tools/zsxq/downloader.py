@@ -48,11 +48,11 @@ class FileDownloader:
         # 反检测
         self.anti_detect = AntiDetectManager(self.cookie)
 
-        # 下载间隔配置（强制长休眠）
-        self.min_delay = 60      # 最小间隔1分钟
-        self.max_delay = 180     # 最大间隔3分钟
-        self.long_sleep_min = 180   # 长休眠最小3分钟
-        self.long_sleep_max = 300   # 长休眠最大5分钟
+        # 下载间隔配置
+        self.min_delay = 60      # 最小间隔60秒
+        self.max_delay = 120     # 最大间隔120秒
+        self.long_sleep_min = 60   # 长休眠最小60秒
+        self.long_sleep_max = 120  # 长休眠最大120秒
 
         # 统计
         self.download_count = 0
@@ -270,7 +270,7 @@ class FileDownloader:
     def _long_delay(self):
         """强制长休眠"""
         delay = random.uniform(self.long_sleep_min, self.long_sleep_max)
-        self.log(f"🛌 长休眠: {delay:.0f}秒 ({delay/60:.1f}分钟)")
+        self.log(f"🛌 长休眠: {delay:.0f}秒")
         self._sleep(delay)
         self.log(f"😴 休眠结束")
 
