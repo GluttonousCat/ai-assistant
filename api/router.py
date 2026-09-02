@@ -54,10 +54,8 @@ def get_crawler(group_id: str) -> ZSXQCrawler:
 
 
 # ---------- 基础 ----------
-@router.get("/", tags=["meta"])
-async def root():
-    return {"message": "ai-assistant API", "version": "2.0.0"}
-
+# 根路径 "/" 由 app.py 提供前端首页 (FileResponse); 本 router 先于首页路由挂载,
+# 此处若注册 GET / 会按注册顺序抢占首页, 因此不再提供 JSON 版根路由
 
 @router.get("/health", response_model=HealthResponse, tags=["meta"])
 async def health():
