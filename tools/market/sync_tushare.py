@@ -298,7 +298,7 @@ def backfill_table(
         batch_dfs.append(df)
         last_synced = day
 
-        if len(batch_dfs) >= BATCH_TRADE_DAYS or i == len(trading_days):
+        if len(batch_dfs) >= BATCH_TRADE_DAYS:
             n = _flush_batch(batch_dfs, table, keys)
             total += n
             logger.info(
@@ -309,6 +309,17 @@ def backfill_table(
             if last_synced is not None:
                 with PgClient() as pg:
                     set_sync_progress(table, last_synced, total, pg)
+
+    # 循环结束后 flush 残留批次
+    # (修复: 若最后一个交易日数据未入库(15-16点前), 之前用 i==len 判断
+    #  flush 会被 continue 短路, 导致整批数据永不写入)
+    if batch_dfs:
+        n = _flush_batch(batch_dfs, table, keys)
+        total += n
+        logger.info(f"  {table}: 末批写入 {n} 行 (累计 {total})")
+        if last_synced is not None:
+            with PgClient() as pg:
+                set_sync_progress(table, last_synced, total, pg)
 
     logger.info(f"回填完成 {table}: 累计 {total} 行")
     return total
