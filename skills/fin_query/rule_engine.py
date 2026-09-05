@@ -46,6 +46,37 @@ def _clean_entity_text(text: str) -> str:
     return t.strip()
 
 
+# 排名/筛选句式 (全市场或行业)
+_TOP_N_PAT = re.compile(
+    r"最高的?\s*(\d{1,3})\s*[家只个股]?\s*$|排名前\s*(\d{1,3})|前\s*(\d{1,3})\s*名|top\s*(\d{1,3})",
+    re.IGNORECASE,
+)
+_COND_PAT = re.compile(
+    r"(大于等于|小于等于|不低于|不超过|不高于|大于|小于|超过|高于|低于)\s*([\d.]+)\s*%?"
+)
+_COND_OP_MAP = {
+    "大于": "gt", "高于": "gt", "超过": "gt",
+    "小于": "lt", "低于": "lt",
+    "大于等于": "ge", "不低于": "ge",
+    "小于等于": "le", "不超过": "le", "不高于": "le",
+}
+
+
+def _parse_rank_params(text: str) -> Optional[Dict]:
+    """解析排名/筛选参数. 返回 {top_n, op, value} 或 None (非排名/筛选句)"""
+    top_n, op, value = None, None, None
+    m = _COND_PAT.search(text)
+    if m:
+        op = _COND_OP_MAP.get(m.group(1), "gt")
+        value = float(m.group(2))
+    m2 = _TOP_N_PAT.search(text)
+    if m2:
+        top_n = int(next(g for g in m2.groups() if g))
+    if top_n is None and op is None:
+        return None
+    return {"top_n": top_n or 10, "op": op, "value": value}
+
+
 class RuleEngine:
     """规则查询引擎"""
 
@@ -53,9 +84,10 @@ class RuleEngine:
         self.kb = get_stock_kb()
         self.kb.load()  # 确保词典已加载
 
-    def parse(self, user_input: str):
+    def parse(self, user_input: str, context_stocks: Optional[List[Tuple[str, str]]] = None):
         """
         解析查询 -> SQL
+        context_stocks: 会话上轮股票 [(ts_code, name)], 当前句省略主语时继承
         返回 (sql, meta_dict) 或 (None, {"reason": "unsupported"|"error"})
         """
         text = user_input.strip()
@@ -69,25 +101,7 @@ class RuleEngine:
         metrics = self._extract_metrics(text)
 
         # 3. 行业实体 ("XX行业的YY指标")
-        industry = self._extract_industry(text)
-
-        # 无股票但有行业: 行业查询
-        if not stocks and industry and metrics:
-            from tools.finance.sql_builder import build_industry_query
-            index_code, ind_name, level = industry
-            field, prefix = metrics[0]
-            time_phrase = parse_time_phrase(text)
-            sql = build_industry_query(index_code, field, prefix, time_phrase,
-                                       level=level)
-            if sql:
-                return sql, {"type": "industry", "industry": ind_name,
-                             "metric": field}
-            return None, {"reason": "error"}
-
-        if not stocks:
-            return None, {"reason": "unsupported"}
-        if not metrics:
-            return None, {"reason": "unsupported"}
+        industry = self.kb.match_industry(text)
 
         time_phrase = parse_time_phrase(text)
         # 相对时间 -> 绝对年份 ("去年" = 上一年年报)
@@ -97,7 +111,58 @@ class RuleEngine:
             # 今年尚未出年报, 退化为最新期
             time_phrase = ("recent", None)
 
-        # 3. 意图: 对比 (>=2 股票) or 单股
+        rank_params = _parse_rank_params(text)
+
+        # 无股票但有行业: 行业查询 / 行业排名 / 行业筛选
+        if not stocks and industry and metrics:
+            from tools.finance.sql_builder import build_industry_query
+            index_code, ind_name, level = industry
+            field, prefix = metrics[0]
+            if rank_params:
+                sql = build_industry_query(
+                    index_code, field, prefix, time_phrase, level=level,
+                    top_n=rank_params["top_n"],
+                    op=rank_params["op"], value=rank_params["value"],
+                )
+            else:
+                sql = build_industry_query(index_code, field, prefix, time_phrase,
+                                           level=level)
+            if sql:
+                return sql, {"type": "industry", "industry": ind_name,
+                             "metric": field}
+            return None, {"reason": "error"}
+
+        # 无股票但有指标 + 排名/筛选句式: 全市场排名
+        if not stocks and metrics and rank_params:
+            from tools.finance.sql_builder import build_rank_query
+            field, prefix = metrics[0]
+            sql = build_rank_query(
+                field, prefix,
+                top_n=rank_params["top_n"],
+                op=rank_params["op"], value=rank_params["value"],
+                time_phrase=time_phrase,
+            )
+            if sql:
+                meta = {"type": "rank", "metric": field,
+                        "top_n": rank_params["top_n"]}
+                if rank_params["op"]:
+                    meta["filter"] = {"op": rank_params["op"],
+                                      "value": rank_params["value"]}
+                return sql, meta
+            return None, {"reason": "error"}
+
+        # 无股票 + 有指标 + 有会话上下文股票: 继承上轮主语 (追问场景)
+        context_inherited = False
+        if not stocks and metrics and context_stocks:
+            stocks = list(context_stocks)[:2]
+            context_inherited = True
+
+        if not stocks:
+            return None, {"reason": "unsupported", "missing": "stock"}
+        if not metrics:
+            return None, {"reason": "unsupported", "missing": "metric"}
+
+        # 4. 意图: 对比 (>=2 股票) or 单股
         if len(stocks) >= 2:
             # 取第一个指标做对比
             field, prefix = metrics[0]
@@ -107,7 +172,7 @@ class RuleEngine:
                              "metric": field}
             return None, {"reason": "error"}
 
-        # 4. 单股: 单指标或多指标 (多列 SELECT, 不丢弃)
+        # 5. 单股: 单指标或多指标 (多列 SELECT, 不丢弃)
         ts_code, name = stocks[0]
         field, prefix = metrics[0]
         extra = [m for m in metrics[1:3]]
@@ -117,6 +182,8 @@ class RuleEngine:
             meta = {"type": "query", "stock": name, "metric": field}
             if extra:
                 meta["extra_metrics"] = [e[0] for e in extra]
+            if context_inherited:
+                meta["context_inherited"] = True
             return sql, meta
         return None, {"reason": "error"}
 

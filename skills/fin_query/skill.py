@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import re
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
@@ -258,11 +258,12 @@ class FinQuerySkill(BaseSkill):
     def run(self, context: SkillContext) -> SkillContext:
         user_input = context.user_input
         context.log(f"FinQuerySkill 开始处理: {user_input[:50]}")
+        context_stocks = (context.params or {}).get("context_stocks") or []
 
         # 1. 生成 SQL
-        sql, explanation, tables = self._generate_sql(user_input)
+        sql, explanation, tables = self._generate_sql(user_input, context_stocks)
         if not sql:
-            context.error = "无法解析查询意图"
+            context.error = self._friendly_parse_error(user_input)
             return context
         context.log(f"生成 SQL: {sql}")
 
@@ -296,24 +297,31 @@ class FinQuerySkill(BaseSkill):
         return context
 
     # ---------- SQL 生成 ----------
-    def _generate_sql(self, user_input: str) -> tuple[Optional[str], str, List[str]]:
-        """规则优先 (词典+模板, 零成本), LLM 兜底"""
+    def _generate_sql(self, user_input: str,
+                      context_stocks: Optional[List[Tuple[str, str]]] = None
+                      ) -> tuple[Optional[str], str, List[str]]:
+        """规则优先 (词典+模板, 零成本), LLM 兜底
+        context_stocks: 会话上轮股票 [(ts_code, name)], 追问省略主语时继承"""
         # 1. 规则引擎 (高频固定句式, 无需 LLM)
         try:
             from skills.fin_query.rule_engine import get_rule_engine
-            sql, meta = get_rule_engine().parse(user_input)
+            sql, meta = get_rule_engine().parse(user_input, context_stocks)
             if sql:
                 return sql, f"规则查询 (类型={meta.get('type')})", []
         except Exception as e:
             logger.warning(f"规则引擎异常: {e}")
 
-        # 2. LLM 兜底
+        # 2. LLM 兜底 (上下文股票注入 prompt, 辅助省略主语场景)
         if self.llm:
             try:
                 from skills.fin_query.prompts import SQL_GENERATION_PROMPT
+                ctx_hint = ""
+                if context_stocks:
+                    names = "、".join(n for _, n in context_stocks)
+                    ctx_hint = f"\n(会话上文提到的股票: {names}, 若用户未指明可沿用)"
                 prompt = SQL_GENERATION_PROMPT.format(
                     schema_info=self.schema_info.to_prompt_text(),
-                    user_query=user_input,
+                    user_query=user_input + ctx_hint,
                 )
                 resp = self.llm.invoke(prompt)
                 parsed = _extract_json(resp)
@@ -327,6 +335,26 @@ class FinQuerySkill(BaseSkill):
                 logger.warning(f"LLM SQL 生成失败: {e}")
 
         return None, "", []
+
+    @staticmethod
+    def _friendly_parse_error(user_input: str) -> str:
+        """解析失败时的引导式提示 (区分缺股票/缺指标/整体没看懂)"""
+        try:
+            from tools.finance.stock_kb import get_stock_kb
+            kb = get_stock_kb()
+            has_metric = kb.match_metric(user_input) is not None
+            has_stock = kb.match_stock(user_input) is not None
+            if has_metric and not has_stock:
+                return ("请指定要查询的股票, 例如:\n"
+                        "- 查询平安银行的营收\n- 看看贵州茅台的毛利率")
+            if has_stock and not has_metric:
+                return ("请说明要查询的指标, 例如:\n"
+                        "- 茅台的毛利率\n- 宁德时代的营收")
+        except Exception:
+            pass
+        return ("无法解析查询意图。支持的问法示例:\n"
+                "- 查询平安银行的营收\n- 看看贵州茅台的毛利率\n"
+                "- 对比茅台和五粮液的ROE\n- 白酒板块毛利率最高的5家")
 
     # ---------- 执行 ----------
     def _execute_sql(self, sql: str) -> tuple[pd.DataFrame, float]:

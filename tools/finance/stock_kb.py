@@ -143,6 +143,28 @@ class StockKB:
         self.load()
         return self._stock_alias.get(name.strip().lower())
 
+    def count_stocks_in_text(self, text: str) -> int:
+        """文本中出现的不同股票数 (去重 ts_code + 区间互斥).
+        长别名优先占位: "平安银行" 命中后, 其子串 "平安" (另一只股票) 不再计数"""
+        self.load()
+        text_l = text.lower()
+        codes = set()
+        occupied = []  # 已占用字符区间
+        for alias, code in sorted(
+            self._stock_alias.items(), key=lambda x: -len(x[0])
+        ):
+            if len(alias) > MAX_NAME_LEN or not alias:
+                continue
+            idx = text_l.find(alias.lower())
+            if idx < 0:
+                continue
+            span = (idx, idx + len(alias))
+            if any(s < span[1] and span[0] < e for s, e in occupied):
+                continue  # 与更长别名重叠 (子串误命中)
+            codes.add(code)
+            occupied.append(span)
+        return len(codes)
+
     def get_name(self, ts_code: str) -> Optional[str]:
         self.load()
         return self._code_to_name.get(ts_code)

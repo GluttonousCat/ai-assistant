@@ -146,6 +146,11 @@ LIMIT 30"""
     return sql
 
 
+_OP_SQL = {
+    "gt": ">", "lt": "<", "ge": ">=", "le": "<=",
+}
+
+
 def build_industry_query(
     index_code: str,
     field: str,
@@ -153,10 +158,13 @@ def build_industry_query(
     time_phrase=None,
     top_n: int = 20,
     level: str = "L2",
+    op: Optional[str] = None,
+    value: Optional[float] = None,
 ) -> Optional[str]:
     """
-    按申万行业查询: "XX行业的YY指标"
+    按申万行业查询: "XX行业的YY指标" / "XX板块ROE最高的5家" / "XX板块中ROE大于20%的股票"
     通过 stock.v_industry_current (个股->L1/L2行业) 关联财务/行情表
+    op/value: 指标条件筛选 (gt/lt/ge/le + 阈值)
     """
     index_col = "index_l2" if level == "L2" else "index_l1"
     period_filter = ""
@@ -182,6 +190,9 @@ LIMIT {top_n}"""
         return sql
 
     # 财务行业查询: 行业当前成员 + 指标的近期报告期
+    cond = ""
+    if op and value is not None:
+        cond = f" AND COALESCE({prefix}.{field}, 0) {_OP_SQL[op]} {value}"
     sql = f"""SELECT s.name AS stock_name,
         COALESCE(i2.industry_l2, i2.industry_l1) AS industry,
         i.end_date, {prefix}.{field} AS value
@@ -190,11 +201,76 @@ JOIN stock.stock_basic s ON i2.ts_code = s.ts_code
 JOIN fin.income i ON i2.ts_code = i.ts_code
 LEFT JOIN fin.fina_indicator f
     ON i.ts_code = f.ts_code AND i.end_date = f.end_date AND i.report_type = f.report_type
+LEFT JOIN fin.balancesheet b
+    ON i.ts_code = b.ts_code AND i.end_date = b.end_date AND i.report_type = b.report_type
 WHERE i2.{index_col} = '{index_code}'
-  AND i.report_type = '1'{period_filter}
+  AND i.report_type = '1'{period_filter}{cond}
   AND i.end_date = (SELECT MAX(end_date) FROM fin.income
                      WHERE ts_code = i.ts_code AND report_type='1')
 ORDER BY value DESC NULLS LAST
+LIMIT {top_n}"""
+    return sql
+
+
+def build_rank_query(
+    field: str,
+    prefix: str,
+    top_n: int = 10,
+    op: Optional[str] = None,
+    value: Optional[float] = None,
+    time_phrase=None,
+) -> Optional[str]:
+    """
+    全市场排名/条件筛选: "全市场ROE排名前10" / "找出ROE大于20%的股票"
+    各股取最新报告期, 按指标排序取前 N
+    """
+    if prefix in ("d",):
+        cond = ""
+        if op and value is not None:
+            cond = f" AND d.{field} {_OP_SQL[op]} {value}"
+        return f"""SELECT s.name AS stock_name, d.trade_date, d.{field} AS value
+FROM stock.daily d
+JOIN stock.stock_basic s ON d.ts_code = s.ts_code
+WHERE d.trade_date = (SELECT MAX(trade_date) FROM stock.daily){cond}
+ORDER BY d.{field} DESC NULLS LAST
+LIMIT {top_n}"""
+    if prefix in ("db",):
+        cond = ""
+        if op and value is not None:
+            cond = f" AND db.{field} {_OP_SQL[op]} {value}"
+        return f"""SELECT s.name AS stock_name, db.trade_date, db.{field} AS value
+FROM stock.daily_basic db
+JOIN stock.stock_basic s ON db.ts_code = s.ts_code
+WHERE db.trade_date = (SELECT MAX(trade_date) FROM stock.daily_basic){cond}
+ORDER BY db.{field} DESC NULLS LAST
+LIMIT {top_n}"""
+
+    # 财务: 各股最新报告期
+    period_filter = _financial_period_filter(time_phrase)
+    cond = ""
+    if op and value is not None:
+        cond = f" AND COALESCE(t.value, 0) {_OP_SQL[op]} {value}"
+    sql = f"""WITH latest AS (
+    SELECT DISTINCT ON (i.ts_code) i.ts_code, i.end_date
+    FROM fin.income i WHERE i.report_type = '1'{period_filter}
+    ORDER BY i.ts_code, i.end_date DESC
+)
+SELECT s.name AS stock_name, t.end_date, t.value
+FROM (
+    SELECT i.ts_code, i.end_date, {prefix}.{field} AS value
+    FROM fin.income i
+    LEFT JOIN fin.fina_indicator f
+        ON i.ts_code = f.ts_code AND i.end_date = f.end_date AND i.report_type = f.report_type
+    LEFT JOIN fin.balancesheet b
+        ON i.ts_code = b.ts_code AND i.end_date = b.end_date AND i.report_type = b.report_type
+    LEFT JOIN fin.cashflow c
+        ON i.ts_code = c.ts_code AND i.end_date = c.end_date AND i.report_type = c.report_type
+    WHERE i.report_type = '1'
+      AND (i.ts_code, i.end_date) IN (SELECT ts_code, end_date FROM latest)
+) t
+JOIN stock.stock_basic s ON t.ts_code = s.ts_code
+WHERE t.value IS NOT NULL{cond}
+ORDER BY t.value DESC
 LIMIT {top_n}"""
     return sql
 

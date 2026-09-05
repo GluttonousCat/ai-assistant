@@ -39,11 +39,13 @@ CORE_KEYWORDS: Dict[str, List[str]] = {
               "营业利润", "利润总额", "经营现金流", "总资产", "总负债", "商誉", "eps",
               "成交额", "成交量"],
     "detect": ["财务风险", "异常检测", "预警", "排雷", "财务造假", "风险排查"],
-    "verify": ["研报校验", "预测校验", "一致性验证", "研报验证"],
+    "verify": ["研报校验", "预测校验", "一致性验证", "研报验证", "验证", "核对", "校验"],
     "report": ["分析报告", "深度报告", "生成报告", "完整报告", "研究报告",
                "研报", "解读", "研报解读", "评级", "目标价", "盈利预测", "观点",
                "黄金", "原油", "大宗商品", "贵金属"],
     "compare": ["对比", "比较", "谁高", "谁更高", "vs", "哪个更好", "孰强", "对比一下"],
+    "chain": ["产业链", "链条", "环节", "上游", "下游", "受益环节", "板块挖掘"],
+    "alpha": ["预期差", "分歧度", "拐点", "预期在哪里"],
 }
 
 # 一般词: 命中给 0.6 基线
@@ -58,8 +60,8 @@ GENERAL_KEYWORDS: Dict[str, List[str]] = {
     "compare": ["谁", "哪个", "更高", "更优", "孰"],
 }
 
-# 意图优先级 (同分时按此顺序)
-INTENT_PRIORITY = ["report", "detect", "verify", "compare", "query"]
+# 意图优先级 (同分时按此顺序; verify 在 report 前防 "验证XX的研报" 被抢)
+INTENT_PRIORITY = ["verify", "report", "detect", "chain", "alpha", "compare", "query"]
 
 # L1 高置信阈值 (>= 则直接返回, 不调 LLM)
 HIGH_CONFIDENCE_THRESHOLD = 0.75
@@ -170,19 +172,10 @@ class LayeredIntentClassifier:
 
     @staticmethod
     def _count_stocks(text: str) -> int:
-        """统计文本中出现的股票实体数 (去重)"""
+        """统计文本中出现的股票实体数 (去重 + 区间互斥, 防 "平安银行" 同时命中 "平安")"""
         try:
             from tools.finance.stock_kb import get_stock_kb
-            kb = get_stock_kb()
-            kb.load()  # 确保词典已加载
-            text_l = text.lower()
-            codes = set()
-            for alias, code in sorted(
-                kb._stock_alias.items(), key=lambda x: -len(x[0])
-            ):
-                if alias and alias.lower() in text_l:
-                    codes.add(code)
-            return len(codes)
+            return get_stock_kb().count_stocks_in_text(text)
         except Exception:
             return 0
 
@@ -219,7 +212,10 @@ class LayeredIntentClassifier:
             prompt = (
                 "你是一个金融查询意图分类器。\n"
                 "可分类别: query(数据查询) compare(对比) detect(异常检测) "
-                "verify(研报校验) report(报告生成) unknown(无关)\n\n"
+                "verify(研报校验) report(报告/研报解读) "
+                "chain(产业链/环节挖掘, 如'AI算力链有哪些环节') "
+                "alpha(个股预期差, 如'XX股票的分歧度/预期差/基本面拐点') "
+                "unknown(无关)\n\n"
                 "提取槽位: stocks(股票名列表) metrics(指标列表) "
                 "time(时间描述,如'2023年'/'最近三年')\n\n"
                 "用户输入: {text}\n\n"

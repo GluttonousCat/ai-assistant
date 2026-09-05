@@ -39,6 +39,10 @@ class AgentState:
     user_input: str = ""
     parsed_intent: Optional[Dict] = None
 
+    # 会话上下文 (跨轮槽位继承: 追问省略主语时沿用上轮股票)
+    session_id: Optional[str] = None
+    context_stocks: List = field(default_factory=list)  # [(ts_code, name), ...]
+
     # 财务分析结果 (Text-to-SQL)
     fin_result: Optional[Dict] = None
 
