@@ -40,3 +40,7 @@ accounts.db
 
 # Notebooks
 *.ipynb
+
+# pptgen 生成物与渲染缓存
+pptgen/output/
+.~lock.*#

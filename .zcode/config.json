@@ -1,0 +1,14 @@
+{
+  "mcp": {
+    "servers": {
+      "pptgen": {
+        "command": "C:\\Users\\GluttonousCat\\PycharmProjects\\ai-assistant\\.venv\\Scripts\\python.exe",
+        "args": [
+          "C:\\Users\\GluttonousCat\\PycharmProjects\\ai-assistant\\pptgen\\bridge\\server.py"
+        ],
+        "env": {},
+        "enabled": true
+      }
+    }
+  }
+}
