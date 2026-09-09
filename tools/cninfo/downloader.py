@@ -76,6 +76,30 @@ class CninfoDownloader:
 
     # ---------- 主流程 ----------
 
+    def _resolve_org_id_db(self, pg, sec_code: str) -> Optional[str]:
+        """orgId 解析 (持久层): DB 映射表 → client 四级策略 → 回写 DB。
+
+        每只股票一生只真正解析一次 — topSearch 限流时代重复解析是主要失败源。
+        """
+        from storage.pg_schema import DDL_CNINFO_ORG_MAP
+        pg.execute(DDL_CNINFO_ORG_MAP)
+        row = pg.fetch_one(
+            "SELECT org_id FROM fin.cninfo_org_map WHERE sec_code=%s",
+            (sec_code,))
+        if row:
+            return row["org_id"]
+
+        org_id = self.client.resolve_org_id(sec_code)
+        if org_id:
+            pg.execute(
+                "INSERT INTO fin.cninfo_org_map (sec_code, org_id, updated_at) "
+                "VALUES (%s, %s, now()) "
+                "ON CONFLICT (sec_code) DO UPDATE SET "
+                "org_id = EXCLUDED.org_id, updated_at = now()",
+                (sec_code, org_id))
+            pg.conn.commit()
+        return org_id
+
     def sync_stock(self, stock: str, years: List[int], download: bool = True,
                    force: bool = False, categories: Tuple[str, ...] = ("ndbg",)
                    ) -> Dict[str, int]:
@@ -89,17 +113,17 @@ class CninfoDownloader:
             stats["failed"] += 1
             return stats
         sec_code = ts_code.split(".")[0]
-        org_id = self.client.resolve_org_id(sec_code)
-        if not org_id:
-            logger.error(f"巨潮未找到 orgId: {sec_code} ({stock})")
-            stats["failed"] += 1
-            return stats
-        logger.info(f"{stock} -> {ts_code} (orgId={org_id}), 年份 {years}")
 
         from storage.pg_schema import DDL_CNINFO_ANNOUNCEMENT
         with PgClient() as pg:
             pg.execute(DDL_CNINFO_ANNOUNCEMENT)   # 幂等建表 (独立于业务事务)
             pg.conn.commit()
+            org_id = self._resolve_org_id_db(pg, sec_code)
+            if not org_id:
+                logger.error(f"巨潮未找到 orgId: {sec_code} ({stock})")
+                stats["failed"] += 1
+                return stats
+            logger.info(f"{stock} -> {ts_code} (orgId={org_id}), 年份 {years}")
             # 每类别一次宽窗查询 (覆盖全部年份, 5年4类=4次请求而非20次;
             # 分号多类别参数实测不可用), 入库全部, 下载按 (year,cat) 挑全文
             se_date = (f"{min(years)}-01-01~{max(years) + 1}-12-31"

@@ -27,6 +27,7 @@ logger = get_logger(__name__)
 
 SEARCH_URL = "http://www.cninfo.com.cn/new/information/topSearch/query"
 QUERY_URL = "http://www.cninfo.com.cn/new/hisAnnouncement/query"
+BULK_STOCK_URL = "http://www.cninfo.com.cn/new/data/szse_stock.json"   # 全市场 code->orgId 一次拿全
 STATIC_BASE = "http://static.cninfo.com.cn"
 
 _HEADERS = {
@@ -72,14 +73,39 @@ class CninfoClient:
 
     # ---------- 公开能力 ----------
 
+    def fetch_org_map_bulk(self) -> Dict[str, str]:
+        """全市场 orgId 一次拿全 (szse_stock.json, 巨潮前端搜索下拉的数据源)。
+
+        进程内只拉一次, 结果并入内存缓存; 站点不可达返回空 dict (调用方走降级)。
+        """
+        if getattr(self, "_bulk_loaded", False):
+            return {}
+        self._bulk_loaded = True
+        try:
+            self._sleep()
+            resp = self.session.get(BULK_STOCK_URL, timeout=30)
+            resp.raise_for_status()
+            items = resp.json().get("stockList") or []
+            got = {it["code"]: it.get("orgId", "") for it in items
+                   if it.get("code") and it.get("orgId")}
+            self._org_id_cache.update(got)
+            logger.info(f"orgId 批量源加载: {len(got)} 只 (szse_stock.json)")
+            return got
+        except Exception as e:  # noqa: BLE001 限流/不可达时静默降级
+            logger.warning(f"orgId 批量源不可达: {type(e).__name__}")
+            return {}
+
     def resolve_org_id(self, sec_code: str) -> Optional[str]:
         """6 位证券代码 -> 巨潮 orgId。
 
-        三级策略 (topSearch 端点限流敏感, 实测高频调用 504):
-        ① 内存缓存命中直接返回; ② topSearch 查询; ③ 沪市规则推导兜底
-        (实测沪市 orgId = 'gssh0' + 6位代码, 如 600519 -> gssh0600519;
-        深市 9900xxxx 无规律, 推导不可用)。
+        四级策略 (topSearch 端点限流最敏感, 实测高频调用 504):
+        ① 内存缓存; ② 全量批量源 szse_stock.json (一次请求, 进程内缓存);
+        ③ topSearch 单只查询; ④ 沪市规则推导 (orgId = 'gssh0'+6位代码,
+        如 600519 -> gssh0600519; 深市 9900xxxx 无规律, 推导不可用)。
         """
+        if sec_code in self._org_id_cache:
+            return self._org_id_cache[sec_code]
+        self.fetch_org_map_bulk()
         if sec_code in self._org_id_cache:
             return self._org_id_cache[sec_code]
 

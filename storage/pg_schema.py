@@ -571,6 +571,17 @@ CREATE TABLE IF NOT EXISTS fin.cninfo_sync_state (
 );
 """
 
+# ---------- 巨潮 orgId 持久映射 (sec_code -> orgId; 每股只解析一次, 免重复打脆弱的 topSearch) ----------
+DDL_CNINFO_ORG_MAP = """
+CREATE TABLE IF NOT EXISTS fin.cninfo_org_map (
+    sec_code    VARCHAR(12) PRIMARY KEY,   -- 6 位证券代码
+    org_id      VARCHAR(32) NOT NULL,      -- 巨潮 orgId
+    sec_name    VARCHAR(64),
+    source      VARCHAR(16),               -- bulk/topSearch/derived
+    updated_at  TIMESTAMPTZ DEFAULT now()
+);
+"""
+
 FIN_ALL_DDL = [
     DDL_FIN_SCHEMA,
     DDL_INCOME,
@@ -582,6 +593,7 @@ FIN_ALL_DDL = [
     DDL_FIN_SYNC_META,
     DDL_CNINFO_ANNOUNCEMENT,
     DDL_CNINFO_SYNC_STATE,
+    DDL_CNINFO_ORG_MAP,
 ]
 
 # 财务表名常量
