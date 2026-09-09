@@ -1,4 +1,4 @@
-# 产业链模板编写指南（chain-beta）
+# 产业链模板编写指南（beta-skill）
 
 模板目录：`beta_alpha/chains/*.yaml`，一个文件一条链。加载即缓存（进程级），编辑后新进程生效；命令每次运行都是新进程，无需额外操作。
 
@@ -67,7 +67,7 @@ with PgClient() as pg:
 4. 漏匹配排查——看目标公司最新报告期主营构成原文（即披露口径）：
 
 ```bash
-.venv/Scripts/python.exe .agents/skills/chain-beta/scripts/show_mainbiz.py 002463.SZ
+.venv/Scripts/python.exe .agents/skills/beta-skill/scripts/show_mainbiz.py 002463.SZ
 ```
 
 （`--type I/D` 可切行业/地区维度。）关键词照输出补齐。

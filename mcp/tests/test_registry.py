@@ -16,9 +16,9 @@ REGISTRY = get_registry()
 
 def test_18_tools_registered():
     specs = REGISTRY.specs()
-    assert len(specs) == 19      # 18 只读 + fetch_annual_report (写类, 巨潮爬虫)
+    assert len(specs) == 21      # 18 只读 + 3 写类 (forge_chain/fetch_annual_report/write_article)
     names = [s.name for s in specs]
-    assert len(set(names)) == 19  # 无重名
+    assert len(set(names)) == 21  # 无重名
 
 
 def test_domains_cover_six_groups():
@@ -84,7 +84,7 @@ def test_manifests_consistent():
     assert len(mcp_manifest) == len(REGISTRY.specs())
     assert len(openai_manifest) == len(REGISTRY.specs())
     # 只读过滤: 排除 forge_chain 后 17 个
-    assert len(REGISTRY.openai_manifest(include_write=False)) == 17
+    assert len(REGISTRY.openai_manifest(include_write=False)) == 18
     for entry in mcp_manifest:
         assert set(entry) == {"name", "description", "inputSchema"}
     for entry in openai_manifest:

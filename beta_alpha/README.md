@@ -43,5 +43,5 @@ python -m beta_alpha.skills.alpha "中际旭创的预期差"
 
 - 分层契约不变：`skills/base.py` 的 `SkillContext`、`llm/client.py` 工厂、`storage/pg.py` 仍由上层框架提供
 - 改分档阈值/单位归一/趋势判定：改纯函数（`assign_tier`/`to_yuan`/`classify_drift`）并补 tests
-- 新增产业链：在 `chains/` 加 YAML（规范见 `.agents/skills/chain-beta/references/chain-template-guide.md`）
+- 新增产业链：在 `chains/` 加 YAML（规范见 `.agents/skills/beta-skill/references/chain-template-guide.md`）
 - 详细设计：`docs/agents/chain_beta_skill.md`

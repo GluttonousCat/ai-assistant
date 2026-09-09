@@ -1,4 +1,4 @@
-# 四象限取数细节（stock-alpha）
+# 四象限取数细节（alpha-skill）
 
 实现集中在 `beta_alpha/skills/alpha.py`（`_load_forecast_divergence` / `_load_momentum` / `_load_valuation` / `_load_views`，纯函数 `to_yuan`/`classify_drift` 有单元测试在 `beta_alpha/tests/`），改判定先读本文。
 

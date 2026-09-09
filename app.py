@@ -21,7 +21,7 @@ from api.reports_api import reports_router
 
 app = FastAPI(
     title="ai-assistant",
-    description="智能投研助手 - 知识星球爬虫 + Tushare数据分析 + Agent ChatBI",
+    description="智能财务助手 - 知识星球爬虫 + Tushare数据分析 + Agent ChatBI",
     version="2.0.0",
     lifespan=lifespan,
 )

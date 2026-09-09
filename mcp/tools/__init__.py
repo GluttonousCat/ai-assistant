@@ -17,5 +17,6 @@ from mcp.tools import reports         # 4: search_reports / read_report / get_fo
 from mcp.tools import chain_alpha     # 4: list_chains / analyze_chain / forge_chain / analyze_alpha
 from mcp.tools import quant           # 2: compute_indicators / run_quant_scan
 from mcp.tools import risk            # 2: detect_financial_risk / verify_forecasts
+from mcp.tools import content         # 2: build_company_profile / write_article (内容管线)
 
 __all__ = ["REGISTRY", "ToolSpec"]

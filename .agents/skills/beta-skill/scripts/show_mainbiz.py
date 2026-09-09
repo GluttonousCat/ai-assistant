@@ -1,11 +1,11 @@
-"""查看个股最新报告期主营构成 (chain-beta 模板关键词排查用)
+"""查看个股最新报告期主营构成 (beta-skill 模板关键词排查用)
 
 输出该公司最新报告期 P(产品)/I(行业)/D(地区) 维度构成与收入占比,
 用于对照公司真实披露口径设计/修正链模板 keywords。
 
 用法 (项目根目录):
-    .venv/Scripts/python.exe .agents/skills/chain-beta/scripts/show_mainbiz.py 002463.SZ
-    .venv/Scripts/python.exe .agents/skills/chain-beta/scripts/show_mainbiz.py 002463.SZ --type I
+    .venv/Scripts/python.exe .agents/skills/beta-skill/scripts/show_mainbiz.py 002463.SZ
+    .venv/Scripts/python.exe .agents/skills/beta-skill/scripts/show_mainbiz.py 002463.SZ --type I
 """
 from __future__ import annotations
 

@@ -22,7 +22,7 @@ agent/      LangGraph 意图路由图 (fin_graph: query/compare→SQL, report→
 skills/     fin_query(Text-to-SQL) / report(研报) / scanned_report(扫描件OCR)
 beta_alpha/ 产业链Beta+个股Alpha自治模块 (chains种子链/analysis映射与指数/skills编排/
             streaming SSE/schema DDL/tests; 对话页两条链路+研报链抽取钩子全在这)
-.agents/skills/ ZCode技能模块 (chain-beta/stock-alpha: SKILL.md 驱动会话内直接调用)
+.agents/skills/ ZCode技能模块 (beta-skill/alpha-skill: SKILL.md 驱动会话内直接调用)
 tools/      zsxq爬虫 / market行情同步(sync_mainbz主营构成) / finance(SQL guard, KB, pdf_vision视觉OCR)
 storage/    pg.py(连接池) / sqlite(爬虫) / pg_schema.py(全部DDL,改表先看这)
 api/        路由+鉴权中间件(JWT) / ws / finance(SSE流式) / reports / auth
@@ -125,7 +125,8 @@ vision=qwen3.8-flash（deepseek 不收图片）。**思考开关由 `llm.enable_
 | 扫描件 Agent | [docs/agents/scanned_report_agent.md](docs/agents/scanned_report_agent.md) | PDF→PNG→视觉OCR 解耦设计 |
 | MCP 工具层 | [mcp/README.md](mcp/README.md) | 18 工具/ToolSpec 规范/中文description约定/stdio 服务(默认只读) |
 | Agent 对话循环 | [docs/agents/agent_loop.md](docs/agents/agent_loop.md) | LLM 自主决策+工具循环/多轮追问/累计口径知识/沙盒；新入口 `/api/v1/agent/stream` |
-| Beta/Alpha Skill | [docs/agents/chain_beta_skill.md](docs/agents/chain_beta_skill.md) | 产业链种子链/三源映射/环节指数/预期差四象限；Agent 会话入口在 `.agents/skills/chain-beta`、`.agents/skills/stock-alpha` |
+| 内容资产管线 | [docs/agents/content_pipeline.md](docs/agents/content_pipeline.md) | 上市公司画像/公众号文章/pptgen出片；`python -m content` |
+| Beta/Alpha Skill | [docs/agents/chain_beta_skill.md](docs/agents/chain_beta_skill.md) | 产业链种子链/三源映射/环节指数/预期差四象限；Agent 会话入口在 `.agents/skills/beta-skill`、`.agents/skills/alpha-skill` |
 | 安全 | [docs/ops/security.md](docs/ops/security.md) | 分层防护/事件审计/加固清单 |
 | 数据处理 | [docs/ops/data_process.md](docs/ops/data_process.md) | 历史：同步全流程 |
 | 爬虫 | [docs/ops/spider.md](docs/ops/spider.md) | 历史：反检测设计 |

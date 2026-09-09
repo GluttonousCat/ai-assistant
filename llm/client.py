@@ -81,7 +81,8 @@ class LLMClient:
         kw: Dict[str, Any] = {}
         mt = cfg.get("llm.max_tokens")
         if mt:
-            kw["max_tokens"] = int(mt)
+            # 容错: 兼容千分位写法 (config 曾出现 "32,768")
+            kw["max_tokens"] = int(str(mt).replace(",", "").strip())
         et = cfg.get(f"llm.models.{self.purpose}.enable_thinking")
         if et is None:
             et = cfg.get("llm.enable_thinking", True)

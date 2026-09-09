@@ -1,6 +1,6 @@
 # 产业链 Beta / 个股 Alpha Skill 设计
 
-> 模块：`beta_alpha/`（自治子系统：产业链挖掘 + 个股预期差）；Agent 会话入口 `.agents/skills/chain-beta`、`.agents/skills/stock-alpha`
+> 模块：`beta_alpha/`（自治子系统：产业链挖掘 + 个股预期差）；Agent 会话入口 `.agents/skills/beta-skill`、`.agents/skills/alpha-skill`
 > 更新：2026-09-03
 
 ## 一、系统设计
@@ -39,8 +39,8 @@ beta_alpha/                      自治模块（对标 range_trading/, 对外只
 ├── streaming.py                 SSE 编排 stream_chain/stream_alpha（api/finance.py 薄包装消费）
 ├── schema.py                    fin.chain_extract DDL（模块内 ensure）
 └── tests/                       pytest 11 例（模板结构/泛词黑名单/分档/单位归一/漂移判定）
-.agents/skills/chain-beta/       Agent 会话模块（SKILL.md 驱动 ZCode 等直接调用上述 CLI）
-.agents/skills/stock-alpha/      同上；references 存维护手册, scripts 存排查工具
+.agents/skills/beta-skill/       Agent 会话模块（SKILL.md 驱动 ZCode 等直接调用上述 CLI）
+.agents/skills/alpha-skill/      同上；references 存维护手册, scripts 存排查工具
 ```
 
 意图路由：`agent/intent.py` 新增 `chain`（关键词：产业链/链条/环节/上游/下游）与 `alpha`（预期差/分歧/拐点）；`agent/fin_graph.py` 路由到新节点；`api/finance.py` SSE 增加对应分支（stage: intent→chain/alpha→map/compute→data→delta→done）。

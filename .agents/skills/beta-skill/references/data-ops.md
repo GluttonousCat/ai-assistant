@@ -1,4 +1,4 @@
-# 数据维护手册（chain-beta 依赖的数据）
+# 数据维护手册（beta-skill 依赖的数据）
 
 ## 主营构成 fina_mainbz（映射层的硬证据来源）
 

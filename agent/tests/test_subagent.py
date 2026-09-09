@@ -59,8 +59,8 @@ def test_domains_cover_most_tools():
     covered = {t for d in DOMAIN_DEFS.values() for t in d["tools"]}
     uncovered = ({s.name for s in __import__("mcp").get_registry().specs()
                   if s.read_only} - covered)
-    # forge_chain 是写类不在 17 内; 目前唯一未分组的是 get_schema? -> entity 已含
-    assert uncovered == set() or uncovered <= {"get_schema"}, uncovered
+    # 允许不分组: 跨域综合工具 (如 build_company_profile 八板块画像) — 全循环主场
+    assert uncovered <= {"get_schema", "build_company_profile"}, uncovered
 
 
 # ---------- 域 manifest 与 escalate 伪工具 ----------

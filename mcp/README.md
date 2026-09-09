@@ -1,4 +1,4 @@
-# mcp/ — MCP 工具层 (17 只读 + 2 写类 = 19 个投研能力)
+# mcp/ — MCP 工具层 (18 只读 + 3 写类 = 21 个投研能力)
 
 > 2026-09-07 首版。目标: 把平台散落在 skills/tools/beta_alpha/range_trading 的原子能力
 > 统一包成 **带 JSON Schema 的标准工具**, 同时服务两条消费链路:
@@ -14,7 +14,7 @@
 mcp/
   spec.py       ToolSpec 规范 (一个工具长什么样, 见下节)
   registry.py   注册表: @REGISTRY.tool 装饰器 / call 统一入口 / 双协议导出
-  tools/        19 个工具实现 (17 只读 + forge_chain/fetch_annual_report 2 写类), 按 6 域分组
+  tools/        21 个工具实现 (18 只读 + forge_chain/fetch_annual_report/write_article 3 写类), 按 7 域分组
     _common.py        公共助手 (股票解析/DataFrame 序列化/日K加载)
     entity.py         3 个: 实体与知识
     financial.py      3 个: 财务与行情
@@ -27,7 +27,7 @@ mcp/
 ../../scripts/smoke_mcp_tools.py   全量冒烟 (fast/heavy 两档)
 ```
 
-## 二、工具清单 (17 只读 + 2 写类)
+## 二、工具清单 (18 只读 + 3 写类)
 
 | # | 域 | 工具 | 能力 | 底座 (既有代码) | 只读 |
 |---|----|------|------|----------------|------|
@@ -42,6 +42,8 @@ mcp/
 | 9 | report | `get_forecasts` | 盈利预测+分歧度 CV+上修/下修方向 | `report_forecast` + alpha 统计 | ✓ |
 | 10 | report | `extract_document` | 本地文档→文本 (扫描件自动视觉 OCR) | `report_extractor` + `pdf_vision` | ✓ |
 | 10b | report | `fetch_annual_report` | 巨潮定期报告拉取 (元数据入库+PDF下载) | `tools/cninfo` 爬虫 | ✗ |
+| 10c | report | `build_company_profile` | 上市公司画像 (八大板块数据组装) | `content/profile` | ✓ |
+| 10d | report | `write_article` | 公众号文章生成 (画像/研报综述) | `content/article` | ✗ |
 | 11 | chain | `list_chains` | 种子链清单 | `beta_alpha/analysis/chain_analysis` | ✓ |
 | 12 | chain | `analyze_chain` | 环节→标的映射+环节指数超额收益 | 同上 (`map_chain_members`) | ✓ |
 | 13 | chain | `forge_chain` | LLM 生成新链模板 (YAML 草稿, 不落盘) | `beta_alpha/forge` | ✗ |
@@ -106,7 +108,7 @@ def valuation_percentile(stock: str, years: int = 3) -> dict: ...
 from mcp.bridge import openai_tools, run_tool_call, system_prompt_hint
 from llm.client import get_agent_llm
 
-tools = openai_tools()          # 只读 17 个; openai_tools(include_write=True) 全量 19
+tools = openai_tools()          # 只读 18 个; openai_tools(include_write=True) 全量 21
 # … LLMClient 发起 tool_choice="auto" 的对话 (需在 client 层补 tools 参数透传) …
 env = run_tool_call(tc.name, tc.arguments_json)   # -> 统一信封
 ```
