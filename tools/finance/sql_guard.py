@@ -112,11 +112,11 @@ def validate_sql(sql: str, max_limit: int = 1000) -> SqlGuardResult:
 _KNOWN_TABLES = {
     "stock_basic", "trade_calendar", "daily", "adj_factor",
     "daily_basic", "sync_meta",
-    "income", "balancesheet", "cashflow", "fina_indicator",
+    "income", "balancesheet", "cashflow", "fina_indicator", "fina_mainbz",
     "report_meta", "report_forecast", "anomaly_rules", "anomaly_results",
     "query_log",
     # 视图
-    "v_financial_summary", "v_daily_valuation",
+    "v_financial_summary", "v_daily_valuation", "v_main_biz",
 }
 
 

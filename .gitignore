@@ -40,3 +40,12 @@ accounts.db
 
 # Notebooks
 *.ipynb
+
+# Personal files (resume prep, never commit)
+RESUME_QA.md
+
+# ZCode local session state
+.zcode/
+
+# Eval result artifacts (generated, not source)
+evals/results/

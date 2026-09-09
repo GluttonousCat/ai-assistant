@@ -18,14 +18,18 @@
 ## 2. 目录与分层契约（关键 30 秒）
 
 ```
-agent/      LangGraph 意图路由图 (fin_graph: query/compare→SQL, report→研报)
+agent/      LangGraph 意图路由图 (fin_graph: query/compare→SQL, report→研报, chain→产业链, alpha→预期差)
 skills/     fin_query(Text-to-SQL) / report(研报) / scanned_report(扫描件OCR)
-tools/      zsxq爬虫 / market行情同步 / finance(SQL guard, KB, pdf_vision视觉OCR)
+beta_alpha/ 产业链Beta+个股Alpha自治模块 (chains种子链/analysis映射与指数/skills编排/
+            streaming SSE/schema DDL/tests; 对话页两条链路+研报链抽取钩子全在这)
+.agents/skills/ ZCode技能模块 (chain-beta/stock-alpha: SKILL.md 驱动会话内直接调用)
+tools/      zsxq爬虫 / market行情同步(sync_mainbz主营构成) / finance(SQL guard, KB, pdf_vision视觉OCR)
 storage/    pg.py(连接池) / sqlite(爬虫) / pg_schema.py(全部DDL,改表先看这)
 api/        路由+鉴权中间件(JWT) / ws / finance(SSE流式) / reports / auth
 core/       config(.env+yaml) / security(JWT+bcrypt) / scheduler(Tushare 21:00)
             zsxq_scheduler(爬虫 07:00/23:00) / lifespan
-web/src/    Login / Platform(侧边栏壳+角色门控) / AgentChat(SSE) / Reports / UserAdmin
+web/src/    Login / Platform(侧边栏壳+角色门控) / AgentChat(SSE) / ChainView(产业链页)
+            Reports / UserAdmin; Markdownish 共享渲染器
 scripts/    同步与一次性脚本(sync_zxsq_to_pg, merge_report_duplicates, ...)
 range_trading/  量化子系统(特征/regime状态机/扫描/回测, 自带tests)
 ```
@@ -45,9 +49,10 @@ DB 实时角色校验）、`storage/pg.py`（PgClient 是上下文管理器，�
 
 ```
 07:00/23:00 调度 → 爬话题 + 逐个下载PDF(反检测,60-120s/个)
+  ※ 中文翻译版(文件名"中文版-"等, is_chinese_translated)下载/入库层直接过滤, 保留英文原版
   → 每下载1个立即(逐篇流水, 下载完即"已分析"前端可用):
-     sync_zsxq_to_pg 入库(返回新report_id) → LLM Analysis(仅文件名→标题/机构/标的/行业/地区/市场)
-     → 深度提取(正文→评级/盈利预测/tags, 单篇) → merge_report_duplicates 去重(txt并入PDF)
+     sync_zxsq_to_pg 入库(返回新report_id) → LLM Analysis(仅文件名→标题/机构/标的/行业/地区/市场)
+     → 深度提取(正文→评级/盈利预测/tags, 单篇, 输出一律中文) → merge_report_duplicates 去重(txt并入PDF)
   ※ 深度提取也可由研报中心「AI 分析」按钮 SSE 流式触发(弹窗展示 Agent 流程+模型输出,
     POST /api/reports/{id}/analyze/stream; 与批量链路共用 _apply_extract_result)
   ※ 轮末批量提取(限额8/15篇)与 analyze_pending 仅作兜底清积压, 不在主链路上
@@ -59,8 +64,10 @@ DB 实时角色校验）、`storage/pg.py`（PgClient 是上下文管理器，�
 
 ## 4. 模型路由（改模型只动 config.yaml）
 
-`config.yaml llm.models.<用途>`：default/agent/extract/analysis=deepseek-v4-flash-0731（**必须
-`enable_thinking=False`**，否则 content 为空），vision=qwen3.8-flash（deepseek 不收图片）。
+`config.yaml llm.models.<用途>`：default/agent/extract/analysis=deepseek-v4-flash-0731，
+vision=qwen3.8-flash（deepseek 不收图片）。**思考开关由 `llm.enable_thinking` 全局控制
+（当前 true=最强思考；vision 用途已覆盖关闭）；`llm.max_tokens` 必须给足（16384，思考与
+正文共用预算）——两者由 `llm/client.py` 统一注入，业务代码禁止传 `enable_thinking`**。
 代码用 `get_agent_llm()/get_extract_llm()/get_vision_llm()` 工厂，禁止硬编码模型名。详见
 [docs/agents/llm_models.md](docs/agents/llm_models.md)。
 
@@ -76,13 +83,15 @@ DB 实时角色校验）、`storage/pg.py`（PgClient 是上下文管理器，�
 
 | 坑 | 规则 |
 |----|------|
-| deepseek 思考吃光 token | 一律 `enable_thinking=False` |
+| deepseek 思考吃光 token（content 空） | 根因是 **max_tokens 太小**而非思考本身：开思考必须配足 `llm.max_tokens`（16384）；思考开关 config 统一控制，业务代码禁止硬编码 |
 | DDL 在事务内锁死整表 | `_ensure_columns` 用独立连接+缺才 ALTER（曾致全站卡死） |
 | 孤儿控制台 stdout 阻塞事件循环 | 服务输出必须重定向文件，bat 用 tail 看 |
 | 同步重 IO 在 async 上下文 | 用 `asyncio.to_thread`（21:00 同步曾卡死站点） |
 | 水位线同步漏数据 | 下载完成顺序≠file_id 顺序，同步用存在性检查而非纯水位线 |
 | bat 中文断句 | bat 内容纯 ASCII；延时用 `ping` 不用 `timeout` |
 | LLM 提取词表漂移 | market/region 必须词表约束+旧值归一化映射 |
+| LLM 输出语言漂移（英文原版→英文输出） | prompt 显式约束「所有文本字段一律简体中文，原文英文必须翻译」 |
+| 中文版研报与原版重复 | 下载/入库层过滤 `is_chinese_translated`（保留英文原版，无原版时中文版顶上） |
 | 地区敏感词 | 文档一律用代号 **TW / HK**（如 TW股/HK股），不用全称 |
 | zip 对齐错配 | 多源数据按键(dict)匹配，绝不按位置 zip（range_trading 回测曾全错） |
 | LLM prompt 花括号 | `.format()` 模板里的 JSON 花括号必须转义 `{{}}`（曾致 KeyError） |
@@ -94,12 +103,15 @@ DB 实时角色校验）、`storage/pg.py`（PgClient 是上下文管理器，�
    独立连接执行，绝不放在业务事务里
 2. **加 API**：想清楚挂在哪个 router；除登录/注册外自动被鉴权中间件覆盖；管理类加
    `require_admin`；重逻辑 `asyncio.to_thread`
-3. **加 LLM 调用**：用 `llm/client.py` 工厂（purpose 路由），deepseek 关思考；JSON 输出的
-   prompt 用 `{{}}` 转义；解析用宽容提取（剥 ```json 块）
+3. **加 LLM 调用**：用 `llm/client.py` 工厂（purpose 路由），思考/max_tokens 由 client
+   统一注入（业务层不传）；JSON 输出的 prompt 用 `{{}}` 转义；解析用宽容提取（剥 ```json 块）；
+   面向用户的输出在 prompt 里显式要求中文
 4. **加前端页**：`web/src/` 下新组件 + `Platform.jsx` NAV 注册（注意 adminOnly/superOnly）；
    改完必须 `npm run build`（后端托管 dist，不构建不生效）
 5. **验证**：改研报链路后跑 `python -m tools.finance.report_meta_analysis` 单篇验证；
-   改量化跑 `pytest range_trading/tests`；改完 git commit（消息带日期与模块）
+   改量化跑 `pytest range_trading/tests`；改 beta_alpha 跑 `pytest beta_alpha/tests`
+   （改链模板另跑 `python -m beta_alpha.analysis.chain_analysis <chain_id>`）；
+   改完 git commit（消息带日期与模块）
 
 ## 8. 文档地图（深入阅读）
 
@@ -111,6 +123,9 @@ DB 实时角色校验）、`storage/pg.py`（PgClient 是上下文管理器，�
 | 前端框架 | [docs/frontend/framework_theme.md](docs/frontend/framework_theme.md) | 品牌/深黑暗棕主题/桌面入口 |
 | 模型体系 | [docs/agents/llm_models.md](docs/agents/llm_models.md) | 用途路由/两个模型的坑 |
 | 扫描件 Agent | [docs/agents/scanned_report_agent.md](docs/agents/scanned_report_agent.md) | PDF→PNG→视觉OCR 解耦设计 |
+| MCP 工具层 | [mcp/README.md](mcp/README.md) | 18 工具/ToolSpec 规范/中文description约定/stdio 服务(默认只读) |
+| Agent 对话循环 | [docs/agents/agent_loop.md](docs/agents/agent_loop.md) | LLM 自主决策+工具循环/多轮追问/累计口径知识/沙盒；新入口 `/api/v1/agent/stream` |
+| Beta/Alpha Skill | [docs/agents/chain_beta_skill.md](docs/agents/chain_beta_skill.md) | 产业链种子链/三源映射/环节指数/预期差四象限；Agent 会话入口在 `.agents/skills/chain-beta`、`.agents/skills/stock-alpha` |
 | 安全 | [docs/ops/security.md](docs/ops/security.md) | 分层防护/事件审计/加固清单 |
 | 数据处理 | [docs/ops/data_process.md](docs/ops/data_process.md) | 历史：同步全流程 |
 | 爬虫 | [docs/ops/spider.md](docs/ops/spider.md) | 历史：反检测设计 |

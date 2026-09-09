@@ -178,7 +178,7 @@ table.grid tbody td:last-child { border-right: 1px solid var(--border); border-r
 .modal-head h2 { margin: 0; font-size: 20px; }
 .modal-head .code { color: var(--text-dim); font-size: 14px; }
 .modal-close { margin-left: auto; background: var(--bg-3); border: 1px solid var(--border); color: var(--text); border-radius: 8px; width: 34px; height: 34px; cursor: pointer; font-size: 16px; }
-.chart-box { height: 380px; margin: 14px 0; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+.chart-box { height: 480px; margin: 14px 0; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
 .state-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
 .state-item { background: var(--bg-3); border-radius: 10px; padding: 10px 12px; }
 .state-item .k { font-size: 11px; color: var(--text-dim); margin-bottom: 4px; }
@@ -550,6 +550,10 @@ table.grid tbody td:last-child { border-right: 1px solid var(--border); border-r
 .agent-step.ok .agent-dot {
   background: rgba(74, 222, 128, 0.12); color: #4ade80;
 }
+.agent-step.failed { color: var(--text-dim); }
+.agent-step.failed .agent-dot {
+  background: rgba(244, 63, 94, 0.12); color: #fb7185;
+}
 /* 模型原始输出 (流式滚动区) */
 .stream-out {
   white-space: pre-wrap; word-break: break-word;
@@ -641,3 +645,145 @@ table.grid tbody td:last-child { border-right: 1px solid var(--border); border-r
 .pager-jump input::-webkit-inner-spin-button { -webkit-appearance: none; }
 .pager-jump input:focus { border-color: var(--accent); }
 .pager-jump .btn { padding: 5px 14px; }
+
+/* ---------- 产业链页 (ChainView) ---------- */
+.chain-page {
+  display: flex; flex-direction: column; height: 100%;
+  max-width: 1080px; margin: 0 auto; padding: 18px 22px;
+  overflow-y: auto;
+}
+.chain-head { flex: none; margin-bottom: 14px; }
+.chain-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chain-chip {
+  border: 1px solid var(--border); background: var(--bg-2);
+  color: var(--text-dim); border-radius: 999px; padding: 6px 16px;
+  font-size: 13px; cursor: pointer; transition: all .15s;
+}
+.chain-chip:hover { border-color: var(--accent-deep); color: var(--text); }
+.chain-chip.on {
+  background: rgba(173, 94, 72, 0.16); border-color: var(--accent);
+  color: var(--accent-soft); font-weight: 600;
+}
+.chain-sub { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; font-size: 12.5px; }
+.chain-desc { color: var(--text); }
+.chain-drivers { color: var(--text-dim); }
+.chain-toolbar {
+  display: flex; align-items: center; gap: 10px; margin-top: 12px;
+  font-size: 12px; color: var(--text-dim);
+}
+.chain-toolbar .spacer { flex: 1; }
+.btn.sm { padding: 3px 10px; font-size: 12px; }
+.chain-error {
+  background: rgba(244, 63, 94, 0.08); border: 1px solid rgba(244, 63, 94, 0.3);
+  border-radius: 10px; padding: 10px 14px; font-size: 13px; margin-bottom: 12px;
+}
+.chain-loading {
+  display: flex; align-items: center; gap: 10px; justify-content: center;
+  color: var(--text-dim); font-size: 13px; padding: 60px 0;
+}
+.chain-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 12px;
+}
+.chain-card {
+  background: var(--bg-2); border: 1px solid var(--border);
+  border-radius: 14px; padding: 14px 16px; transition: border-color .15s;
+}
+.chain-card:hover { border-color: var(--accent-deep); }
+.chain-card.open { border-color: var(--accent); grid-column: 1 / -1; }
+.chain-card-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 8px; cursor: pointer;
+}
+.chain-card-title { font-size: 14.5px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.chain-tier {
+  font-size: 11px; font-weight: 400; color: var(--text-dim);
+  border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px;
+}
+.chain-excess { text-align: right; line-height: 1.15; }
+.chain-excess b { font-size: 20px; font-weight: 700; }
+.chain-excess span { display: block; font-size: 10.5px; color: var(--text-dim); }
+.chain-excess.up b, .up { color: var(--up); }
+.chain-excess.down b, .down { color: var(--down); }
+.chain-excess.na b, .na { color: var(--text-dim); }
+.chain-metrics {
+  display: flex; flex-wrap: wrap; gap: 12px; margin-top: 10px;
+  font-size: 12px; color: var(--text-dim);
+}
+.chain-metrics b { color: var(--text); font-weight: 600; margin-left: 2px; }
+.chain-members { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.member-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  border: 1px solid var(--border); background: var(--bg-3);
+  color: var(--text); border-radius: 8px; padding: 3px 9px;
+  font-size: 12px; cursor: pointer; transition: all .15s;
+}
+.member-chip:hover { border-color: var(--accent); color: var(--accent-soft); }
+.member-chip em { font-style: normal; font-size: 10.5px; color: var(--text-dim); }
+.member-chip.t-strong { border-color: rgba(173, 94, 72, 0.55); }
+.member-chip.t-strong em { color: var(--accent-soft); }
+.member-chip.t-mid { border-color: rgba(176, 137, 104, 0.4); }
+.chain-member-table { margin-top: 12px; font-size: 12.5px; }
+.chain-member-table .evi { color: var(--text-dim); font-size: 11.5px; max-width: 380px; }
+.link-like {
+  background: none; border: none; padding: 0; cursor: pointer;
+  color: var(--text); font-size: inherit;
+}
+.link-like:hover { color: var(--accent-soft); text-decoration: underline; }
+.tier-dot { font-size: 11px; border-radius: 6px; padding: 1px 7px; }
+.tier-dot.t-strong { background: rgba(173, 94, 72, 0.2); color: var(--accent-soft); }
+.tier-dot.t-mid { background: rgba(176, 137, 104, 0.16); color: var(--purple); }
+.tier-dot.t-weak { background: var(--bg-3); color: var(--text-dim); }
+.chat-avatar.sm { width: 22px; height: 22px; font-size: 12px; }
+.chain-ai { margin-top: 16px; }
+.chain-ai-head {
+  display: flex; align-items: center; gap: 8px; font-size: 13px;
+  color: var(--text-dim); margin-bottom: 8px;
+}
+.chain-foot { margin: 16px 0 8px; font-size: 11.5px; line-height: 1.8; }
+.text-dim { color: var(--text-dim); }
+
+/* ---------- 新建链弹窗 (ForgeModal) ---------- */
+.forge-overlay {
+  position: fixed; inset: 0; z-index: 60;
+  background: rgba(0, 0, 0, 0.55); backdrop-filter: blur(2px);
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+}
+.forge-panel {
+  width: 860px; max-width: 96vw; max-height: 88vh; overflow-y: auto;
+  background: var(--bg-2); border: 1px solid var(--border); border-radius: 16px;
+  padding: 18px 20px; box-shadow: var(--shadow);
+  display: flex; flex-direction: column; gap: 12px;
+}
+.forge-head { display: flex; align-items: center; gap: 12px; font-size: 15px; }
+.forge-head .text-dim { flex: 1; font-size: 12px; }
+.forge-theme { display: flex; gap: 8px; }
+.forge-theme input {
+  flex: 1; background: var(--bg); border: 1px solid var(--border);
+  border-radius: 10px; padding: 9px 12px; color: var(--text); font-size: 13.5px;
+}
+.forge-theme input:focus { outline: none; border-color: var(--accent); }
+.forge-yaml {
+  width: 100%; min-height: 300px; resize: vertical;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 12px;
+  color: var(--text); padding: 12px 14px;
+  font-family: Consolas, 'Courier New', monospace; font-size: 12.5px; line-height: 1.65;
+}
+.forge-yaml:focus { outline: none; border-color: var(--accent); }
+.forge-report {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 12px;
+  padding: 10px 14px; display: flex; flex-direction: column; gap: 6px;
+}
+.forge-report-head { font-size: 12.5px; color: var(--text-dim); }
+.forge-report-node { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; font-size: 12px; }
+.forge-node-name { color: var(--text); font-weight: 600; margin-right: 4px; }
+.forge-node-name em { font-style: normal; font-weight: 400; color: var(--text-dim); font-size: 11px; }
+.forge-node-name.miss { color: var(--down); }
+.kw-chip {
+  border-radius: 6px; padding: 1px 7px; font-size: 11px;
+  border: 1px solid var(--border);
+}
+.kw-chip.hit { background: rgba(16, 185, 129, 0.10); color: var(--down); border-color: rgba(16, 185, 129, 0.3); }
+.kw-chip.miss { background: rgba(244, 63, 94, 0.08); color: var(--up); border-color: rgba(244, 63, 94, 0.3); opacity: .85; }
+.forge-actions { display: flex; align-items: center; gap: 12px; font-size: 12px; }
+.forge-actions .text-dim { flex: 1; }

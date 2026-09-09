@@ -69,6 +69,15 @@ export default function Reports() {
     }
   }
 
+  // 下载研报原文 PDF (本地已下载文件, 经鉴权 fetch blob 保存)
+  async function downloadOriginal(d) {
+    try {
+      await platformApi.downloadReport(d.report_id)
+    } catch (e) {
+      alert(`下载失败: ${e.message}`)
+    }
+  }
+
   // 流式输出时贴底跟随
   useEffect(() => {
     const el = streamBoxRef.current
@@ -235,6 +244,12 @@ export default function Reports() {
                 <div className="modal-head">
                   <h2 style={{ fontSize: 17 }}>{detail.title || `研报 #${detail.report_id}`}</h2>
                   <span className="code">{detail.ts_code || detail.symbols || '未识别标的'}</span>
+                  {detail.file_path && (
+                    <button className="btn ghost" style={{ padding: '5px 14px', marginLeft: 'auto' }}
+                      onClick={() => downloadOriginal(detail)}>
+                      ⬇ 下载原文
+                    </button>
+                  )}
                   <button className="modal-close" onClick={() => setDetail(null)}>×</button>
                 </div>
                 <div className="report-meta">

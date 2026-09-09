@@ -1,0 +1,21 @@
+# 半导体国产化产业链 (种子模板)
+chain_id: semiconductor
+name: 半导体国产化产业链
+desc: 半导体设备/材料/零部件/EDA/设计/制造/封测的国产替代
+drivers: [国产替代, 先进制程受限, 成熟产能扩张]
+nodes:
+  - {id: equipment, name: 半导体设备, keywords: [半导体设备, 光刻, 刻蚀, 薄膜沉积, 离子注入, 涂胶显影, 清洗设备, 量测, 检测设备], sw_l2: [专用设备]}
+  - {id: parts, name: 设备零部件, keywords: [射频电源, 静电卡盘, 精密结构件, 真空阀, 石英件], sw_l2: [通用设备, 专用设备]}
+  - {id: materials, name: 半导体材料, keywords: [光刻胶, 电子特气, 湿电子化学品, 硅片, 靶材, 抛光液, 抛光垫, 前驱体, 掩膜版], sw_l2: [电子化学品]}
+  - {id: eda, name: EDA/IP, keywords: [EDA, 芯片设计软件, IP授权]}
+  - {id: design, name: 芯片设计, keywords: [芯片设计, IC设计, 芯片研发]}
+  - {id: foundry, name: 晶圆代工, keywords: [晶圆代工, 晶圆制造, 晶圆]}
+  - {id: osat, name: 封装测试, keywords: [封装测试, 封测, 先进封装, 测试服务]}
+edges:
+  - [parts, equipment]
+  - [equipment, foundry]
+  - [materials, foundry]
+  - [eda, design]
+  - [design, foundry]
+  - [foundry, osat]
+  - [equipment, osat]

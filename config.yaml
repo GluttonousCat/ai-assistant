@@ -14,6 +14,8 @@ app:
 # 各环节按"用途"取模型; 未配置的用途回落 default。后续分流只需改这里, 不动代码。
 # 每个用途可单独覆盖 model / api_key / base_url (或环境变量 LLM_<用途>_API_KEY / LLM_<用途>_BASE_URL)。
 llm:
+  enable_thinking: true          # 思考开关全局默认: 开启最强思考 (深推理)
+  max_tokens: 16384              # 输出预算: 思考与正文共用, 必须给足 (小预算会思考耗尽致 content 空)
   models:
     default:
       model: deepseek-v4-flash-0731   # 文本兜底 (与 .env LLM_MODEL 一致, 兼容其覆盖)
@@ -21,14 +23,18 @@ llm:
       model: deepseek-v4-flash-0731
     extract:                      # 研报结构化提取 (文件名元数据 / 长文本 JSON)
       model: deepseek-v4-flash-0731
+    nl2sql:                       # 快车道 NL2SQL: 结构化短输出, 深思考反而拖慢 (实测4~27s)
+      model: deepseek-v4-flash-0731
+      enable_thinking: false      # 秒级生成; 只产出一条 SELECT
+      max_tokens: 2048
     analysis:                     # 轻量元数据分析 (LLM Analysis)
       model: deepseek-v4-flash-0731
     vision:                       # 多模态: 扫描件 PDF 逐页识别 / 图片理解
       model: qwen3.8-flash        # deepseek 不接收图片输入, 视觉用途必须走 qwen 多模态
+      enable_thinking: false      # OCR 逐页高频调用, 关思考省时省钱
     embedding:                    # 向量 (预留)
       model: text-embedding-v3
   temperature: 0.7
-  max_tokens: 4096
   timeout: 60
 
 # 知识星球爬虫默认参数

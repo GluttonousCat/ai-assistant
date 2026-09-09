@@ -1,19 +1,23 @@
 import { useEffect, useRef, useState } from 'react'
 import { platformApi } from './platformApi'
 import ResultChart, { buildChartSpec, COL_LABELS, parseNum, fmtDateCol } from './ResultChart'
+import Markdownish from './Markdownish'
 
 const EXAMPLES = [
-  { icon: '📊', text: '查询贵州茅台的营收' },
-  { icon: '📊', text: '看看宁德时代的毛利率' },
-  { icon: '📄', text: '解读中芯国际的研报' },
-  { icon: '🪙', text: '看看黄金的观点' },
+  { icon: '🤖', text: '中际旭创2025年报净利润多少？' },
+  { icon: '🔗', text: 'AI算力产业链有哪些环节' },
+  { icon: '🎯', text: '中际旭创的预期差' },
+  { icon: '🛡️', text: '中际旭创有没有财务风险' },
 ]
 
 // 回答类型徽章: SSE data 事件携带 intent, 前端按类型显示图标
 const INTENT_META = {
+  agent: { icon: '🤖', label: 'Agent' },
   query: { icon: '📊', label: '财务数据' },
   compare: { icon: '⚖️', label: '对比分析' },
   report: { icon: '📄', label: '研报解读' },
+  chain: { icon: '🔗', label: '产业链' },
+  alpha: { icon: '🎯', label: '预期差' },
 }
 
 const NAME_COLS = ['stock_name', 'name']
@@ -50,7 +54,7 @@ function resultView(m) {
   return { caption, columns: show }
 }
 
-// Agent 对话: 自然语言 -> 财务查询 / 研报解读 (SSE 流式输出)
+// Agent 对话: 自然语言 -> Agent 自主决策+工具循环 (SSE 流式输出, 支持多轮追问)
 export default function AgentChat() {
   const [messages, setMessages] = useState([]) // {role, text, data?, columns?, stage?, intent?}
   const [input, setInput] = useState('')
@@ -58,6 +62,21 @@ export default function AgentChat() {
   const [atBottom, setAtBottom] = useState(true)
   const scrollRef = useRef(null)
   const stickRef = useRef(true) // 用户贴底时跟随新内容, 上翻查看时不打扰
+  // 会话 ID: 每次进入页面生成一次, 全程携带 — 服务端据此注入多轮历史 (追问可省略主语)
+  const sessionRef = useRef(null)
+  if (!sessionRef.current) {
+    sessionRef.current = 'web-' + (crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`)
+  }
+
+  // 跨页联动: 其他页面 (如产业链页标的 chip) 写入 chat:pending 后跳转过来, 自动发出提问
+  useEffect(() => {
+    const pending = sessionStorage.getItem('chat:pending')
+    if (pending) {
+      sessionStorage.removeItem('chat:pending')
+      send(pending)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const scrollToBottom = (smooth = false) => {
     const el = scrollRef.current
@@ -102,30 +121,59 @@ export default function AgentChat() {
     }
 
     try {
-      await platformApi.chatStream(q, (ev) => {
+      await platformApi.agentStream(q, sessionRef.current, (ev) => {
         if (ev.type === 'stage') {
           updateLast((msg) => {
             // 首个 stage "意图识别: X" 提前确定回答类型 (徽章即时显示)
             const im = /^意图识别:\s*(\w+)/.exec(ev.message || '')
-            return { ...msg, stage: ev.message, intent: im ? im[1] : msg.intent }
+            // 步骤卡片: 已有步骤标 ok, 新步骤 active
+            const stages = [
+              ...(msg.stages || []).map((s) => ({ ...s, ok: true })),
+              { message: ev.message, ok: false },
+            ]
+            return { ...msg, stage: ev.message, stages, intent: im ? im[1] : msg.intent }
+          })
+        } else if (ev.type === 'tool_call') {
+          // 工具执行完: 给最后一个步骤补上耗时/行数, 失败标红
+          updateLast((msg) => {
+            const stages = (msg.stages || []).map((s, j, arr) => (
+              j === arr.length - 1
+                ? { ...s, done: true, meta: ev.ok ? `${ev.elapsed_ms}ms${ev.rows ? ` · ${ev.rows}行` : ''}` : '失败', failed: !ev.ok }
+                : s
+            ))
+            return { ...msg, stages }
           })
         } else if (ev.type === 'data') {
+          // 表格型结果累积为卡片流 (复合回答可能多张图表, 保留最近 4 张)
           updateLast((msg) => ({
             ...msg,
-            intent: ev.intent || msg.intent,
-            data: ev.data, columns: ev.columns, rows: ev.rows,
+            intent: msg.intent || ev.intent,
+            tables: [...(msg.tables || []),
+              { data: ev.data, columns: ev.columns, rows: ev.rows }].slice(-4),
             stage: '',
+            stages: (msg.stages || []).map((s) => ({ ...s, ok: true })),
           }))
         } else if (ev.type === 'delta') {
-          updateLast((msg) => ({ ...msg, text: msg.text + ev.text, stage: '' }))
+          updateLast((msg) => ({
+            ...msg, text: msg.text + ev.text, stage: '',
+            stages: msg.stages?.length
+              ? msg.stages.map((s, j) => ({ ...s, ok: j < msg.stages.length - 1 }))
+              : msg.stages,
+          }))
         } else if (ev.type === 'error') {
-          updateLast((msg) => ({ ...msg, text: `❌ ${ev.message}`, stage: '' }))
+          updateLast((msg) => ({
+            ...msg, text: `❌ ${ev.message}`, stage: '',
+            stages: (msg.stages || []).map((s) => ({ ...s, ok: true })),
+          }))
         }
       })
     } catch (err) {
       updateLast((msg) => ({ ...msg, text: `❌ ${err.message}`, stage: '' }))
     } finally {
-      updateLast((msg) => ({ ...msg, stage: '' }))
+      updateLast((msg) => ({
+        ...msg, stage: '',
+        stages: (msg.stages || []).map((s) => ({ ...s, ok: true })),
+      }))
       setBusy(false)
     }
   }
@@ -136,8 +184,8 @@ export default function AgentChat() {
         {messages.length === 0 && !busy && (
           <div className="chat-empty">
             <div className="chat-empty-icon">✦</div>
-            <h3>Alpha Radar · 投研 Agent</h3>
-            <p>自然语言查询财务数据 · 解读知识星球研报 · 数据与观点一站获取</p>
+            <h3>Alpha Radar · Agent</h3>
+            <p>随意问 · 财务数据 / 研报观点 / 产业链 / 量化信号 · 支持多轮追问</p>
             <div className="chat-examples">
               {EXAMPLES.map((ex) => (
                 <button key={ex.text} onClick={() => send(ex.text)}>
@@ -150,7 +198,14 @@ export default function AgentChat() {
 
         {messages.map((m, i) => {
           const streaming = busy && i === messages.length - 1 && m.role === 'assistant'
-          const view = m.role === 'assistant' && m.data?.length ? resultView(m) : null
+          // 结果卡片流: agent 复合回答可能产生多张表格/图表 (保留最近 4 张)
+          const blocks = m.role === 'assistant'
+            ? (m.tables?.length
+                ? m.tables
+                : (m.data?.length ? [{ data: m.data, columns: m.columns }] : []))
+                .map((tb) => ({ tb, view: resultView(tb) }))
+                .filter((b) => b.view)
+            : []
           return (
             <div key={i} className={`chat-msg ${m.role}`}>
               {m.role === 'assistant' ? (
@@ -163,11 +218,20 @@ export default function AgentChat() {
                         {INTENT_META[m.intent].label}
                       </div>
                     )}
-                    {m.stage && (
+                    {m.stages?.length > 0 ? (
+                      <div className="agent-steps">
+                        {m.stages.map((s, j) => (
+                          <div key={j} className={`agent-step ${s.failed ? 'failed' : s.ok ? 'ok' : 'active'}`}>
+                            <span className="agent-dot">{s.ok ? '✓' : s.failed ? '⚠' : ''}</span>
+                            {s.message}{s.meta ? ` (${s.meta})` : ''}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (m.stage && (
                       <div className="chat-stage">
                         <span className="spinner-dot" /> {m.stage}
                       </div>
-                    )}
+                    ))}
                     {(m.text || !m.stage) && (
                       <div className={`chat-bubble md${streaming ? ' streaming' : ''}`}>
                         {m.text ? <Markdownish text={m.text} /> : (
@@ -175,8 +239,8 @@ export default function AgentChat() {
                         )}
                       </div>
                     )}
-                    {view && (
-                      <div className="chat-table-block">
+                    {blocks.map(({ tb, view }, k) => (
+                      <div className="chat-table-block" key={k}>
                         {view.caption && <div className="chat-table-caption">{view.caption}</div>}
                         {view.chart ? (
                           <ResultChart spec={view.chart} />
@@ -187,7 +251,7 @@ export default function AgentChat() {
                                 <tr>{view.columns.map((c) => <th key={c}>{COL_LABELS[c] || c}</th>)}</tr>
                               </thead>
                               <tbody>
-                                {m.data.map((row, j) => (
+                                {tb.data.map((row, j) => (
                                   <tr key={j}>
                                     {view.columns.map((c) => (
                                       <td key={c}>
@@ -203,7 +267,7 @@ export default function AgentChat() {
                           </div>
                         )}
                       </div>
-                    )}
+                    ))}
                   </div>
                 </>
               ) : (
@@ -225,36 +289,12 @@ export default function AgentChat() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && send()}
-            placeholder="例如: 解读中芯国际的研报 / 查询平安银行的净利润"
+            placeholder="随意问, 例如: 中际旭创最近三年净利润 / 环比下降了吗, 数据对吗"
             disabled={busy}
           />
           <button className="btn" onClick={() => send()} disabled={busy || !input.trim()}>发送</button>
         </div>
       </div>
     </div>
-  )
-}
-
-// 轻量 markdown: 标题/加粗/列表/段落
-function Markdownish({ text }) {
-  const lines = (text || '').split('\n')
-  return lines.map((line, i) => {
-    const t = line.trim()
-    if (!t) return <div key={i} style={{ height: 8 }} />
-    if (t.startsWith('### ')) return <h4 key={i}>{inline(t.slice(4))}</h4>
-    if (t.startsWith('## ')) return <h3 key={i}>{inline(t.slice(3))}</h3>
-    if (t.startsWith('# ')) return <h3 key={i}>{inline(t.slice(2))}</h3>
-    if (/^[-•*]\s+/.test(t)) return <div key={i} className="md-li">{inline(t.replace(/^[-•*]\s+/, ''))}</div>
-    if (/^\d+[.、)]\s+/.test(t)) return <div key={i} className="md-li">{inline(t)}</div>
-    return <p key={i}>{inline(t)}</p>
-  })
-}
-
-function inline(t) {
-  const parts = t.split(/(\*\*[^*]+\*\*)/g)
-  return parts.map((p, i) =>
-    p.startsWith('**') && p.endsWith('**')
-      ? <b key={i}>{p.slice(2, -2)}</b>
-      : <span key={i}>{p}</span>
   )
 }

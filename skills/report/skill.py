@@ -15,11 +15,13 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from typing import Any, Dict, Iterator, List, Optional
 
 from core.config import get_config
 from core.logger import get_logger
 from storage.pg import PgClient
+from utils.helpers import normalize_org_name
 from skills.base import BaseSkill, SkillContext
 from skills.report.prompts import (
     REPORT_EXTRACT_PROMPT, REPORT_QA_PROMPT, REPORT_SUMMARY_PROMPT,
@@ -94,6 +96,11 @@ _DDL_ANALYSIS_STATEMENTS = [
      "report_forecast", "idx_report_forecast_symbol"),
 ]
 # analysis_status: none / done / failed / no_llm
+
+# 视觉 OCR 并发上限: 本地已有的积压文件会在下载循环里秒过 (无网络请求无睡眠),
+# 瞬间起十几个 OCR 线程有打爆 qwen 网关的风险 — 信号量限流, 超出的排队等待
+# (排队期间状态已是 pending_ocr, 幂等守卫保证不会被重复提交)
+_OCR_SEMAPHORE = threading.BoundedSemaphore(4)
 
 _METRIC_WHITELIST = {"revenue", "net_profit", "eps", "roe", "target_price", "gross_margin"}
 _RATING_WHITELIST = {"买入", "增持", "推荐", "持有", "中性", "卖出",
@@ -170,17 +177,22 @@ class ReportSkill(BaseSkill):
         def _job():
             from tools.finance.pdf_vision import ocr_pdf
             try:
-                text = ocr_pdf(path, max_pages=10)
+                with _OCR_SEMAPHORE:  # 并发限流: 同时最多 4 册 OCR
+                    text = ocr_pdf(path, max_pages=10)
                 from storage.pg import PgClient as _Pg
                 ok = False
                 with _Pg() as _pg:
                     if text:
-                        _pg.execute(
+                        n = _pg.execute(
                             "UPDATE fin.report_meta SET content_text=%s, content_chars=%s, "
                             "extraction_status='extracted' WHERE report_id=%s",
                             (text, len(text), rid))
-                        logger.info(f"图片型 PDF 视觉识别完成 #{rid}: {len(text)} 字")
-                        ok = True
+                        if n == 0:
+                            # OCR 期间记录被 merge 判重删除 —— 丢弃, 不接续提取
+                            logger.info(f"#{rid} OCR 完成但记录已被去重删除, 结果丢弃")
+                        else:
+                            logger.info(f"图片型 PDF 视觉识别完成 #{rid}: {len(text)} 字")
+                            ok = True
                     else:
                         _pg.execute(
                             "UPDATE fin.report_meta SET extraction_status='failed', "
@@ -316,10 +328,9 @@ class ReportSkill(BaseSkill):
                       message="LLM 结构化提取中 (评级 / 标的 / 盈利预测 / tags)…")
             chunks: List[str] = []
             try:
-                # deepseek-v4 为思考模型: 流式同样必须关思考
+                # 思考开关由 LLMClient 按 config 统一注入 (reasoning 块自动跳过, 只流出正文)
                 for chunk in self._extract_llm().stream(
-                        REPORT_EXTRACT_PROMPT.format(report_text=text),
-                        extra_body={"enable_thinking": False}):
+                        REPORT_EXTRACT_PROMPT.format(report_text=text)):
                     chunks.append(chunk)
                     yield _ev("delta", text=chunk)
             except Exception as e:
@@ -337,9 +348,15 @@ class ReportSkill(BaseSkill):
                 return
 
             summary = self._apply_extract_result(pg, row, data)
+            if summary is None:
+                # 提取期间记录被去重合并删除
+                yield _ev("error", message="提取完成, 但该研报在处理期间被去重合并移除 "
+                                           "(同话题保留了另一条记录), 本次结果已丢弃")
+                return
             yield _ev("stage", stage="save",
                       message=f"结果入库: fin.report_meta + fin.report_forecast "
                               f"(盈利预测 {summary['forecast_count']} 条)")
+            self._spawn_chain_extract(row["report_id"])
             yield _ev("data", data=summary)
 
         yield _ev("done")
@@ -352,10 +369,9 @@ class ReportSkill(BaseSkill):
                 (row["report_id"],))
             return
 
-        # deepseek-v4 为思考模型: 必须关思考, 否则思考吃光 token 且 content 为空
+        # 思考开关与 max_tokens 由 LLMClient 按 config 统一注入 (当前全局开启最强思考)
         raw = self._extract_llm().invoke(
-            REPORT_EXTRACT_PROMPT.format(report_text=text),
-            extra_body={"enable_thinking": False})
+            REPORT_EXTRACT_PROMPT.format(report_text=text))
         data = self._parse_json(raw)
         if data is None:
             pg.execute(
@@ -364,6 +380,16 @@ class ReportSkill(BaseSkill):
             return
 
         self._apply_extract_result(pg, row, data)
+        self._spawn_chain_extract(row["report_id"])
+
+    @staticmethod
+    def _spawn_chain_extract(report_id: int) -> None:
+        """深度提取完成后, 后台线程抽取产业链环节 (beta_alpha 模块; 失败不影响主链路)"""
+        try:
+            from beta_alpha.analysis.chain_extract import spawn_chain_extract
+            spawn_chain_extract(report_id)
+        except Exception as e:
+            logger.warning(f"链抽取调度失败 report_id={report_id}: {e}")
 
     def _apply_extract_result(self, pg: PgClient, row: Dict[str, Any],
                               data: Dict[str, Any]) -> Dict[str, Any]:
@@ -412,36 +438,56 @@ class ReportSkill(BaseSkill):
         if data.get("report_type") and not row.get("report_type"):
             sets.append("report_type=%s")
             args.append(str(data["report_type"])[:16])
+        # 发布日期兜底: publish_date 优先用知识星球公布时间 (sync 已写入);
+        # 缺失时才回写 LLM 从研报正文提取的日期 —— 绝不用爬取/入库时间
+        pd_raw = str(data.get("publish_date") or "").strip()[:10]
+        if pd_raw and not row.get("publish_date") and re.match(r"^\d{4}-\d{2}-\d{2}$", pd_raw):
+            sets.append("publish_date=%s")
+            args.append(pd_raw)
         if data.get("author") and not row.get("author"):
             sets.append("author=%s")
             args.append(str(data["author"])[:64])
         if data.get("org_name") and not row.get("org_name"):
             sets.append("org_name=%s")
-            args.append(str(data["org_name"])[:64])
+            args.append(normalize_org_name(str(data["org_name"]))[:64])
         # 展示标题: 机构 + 原文件名 (保留原名, 不拆切)
+        # 机构优先用库里已归一的中文 org_name (LLM Analysis 词表), 其次归一化 LLM 提取值
+        # —— 否则英文原版会提取出 "J.P. Morgan" 等英文名拼进标题 (曾致 title 英文污染)
         display = self._display_title(
-            data.get("org_name"), row.get("file_name") or row.get("title") or "")
+            (row.get("org_name") or "").strip() or normalize_org_name(data.get("org_name")),
+            row.get("file_name") or row.get("title") or "")
         if display and display != row.get("title"):
             sets.append("title=%s")
             args.append(display[:200])
         args.append(row["report_id"])
-        pg.execute(
+        n_updated = pg.execute(
             f"UPDATE fin.report_meta SET {', '.join(sets)} WHERE report_id=%s", tuple(args))
+        if n_updated == 0:
+            # OCR/深度提取耗时期间, 该记录被 merge 判定重复删除 —— 结果丢弃,
+            # 绝不能继续插 forecast (否则外键违规, 曾致 "OCR 后自动提取失败")
+            logger.info(f"#{row['report_id']} 提取完成但记录已被去重删除, 结果丢弃")
+            return None
 
         # 预测数据: 先删旧再插 (幂等重跑)
         # (此块曾在 _display_title 的 return 之后为死代码, 盈利预测从未入库, 已移回)
         if forecasts:
             pg.execute("DELETE FROM fin.report_forecast WHERE report_id=%s",
                        (row["report_id"],))
-            for f in forecasts:
-                pg.execute(
-                    "INSERT INTO fin.report_forecast "
-                    "(report_id, ts_code, symbol, market, forecast_type, forecast_period, "
-                    " forecast_value, forecast_unit, confidence, raw_text) "
-                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-                    (row["report_id"], f["ts_code"], f["symbol"], f["market"],
-                     f["metric"], f["period"], f["value"], f["unit"],
-                     f["confidence"], f["raw_text"]))
+            try:
+                for f in forecasts:
+                    pg.execute(
+                        "INSERT INTO fin.report_forecast "
+                        "(report_id, ts_code, symbol, market, forecast_type, forecast_period, "
+                        " forecast_value, forecast_unit, confidence, raw_text) "
+                        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                        (row["report_id"], f["ts_code"], f["symbol"], f["market"],
+                         f["metric"], f["period"], f["value"], f["unit"],
+                         f["confidence"], f["raw_text"]))
+            except Exception as e:
+                if "report_forecast_report_id_fkey" in str(e):
+                    logger.warning(f"#{row['report_id']} 记录在预测入库瞬间被删除, 丢弃")
+                    return None
+                raise
 
         return {
             "report_id": row["report_id"],

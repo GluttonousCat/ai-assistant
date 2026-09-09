@@ -40,16 +40,19 @@ class FakePg:
                     "extraction_status": "extracted"}
         return None
     def fetch_all(self, sql, args=None): return []
-    def execute(self, sql, args=None): self.sqls.append((sql, args))
+    def execute(self, sql, args=None):
+        self.sqls.append((sql, args))
+        return 1  # rowcount (0 = 记录已被 merge 删除)
 
 
 class FakeLLM:
     def stream(self, prompt, **kw):
-        assert kw.get("extra_body") == {"enable_thinking": False}, kw
+        # 思考开关由 LLMClient._default_kwargs 统一注入, 业务层不传 — kw 应为空
+        assert not kw, f"业务层不应传思考参数: {kw}"
         for i in range(0, len(FAKE_JSON), 40):
             yield FAKE_JSON[i:i + 40]
     def invoke(self, prompt, **kw):
-        assert kw.get("extra_body") == {"enable_thinking": False}, kw
+        assert not kw, f"业务层不应传思考参数: {kw}"
         return FAKE_JSON
 
 
@@ -110,5 +113,28 @@ events2, pg2 = run_case(
 seq2 = [e["type"] for e in events2]
 assert seq2[-1] == "error" and "delta" not in seq2, seq2  # done 由 API 层补发
 assert not any("analysis_status='failed'" in s for s, _ in pg2.sqls), "OCR 排队不应标 failed"
+
+# 用例 3: 提取期间记录被 merge 删除 (UPDATE rowcount=0) -> 丢弃结果, 不插 forecast
+skill3 = mod.ReportSkill()
+pg3 = FakePg()
+orig_exec = pg3.execute
+state = {"dropped": False}
+def exec3(sql, args=None):
+    pg3.sqls.append((sql, args))
+    if sql.startswith("UPDATE fin.report_meta") and not state["dropped"]:
+        state["dropped"] = True
+        return 0  # 模拟记录已被删除
+    return 1
+pg3.execute = exec3
+mod.PgClient = lambda: pg3
+skill3._ensure_columns = staticmethod(lambda p: None)
+skill3._extract_llm = staticmethod(lambda: FakeLLM())
+summary = skill3._apply_extract_result(pg3, {"report_id": 9, "title": "x",
+                                             "content_text": "y", "ts_code": None,
+                                             "symbols": None, "report_type": None,
+                                             "org_name": None}, __import__("json").loads(FAKE_JSON))
+assert summary is None, summary
+assert not any("INSERT INTO fin.report_forecast" in s for s, _ in pg3.sqls), "被删记录不应插 forecast"
+print("--- dropped-by-merge ---\n  OK: 返回 None 且无 forecast INSERT")
 
 print("\nALL CASES PASSED")

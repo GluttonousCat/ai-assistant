@@ -31,6 +31,10 @@ export const COL_LABELS = {
   pe_ttm: '市盈率TTM', pb: '市净率', ps_ttm: '市销率TTM',
   total_mv: '总市值(万元)', circ_mv: '流通市值(万元)', turnover_rate: '换手率(%)',
   value: '数值',
+  node: '环节', node_name: '环节', strong: '强档标的', medium: '中档标的',
+  port_ret_120d: '环节收益%(120日)', excess_120d: '超额收益%(120日)',
+  excess_20d: '超额收益%(20日)', or_yoy_median: '营收同比中位(%)',
+  report_heat_6m: '研报热度(半年)', metric: '指标', signal: '信号',
 }
 
 const PERIOD_LABELS = { '03-31': '一季报', '06-30': '中报', '09-30': '三季报', '12-31': '年报' }

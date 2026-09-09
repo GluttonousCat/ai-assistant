@@ -82,6 +82,20 @@ def register_builtin_skills() -> SkillRegistry:
     except Exception as e:
         logger.warning(f"ScannedReportSkill 注册失败: {e}")
 
+    # 产业链Beta挖掘 (三源映射+环节指数; 自治模块 beta_alpha/)
+    try:
+        from beta_alpha.skills.beta import BetaSkill
+        registry.register(BetaSkill())
+    except Exception as e:
+        logger.warning(f"BetaSkill 注册失败: {e}")
+
+    # 个股预期差 (四象限; 自治模块 beta_alpha/)
+    try:
+        from beta_alpha.skills.alpha import AlphaSkill
+        registry.register(AlphaSkill())
+    except Exception as e:
+        logger.warning(f"AlphaSkill 注册失败: {e}")
+
     return registry
 
 

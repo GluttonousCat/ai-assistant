@@ -1,7 +1,7 @@
 # 研报中心设计文档
 
 > Alpha Finance Radar 平台 · 知识星球研报库子系统
-> 更新：2026-09-02
+> 更新：2026-09-03
 
 ## 一、系统设计
 
@@ -10,6 +10,8 @@
 ```
 知识星球 (每日 07:00/23:00 调度, core/zsxq_scheduler.py)
    │ 爬话题 + 逐个下载 PDF 附件 (反检测限速 60-120s/个)
+   │ ※ 中文翻译版 (文件名「中文版-」等, utils.helpers.is_chinese_translated)
+   │    下载层标 skipped 不下载 + sync 层不入库 —— 只保留英文原版
    ▼
 ★ 逐篇流水 (scripts/daily_fetch_zxsq.py:_process_one_report,
    每下载完 1 个文件立即执行, 不等整批 —— 下载完即"已分析", 前端立即可用):
@@ -17,18 +19,19 @@
       → fin.report_meta (本地文本层抽取正文, 有文本层即 content_chars>0)
    2. 对新入库的 PDF/docx 逐篇:
       ① LLM Analysis 轻量元数据 (tools/finance/report_meta_analysis.py,
-         输入仅文件名 → title/org/target/industry/region/market, ~2s)
+         输入仅文件名 → title/org/target/industry/region/market, 输出中文机构名)
       ② 深度提取 (skills/report/skill.py 单篇 extract:
-         正文 → 评级/盈利预测/核心观点/tags; A股 ts_code, 非A股 symbols)
+         正文 → 评级/盈利预测/核心观点/tags; 输出一律中文, 英文原版翻译后输出)
       (话题 txt 条目跳过, 由 merge 归并进同话题 PDF, 不浪费 LLM)
    3. 去重合并 (scripts/merge_report_duplicates.py)
 
 图片型 PDF (无文本层, content_chars=0): 深度提取时转后台 qwen 视觉 OCR
   (状态 pending_ocr, 前端隐藏) → OCR 完成 → ★自动接续单篇深度提取
-  (不再等下一轮调度)
+  (不再等下一轮调度; OCR 失败/异常 → failed 终态, 「AI 分析」按钮可手动重试)
 
 兜底 (调度器 _run_round 轮末, 12h 一轮): LLM Analysis 积压清理(40) +
 深度提取批量限额(8/15 篇) —— 只兜漏网/存量, 主链路已是逐篇流水
+存量积压: scripts/backfill_report_analysis.py 一次性回填 (元数据/深度/OCR 三阶段, 幂等)
 ```
 
 ### 1.2 表结构（fin.report_meta 关键列）
@@ -61,8 +64,15 @@
 `标题 | 机构 | 标的 | 行业 | 地区 | 市场 | 发布日期 | 状态 | 操作`
 未分析行操作列有「**AI 分析**」按钮（原「AI 提取」，2026-09 更名）：点击弹出
 **AI 分析流式弹窗**（见 1.5），完成后行状态变「已分析」。
-详情弹层：盈利预测表（AI 分析）+ 正文 + 原始文件名。
+详情弹层：盈利预测表（AI 分析）+ 正文 + 原始文件名 + **「⬇ 下载原文」按钮**
+（`GET /api/reports/{id}/download`，仅本地有原文文件的研报显示；前端带 JWT fetch blob
+保存，中文文件名走 RFC 5987 `filename*=UTF-8''`）。
 筛选项：搜索（标题/机构）+ 状态（已分析/未分析）+ 市场。
+
+**发布日期口径**（2026-09-03 确立）：`publish_date` = **知识星球公布时间**
+（sync 从星球 API 的 `create_time` 写入，非爬取/入库时间）；星球时间缺失时才由
+深度提取回写 LLM 从研报正文提取的日期兜底；两者皆无则显示「—」。
+列表排序 `COALESCE(publish_date, created_at)` 仅作兜底序，不作为展示值。
 
 ### 1.5 AI 分析流式弹窗（2026-09-02 新增）
 
@@ -130,6 +140,13 @@ POST /api/reports/{id}/analyze/stream   (SSE, 需 JWT)
 | 图片型 PDF OCR 完成后最长 12h 无人接续深度提取 | OCR 后台线程只回写正文，提取要等下一轮调度（07:00/23:00）碰到它 | `_vision_backfill` 的 OCR 完成回调里直接跑单篇深度提取（此刻已有正文，不再进视觉分支，无递归） | ✅ 已修复 (2026-09-02) |
 | 逐篇流水上线后前端仍见大量"未处理"（存量积压：元数据缺 128 + 深度提取 52 + 图片 PDF 90） | 流水线只管**新下载**；存量靠轮末兜底（元数据 40 篇/12h、深度提取 8-15 篇/12h）要清数天~数周 | 一次性回填脚本 `scripts/backfill_report_analysis.py`（元数据/深度提取/OCR 三阶段，均最新优先、幂等可重跑，与调度共存）；OCR 阶段串行防线程风暴 | ✅ 已修复 (2026-09-02) |
 | OCR 失败/异常的 PDF 被每轮无限重试 OCR（白烧 qwen），或异常时状态卡 `pending_ocr` 前端永久隐藏 | `_vision_backfill` 失败只置 `extraction_status`，`analysis_status` 仍 none → 每轮重新选中再 OCR；ocr_pdf 抛异常时状态不更新 | 失败与异常统一置 `extraction_status='failed' + analysis_status='failed'`（终态，轮次不再自动选；「AI 分析」按钮仍可手动重试） | ✅ 已修复 (2026-09-02) |
+| 中文翻译版与英文原版成对入库（70 条 `中文版-xxx-译文.pdf`） | 知识星球对英文研报常同时发原版+中文翻译，下载/入库层无过滤 | `is_chinese_translated()`（utils.helpers）：下载层标 skipped 不下载、sync 层不入库；存量清理删 60 条成对中文版（保留原版），10 条无原版的中文版保留顶位（删则失数据） | ✅ 已修复 (2026-09-03) |
+| 英文原版研报的 AI 分析输出英文（core_view/key_points 英文） | 提取 prompt 未约束输出语言，模型跟随原文语言 | REPORT_EXTRACT_PROMPT 显式约束「所有文本字段一律简体中文，英文必须翻译」（代码/数字/单位保留）；META prompt 的 org/target 同样约束中文通用名 | ✅ 已修复 (2026-09-03) |
+| DeepSeek 未开最强思考 | 早期为规避「思考吃光 token」全局关思考；根因实为 max_tokens 太小 | 全局 `llm.enable_thinking: true` + `llm.max_tokens: 16384`，LLMClient 统一注入（vision 用途关闭）；详见 docs/agents/llm_models.md | ✅ 已修复 (2026-09-03) |
+| OCR 后自动提取报 `report_forecast_report_id_fkey` 外键违规（当日 4 例，白烧一次 90s 思考提取） | 竞争窗口：OCR 线程跑 2-5 分钟 + 最强思考提取 ~90s，期间 merge 把该重复条目删除；提取完成回写时父记录已不存在 | ① `_apply_extract_result`/OCR 回写均检查 UPDATE rowcount==0 → 丢弃结果不插 forecast（外键兜底捕获双保险）；② merge 排序改为「已分析条目优先保留」，删除对象集中到未分析条目，缩小竞争面 | ✅ 已修复 (2026-09-03) |
+| OCR 线程风暴风险：日志 1 分钟内起 15+ 个并发 OCR 线程 | 本地已有的积压文件在下载循环秒过（无网络请求无反检测睡眠），批量路径逐行起线程无上限，可能打爆 qwen 网关 | `_OCR_SEMAPHORE`（BoundedSemaphore(4)）限流：同时最多 4 册 OCR，排队期间状态已是 pending_ocr，幂等守卫防重复提交 | ✅ 已修复 (2026-09-03) |
+| 同一研报反复 OCR（「高盛-智谱 2513.HK」37 分钟内两轮「转后台」，日志高频复发；昨天删掉的中文版又回来了） | **乒乓循环**：merge 把同 topic 重复条目物理删除 → `_sync_group_files` 全量扫描按 file_id 幂等，被删条目 file_id 消失 → 重新插入（全新未分析状态）→ 又被选中处理 → merge 又删，循环烧 qwen；`purge_cn` 删除的中文版同理被重插 | 新增留痕表 `fin.report_meta_merged`：merge/purge 删除带 file_id 的条目前落留痕，sync 幂等检查同时查主表与留痕表（删过的永不重插）；merge 保留优先级升级为「非中文版 > 已分析 > 新记录」 | ✅ 已修复 (2026-09-03) |
+| 盈利预测「原文」列显示英文（如 "2026E Revenue (Rmb mn) 32,911.2"；例：摩根大通 PCB / 高盛胜宏） | 初版语言约束笼统，模型对英文表格直接照抄表头；且这批为中文约束上线前旧代码分析的存量 | prompt 升级为「最高优先级规则」：raw_text 必须中文**转述**预测依据（给出正/误示例）、key_points 必须中文句子结构（缩写可嵌入）；存量 16 篇批量重提取全部中文化 | ✅ 已修复 (2026-09-03) |
 
 ## 三、LLM Analysis Prompt 要点（现行版本）
 
@@ -137,17 +154,23 @@ POST /api/reports/{id}/analyze/stream   (SSE, 需 JWT)
 你是研报文件名清洗与元数据提取引擎。只输出 JSON:
 {title, org, target, industry, region, market}
 
+- 【输出语言】org/target 用简体中文; 英文原版译成通用中文名
+  (Goldman Sachs→高盛, UBS→瑞银, TSMC→台积电), 代码保留原样
 - title: 去掉开头机构名及分隔符(伯恩斯坦-/【高盛】/中文版-高盛-)、
   去掉尾部噪音(-译文/.pdf/.mp3); 只删减不改写
 - target: 必须是具体公司名(常带代码)或商品名; 行业综述/宏观给 null;
   不要把行业词(如"日本电子元件")当标的
 - industry: 从词表选 1 个(半导体/电子元件/贵金属/…)
-- region: 从词表选 1 个(中国/美国/日本/亚太/全球/…)
+- region: 从词表选 1 个(中国大陆/美国/日本/亚太/全球/…)
 - market: A股/美股/HK股/宏观/商品/行业/其他
 ```
 
-实现细节：deepseek-v4-flash 为思考模型，必须 `extra_body={"enable_thinking": False}`，
-否则思考吃光 token 且 `content` 为空（曾导致整批「解析失败」，已修复）。
+深度提取 prompt（REPORT_EXTRACT_PROMPT）同样新增总则：**所有文本字段一律简体中文，
+英文原版必须翻译后输出（代码/数字/单位/专业术语缩写可保留原样）**。
+
+模型调用：deepseek-v4-flash，思考开关与 max_tokens 由 `llm/client.py` 按 config 统一注入
+（当前 `enable_thinking: true` 最强思考 + `max_tokens: 16384`，
+流式 reasoning 块自动跳过只出正文）。
 
 ## 四、AI 分析流式弹窗验证记录（2026-09-02）
 
@@ -161,6 +184,13 @@ POST /api/reports/{id}/analyze/stream   (SSE, 需 JWT)
 | 逐篇下载流水线 (本次: 深度提取进流水) | `scripts/test_fetch_pipeline_mock.py` | 新入库仅 PDF 逐篇 元数据+深度提取（txt 跳过）；无新文件 noop+兜底；返回 `ok+extracted 1` |
 | sync.run() 返回新 report_id | 真实 PG 增量空跑 (幂等) | 返回 `[]` 无错；INSERT 改 `RETURNING report_id` 不影响存量行为 |
 | 存量积压回填 | `scripts/backfill_report_analysis.py` 真实运行 3 轮 (日志 logs/backfill_report_analysis.log) | 服务补跑轮 bulk-sync 148 个历史下载文件带来二次积压，脚本幂等重跑吸收；最终：元数据缺失 128→1、深度提取 52→0、截图行全部 done；剩 39 册图片 PDF 由脚本+调度并行 OCR（约 1-2h） |
+| 中文版过滤 (2026-09-03) | `is_chinese_translated` 单测 8 例 + PG 存量清理 | 判定含「中文版-」前缀/「-中文版-」分隔/中文版后缀变体；删 60 条成对中文版 (级联 forecast+merge 清 100 残余)，10 条无原版中文版保留 |
+| 最强思考 + 中文输出 (2026-09-03) | 英文原版 #14758 重跑深度提取 (extract_stream 全链) | 思考开启 91s 完成 (原 ~10s)，content 正常 (delta 203 块)；core_view/key_points 全中文；评级/词表正常；盈利预测 7 条入库；extract 用途注入 `enable_thinking: true`+`max_tokens: 16384`，vision 用途 false |
+| OCR 密集日志诊断 (2026-09-03) | 库检查 + 日志比对 | 同 file_path 无重复记录（无重复入库/重复 OCR）；1 分钟 15 个「转后台」= 本地已有积压文件在下载循环秒过密集触发，属积压消化；165 done / 26 pending_ocr / 50 待轮到；外键竞争用例（UPDATE rowcount=0）mock 验证返回 None 且无 forecast INSERT |
+| 乒乓循环修复验证 (2026-09-03) | 新代码 merge 真实跑一轮 + 服务重启(17:45)后查库 | merge 清 161 条循环重插条目并留痕 158+；重启后最新 20 条零中文版、总数稳定 121、同 file_path 零重复——入库→删除→重插循环止住；补跑轮在新代码下继续消化图片 PDF 积压（信号量限流 4 并发） |
+| raw_text 英文存量重提取 (2026-09-03) | 16 篇（raw_text 中文占比<30%）后台批量重提取 (logs/reextract_cn.log) | 16/16 成功；例举两篇复查：高盛胜宏 raw 100% 中文、摩根大通 PCB 中文句+必要缩写；全库英文剩余 0 |
+| 下载原文 (2026-09-03) | TestClient 端点测试 + 服务上线后 openapi 确认 | 无 token 401 / 研报不存在 404 / 真实文件 200 (1MB, MD5 与本地一致)；中文文件名 content-disposition RFC 5987 编码正确；前端 npm build 通过 |
+| 发布日期口径 (2026-09-03) | 库检查 + mock 断言 | 全库 publish_date 零空值（均为星球 create_time）；深度提取兜底回写（publish_date 为空且 LLM 日期合法 YYYY-MM-DD 才写）mock 验证通过 |
 | 生产链路 | 待线上点按「AI 分析」实测 (需重启常驻服务加载新代码) | ⏳ |
 
 > 注意：常驻服务（计划任务 `AIAssistantServer`）不会热加载，后端改动需重启后生效；

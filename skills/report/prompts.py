@@ -7,6 +7,16 @@ from __future__ import annotations
 # ---- 研报结构化提取 (单篇研报 -> JSON) ----
 REPORT_EXTRACT_PROMPT = """你是一名券商研报结构化提取引擎。从下面的研报文本中提取关键信息。
 
+【输出语言——最高优先级规则】无论研报原文是什么语言 (英文/日文/韩文等原版), 所有输出字段一律使用简体中文:
+- core_view / key_points / risks 必须用中文完整句子表达; 必要的产品名/公司名/技术缩写
+  (如 NVL576 / PTFE / HBM) 可原样嵌入, 但句子结构必须是中文;
+- forecasts 的 raw_text 必须用中文**转述**该条预测的依据 (如 "预计2026年营收329亿元"),
+  **严禁照抄英文原文或英文表格表头** (如 "2026E Revenue (Rmb mn) 32,911.2" 是错误示例);
+- org_name 用机构中文通用名: J.P. Morgan→摩根大通, Morgan Stanley→摩根士丹利, Goldman Sachs→高盛,
+  UBS→瑞银, Bernstein→伯恩斯坦, Barclays→巴克莱, Deutsche Bank→德意志银行, BofA→美银证券,
+  Nomura→野村, Citi→花旗, HSBC→汇丰, Macquarie→麦格理, Jefferies→杰富瑞, Credit Suisse→瑞信;
+- 公司代码 / 数字 / 单位保留原样; 原文是英文时必须翻译成中文再输出。
+
 严格只输出一个 JSON 对象 (不要任何解释文字、不要 markdown 代码块包裹), 格式:
 {{
   "market": "A股",                  // 按标的所属交易所: A股 / H股 / 台股 / 日股 / 韩股 / 美股 / 欧洲股 / 东南亚股 / 宏观 / 商品 / 行业 / 其他

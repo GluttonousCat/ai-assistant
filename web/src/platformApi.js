@@ -113,6 +113,23 @@ export const platformApi = {
     await sseStream('/api/v1/query/stream', { text }, onEvent).promise
   },
 
+  // Agent 对话新入口 (LLM 自主决策 + 工具循环): 随意问 + 多轮追问。
+  // session_id 由页面生成并全程携带, 服务端据此注入会话历史 (追问省略主语可解析)
+  agentStream: async (text, sessionId, onEvent) => {
+    await sseStream('/api/v1/agent/stream', { text, session_id: sessionId }, onEvent).promise
+  },
+
+  // 产业链页 (beta_alpha): 链列表 + 链条量化分析 (无 LLM)
+  chains: () => request('GET', '/api/v1/chains'),
+  chainAnalysis: (chainId, node) =>
+    request('GET', `/api/v1/chains/${chainId}/analysis${node ? `?node=${encodeURIComponent(node)}` : ''}`),
+  // 同 chatStream 但返回 {promise, abort} (页面级中断用)
+  chatStreamRaw: (text, onEvent) => sseStream('/api/v1/query/stream', { text }, onEvent),
+  // 种子链锻造: SSE (stage data{yaml,report,chain_id} done); 返回 {promise, abort}
+  forgeChainRaw: (theme, onEvent) => sseStream('/api/v1/chains/forge/stream', { theme }, onEvent),
+  // 保存种子链 (服务端结构校验)
+  saveChain: (yamlText) => request('POST', '/api/v1/chains/save', { yaml: yamlText }),
+
   // 研报中心
   reports: (params = {}) => {
     const qs = new URLSearchParams(
@@ -123,6 +140,35 @@ export const platformApi = {
   reportTags: () => request('GET', '/api/reports/tags'),
   reportStocks: () => request('GET', '/api/reports/stocks'),
   reportDetail: (id) => request('GET', `/api/reports/${id}`),
+  // 下载研报原文 (带鉴权 fetch blob → 浏览器保存; 返回保存的文件名)
+  downloadReport: async (id) => {
+    const res = await fetch(`/api/reports/${id}/download`, {
+      headers: { Authorization: `Bearer ${auth.getToken()}` },
+    })
+    if (res.status === 401) {
+      auth.clear()
+      window.dispatchEvent(new CustomEvent('auth:expired'))
+      throw new Error('登录已失效, 请重新登录')
+    }
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new Error(body.detail || `HTTP ${res.status}`)
+    }
+    const blob = await res.blob()
+    // content-disposition: attachment; filename*=UTF-8''<urlencoded>
+    const cd = res.headers.get('content-disposition') || ''
+    const m = cd.match(/filename\*=UTF-8''([^;]+)/)
+    const name = m ? decodeURIComponent(m[1]) : `report_${id}.pdf`
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = name
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+    return name
+  },
   analyzeReport: (id) => request('POST', `/api/reports/${id}/analyze`),
   // 单篇研报 AI 分析流式版 (SSE): 事件与 chatStream 同构
   //   {type:'stage', stage, message} {type:'delta', text} {type:'data', data} {type:'error'|'done'}

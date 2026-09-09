@@ -36,7 +36,13 @@ from storage.pg_schema import (
 from storage.sqlite.files import FilesDatabase
 from storage.sqlite.topics import TopicsDatabase
 from tools.finance.report_extractor import get_extractor
-from utils.helpers import strip_zsxq_tags
+from utils.helpers import strip_zsxq_tags, is_chinese_translated
+
+# 幂等检查: 现存 OR 已被去重合并删除留痕 (留痕过的永不重插, 防
+# 入库→merge删除→全量sync重插→再分析 的乒乓循环)
+_EXISTS_SQL = (
+    f"SELECT 1 FROM fin.report_meta WHERE file_id=%s "
+    f"UNION ALL SELECT 1 FROM fin.report_meta_merged WHERE file_id=%s LIMIT 1")
 from utils.paths import PathManager
 
 # 研报文本提取的最大长度 (避免超大文件占满 PG 字段, 只保留头部核心内容)
@@ -140,14 +146,19 @@ class ZSXQ2PGSync:
 
             total = 0
             max_file_id = last_file_id
+            skipped_cn = 0
             for row in rows:
                 file_id = row["file_id"]
                 max_file_id = max(max_file_id, file_id)
                 name = row.get("name") or ""
 
-                # 已在库中? 幂等更新
-                exists = pg.fetch_one(
-                    f"SELECT report_id FROM {T_REPORT_META} WHERE file_id=%s", (file_id,))
+                # 中文翻译版不入库 (保留英文原版; 下载层已跳过, 此处兜底本地已有文件)
+                if is_chinese_translated(name):
+                    skipped_cn += 1
+                    continue
+
+                # 已在库中/曾被合并删除? 幂等跳过
+                exists = pg.fetch_one(_EXISTS_SQL, (file_id, file_id))
                 if exists:
                     total += 1
                     continue
@@ -183,7 +194,8 @@ class ZSXQ2PGSync:
                 total += 1
 
             self._set_sync_marker(pg, "last_file_id", value_int=max_file_id)
-            print(f"📎 附件已同步 (本批次 {total} 个)")
+            print(f"📎 附件已同步 (本批次 {total} 个"
+                  + (f", 跳过中文版 {skipped_cn} 个" if skipped_cn else "") + ")")
 
             # 回填: 先同步时文件未下载 (pending), 现在文件已到 -> 提取正文更新
             backfilled = 0
@@ -223,18 +235,23 @@ class ZSXQ2PGSync:
                     if not (r.get("name") or "").lower().endswith(_audio_exts)]
 
             total = 0
+            skipped_cn = 0
             max_file_id = last_file_id
             for row in rows:
                 file_id = row["file_id"]
                 max_file_id = max(max_file_id, file_id)
 
-                # 幂等: 文件已在库中则跳过
-                exists = pg.fetch_one(
-                    f"SELECT report_id FROM {T_REPORT_META} WHERE file_id=%s", (file_id,))
-                if exists:
+                name = row.get("name") or ""
+
+                # 中文翻译版不入库 (保留英文原版)
+                if is_chinese_translated(name):
+                    skipped_cn += 1
                     continue
 
-                name = row.get("name") or ""
+                # 幂等: 文件已在库中/曾被合并删除则跳过
+                exists = pg.fetch_one(_EXISTS_SQL, (file_id, file_id))
+                if exists:
+                    continue
                 file_path = self._resolve_local_path(row)
                 content, chars, status = self._extract(file_path, row)
 
@@ -274,7 +291,8 @@ class ZSXQ2PGSync:
                 total += 1
 
             self._set_sync_marker(pg, marker_key, value_int=max_file_id)
-            print(f"📁 群文件已同步 (本批次 {total} 个)")
+            print(f"📁 群文件已同步 (本批次 {total} 个"
+                  + (f", 跳过中文版 {skipped_cn} 个" if skipped_cn else "") + ")")
 
     # ---------- 工具方法 ----------
     def _extract(self, file_path, row) -> tuple:

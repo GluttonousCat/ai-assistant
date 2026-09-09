@@ -19,11 +19,13 @@ docs/
 +-- agents/             Agent 与模型体系
 |   +-- llm_models.md            模型路由（deepseek 文本/qwen 视觉/用途体系/关思考坑）
 |   +-- scanned_report_agent.md  扫描件研报分析（PDF->PNG->视觉OCR 三层解耦）
+|   +-- chain_beta_skill.md      产业链Beta/个股Alpha Skill（种子链/三源映射/环节指数/预期差四象限）
 +-- ops/                运维与数据
 |   +-- domain_setup.md      域名与 Tunnel 部署/桌面入口(启动器+日志查看器)/运维手册
 |   +-- security.md          安全分层/外部访问事件审计/PG 加固清单
 |   +-- data_process.md      数据同步全流程（历史文档）
 |   +-- spider.md            知识星球爬虫设计（历史文档）
+|   +-- cninfo_spider.md     巨潮定期报告爬虫（按需拉取/幂等/orgId三级策略）
 +-- quant/              量化子系统
 |   +-- range_trading_guide.md   震荡区间挖掘系统工程指南
 |   +-- trend_trading_guide.md   趋势行情捕捉系统工程指南
@@ -41,6 +43,7 @@ docs/
 | 改研报展示/提取 | [frontend/reports.md](frontend/reports.md) |
 | 换 LLM 模型 | [agents/llm_models.md](agents/llm_models.md) |
 | 处理扫描件 PDF | [agents/scanned_report_agent.md](agents/scanned_report_agent.md) |
+| 加/改产业链Beta、个股Alpha Skill | [agents/chain_beta_skill.md](agents/chain_beta_skill.md) |
 | 改主题/品牌 | [frontend/framework_theme.md](frontend/framework_theme.md) |
 | 域名/启动/看日志 | [ops/domain_setup.md](ops/domain_setup.md) |
 | 安全与加固 | [ops/security.md](ops/security.md) |

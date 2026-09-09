@@ -1,0 +1,16 @@
+# 种子链模板 (复制本文件为 <chain_id>.yaml 后编辑; 下划线开头不会被加载)
+# 校验: python -m beta_alpha.forge --check <chain_id>
+# 完整规范: .agents/skills/chain-beta/references/chain-template-guide.md
+chain_id: my_chain          # 小写英文+下划线, 与文件名一致
+name: 我的产业链             # 展示名, 也是用户话术匹配字段
+desc: 一句话链条逻辑与需求来源
+drivers: [驱动因素1, 驱动因素2]        # 2-4 个
+source: manual              # manual=手写 / llm=生成 (信息字段, 不参与逻辑)
+verified: false             # --check 通过后可改 true
+nodes:                      # 6-12 个环节
+  - id: node_a             # 小写英文下划线, 链内唯一
+    name: 环节A            # 中文环节名
+    keywords: [产品词, 应用口径词, 英文缩写]   # 匹配主营构成披露原文(子串,不分大小写)
+    sw_l2: [元件]           # 申万二级基础词(可省略; 子串匹配兼容"元件Ⅱ")
+edges:                      # [上游id, 下游id], 只引用已定义节点
+  - [node_a, node_b]

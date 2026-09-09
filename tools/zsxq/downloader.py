@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from storage.sqlite.files import FilesDatabase
 from storage.sqlite.topics import TopicsDatabase
 from utils.paths import PathManager
-from utils.helpers import clean_cookie, sanitize_filename
+from utils.helpers import clean_cookie, sanitize_filename, is_chinese_translated
 from tools.zsxq.anti_detect import AntiDetectManager
 
 
@@ -91,6 +91,14 @@ class FileDownloader:
 
         # 下载地址: 优先本地 download_url, 否则从 API 获取
         files = topics_db.get_topic_files(limit=max_files, status="pending")
+
+        # 中文翻译版不下载 (保留英文原版)
+        for row in files[:]:
+            if is_chinese_translated(row.get('name') or ''):
+                topics_db.update_topic_file_status(row['file_id'], 'skipped')
+                files.remove(row)
+                self.log(f"⏭️ 跳过中文版: {row.get('name')}")
+        topics_db.commit()
 
         stats = {'total': len(files), 'success': 0, 'failed': 0}
         self.log(f"📥 下载话题附件 (本批次 {len(files)} 个)")
@@ -337,6 +345,15 @@ class FileDownloader:
 
         # 获取待下载文件
         files = self.db.get_pending_files(limit=max_files, order_by='create_time DESC')
+
+        # 中文翻译版不下载 (保留英文原版): 标 skipped 终态, 不再进 pending
+        for file_row in files[:]:
+            if is_chinese_translated(file_row[1]):
+                self.db.update_status(file_row[0], 'skipped')
+                files.remove(file_row)
+                self.log(f"⏭️ 跳过中文版: {file_row[1]}")
+        if files:
+            self.db.commit()
 
         if not files:
             self.log("📭 无待下载文件")

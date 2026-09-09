@@ -38,6 +38,10 @@ META_MODEL = "deepseek-v4-flash-0731"
 META_EXTRACT_PROMPT = """你是研报文件名清洗与元数据提取引擎。处理下面的研报文件名, 严格只输出一个 JSON 对象 (无解释、无代码块):
 {{"title": "…", "org": "…", "target": "…", "industry": "…", "region": "…", "market": "…"}}
 
+【输出语言】org/target 用简体中文; 文件名是英文原版时必须译成通用中文名
+(如 Goldman Sachs→高盛, UBS→瑞银, TSMC→台积电), 标的代码保留原样。
+title 按下方规则只做删减、不翻译。
+
 ## 字段规则
 
 **title** — 清洗后的标题, 只保留内容主题:
@@ -130,12 +134,28 @@ def ensure_meta_columns() -> None:
 
 
 def _get_llm():
-    """qwen-flash 小模型客户端 (config llm.models.analysis.model 覆盖)"""
+    """元数据分析客户端 (config llm.models.analysis.model 覆盖)"""
     from openai import OpenAI
     cfg = get_config()
     model = cfg.get("llm.models.analysis.model") or META_MODEL
     return OpenAI(api_key=cfg.openai_api_key, base_url=cfg.openai_base_url,
-                  timeout=30.0), model
+                  timeout=120.0), model
+
+
+def _thinking_kwargs() -> Dict[str, Any]:
+    """
+    思考开关与输出预算: 与 llm/client.py 同一套优先级
+    (用途覆盖 llm.models.analysis.enable_thinking > 全局 llm.enable_thinking > 默认开启).
+    """
+    cfg = get_config()
+    et = cfg.get("llm.models.analysis.enable_thinking")
+    if et is None:
+        et = cfg.get("llm.enable_thinking", True)
+    kw: Dict[str, Any] = {"extra_body": {"enable_thinking": bool(et)}}
+    mt = cfg.get("llm.max_tokens")
+    if mt:
+        kw["max_tokens"] = int(mt)
+    return kw
 
 
 def _parse_json(text: str) -> Optional[Dict[str, Any]]:
@@ -181,13 +201,13 @@ def analyze_report_meta(report_id: int, pg: Optional[PgClient] = None,
             return False
 
         client, model = _get_llm()
-        # deepseek-v4 为思考模型: 必须关思考, 否则思考吃光 token 且 content 为空
+        # 思考开关/预算与 LLMClient 同源 (config llm.enable_thinking / llm.max_tokens)
         resp = client.chat.completions.create(
             model=model,
             messages=[{"role": "user",
                        "content": META_EXTRACT_PROMPT.format(filename=filename)}],
             temperature=0.0,
-            extra_body={"enable_thinking": False})
+            **_thinking_kwargs())
         data = _parse_json(resp.choices[0].message.content or "")
         if not data:
             logger.warning(f"#{report_id} LLM Analysis 解析失败: {filename[:40]}")

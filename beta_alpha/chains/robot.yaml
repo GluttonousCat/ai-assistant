@@ -1,0 +1,24 @@
+# 人形机器人产业链 (种子模板)
+chain_id: robot
+name: 人形机器人产业链
+desc: 人形机器人量产预期驱动的核心零部件与整机
+drivers: [人形机器人量产, 特斯拉Optimus, 工厂自动化]
+nodes:
+  - {id: screw, name: 丝杠, keywords: [丝杠, 行星滚柱丝杠, 滚珠丝杠]}
+  - {id: reducer, name: 减速器, keywords: [减速器, 谐波减速, RV减速, 行星减速]}
+  - {id: motor, name: 电机, keywords: [伺服电机, 空心杯电机, 无框电机, 电机], sw_l2: [电机]}
+  - {id: sensor, name: 传感器, keywords: [力传感器, 传感器, 六维力, 编码器], sw_l2: [仪器仪表]}
+  - {id: bearing, name: 轴承, keywords: [轴承, 交叉滚子轴承]}
+  - {id: actuator, name: 关节执行器, keywords: [执行器, 关节模组, 关节]}
+  - {id: dexterous, name: 灵巧手, keywords: [灵巧手, 腱绳, 触觉]}
+  - {id: lightweight, name: 轻量化材料, keywords: [镁合金, PEEK, 碳纤维, 轻量化]}
+  - {id: body, name: 整机, keywords: [人形机器人, 机器人, 整机组装]}
+edges:
+  - [screw, actuator]
+  - [reducer, actuator]
+  - [motor, actuator]
+  - [bearing, actuator]
+  - [actuator, body]
+  - [dexterous, body]
+  - [sensor, body]
+  - [lightweight, body]

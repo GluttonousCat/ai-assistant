@@ -3,6 +3,7 @@
 研报中心 API
 - GET  /api/reports                      研报列表 (分页/筛选: 标的/来源/分析状态)
 - GET  /api/reports/{report_id}          研报详情 (含提取结果与预测数据)
+- GET  /api/reports/{report_id}/download 下载研报原文文件 (本地已下载的 PDF/docx)
 - POST /api/reports/{id}/analyze         触发单篇 LLM 结构化提取 (同步, 一次性返回)
 - POST /api/reports/{id}/analyze/stream  同上, SSE 流式 (Agent 流程阶段 + LLM 输出逐块)
 - POST /api/reports/analyze              批量提取未分析研报
@@ -12,12 +13,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import queue as _queue
 import threading
 from typing import Any, Dict, Optional
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.security import HTTPBearer
 
 from core.logger import get_logger
@@ -170,7 +173,7 @@ async def report_detail(report_id: int,
     with PgClient() as pg:
         row = pg.fetch_one(
             "SELECT report_id, topic_id, file_id, ts_code, title, author, org_name, "
-            "publish_date, report_type, source, file_name, content_chars, "
+            "publish_date, report_type, source, file_name, file_path, content_chars, "
             "content_text, extraction_status, analysis_status, analysis_json, created_at "
             "FROM fin.report_meta WHERE report_id=%s", (report_id,))
         if not row:
@@ -186,6 +189,29 @@ async def report_detail(report_id: int,
     row["content_text"] = (row.get("content_text") or "")[:8000]
     row["forecasts"] = forecasts
     return row
+
+
+@reports_router.get("/{report_id}/download")
+async def download_report_file(report_id: int,
+                               current: TokenPayload = Depends(get_current_user)):
+    """下载研报原文 (本地已下载的 PDF/docx 原始文件)"""
+    with PgClient() as pg:
+        row = pg.fetch_one(
+            "SELECT file_name, file_path FROM fin.report_meta WHERE report_id=%s",
+            (report_id,))
+    if not row:
+        raise HTTPException(status_code=404, detail="研报不存在")
+    path = row.get("file_path")
+    if not path or not os.path.exists(path):
+        raise HTTPException(status_code=404,
+                            detail="原文文件不存在 (话题文本类研报无原文文件, 或本地文件已清理)")
+    fname = row.get("file_name") or os.path.basename(path)
+    # RFC 5987: 中文文件名用 filename*=UTF-8''
+    return FileResponse(
+        path,
+        media_type="application/octet-stream",
+        headers={"Content-Disposition":
+                 f"attachment; filename*=UTF-8''{quote(fname)}"})
 
 
 def _run_extract(report_id: Optional[int], limit: int) -> Dict[str, Any]:

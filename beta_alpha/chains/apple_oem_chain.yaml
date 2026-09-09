@@ -1,0 +1,151 @@
+# source: forge 保存于 2026-09-05
+# 命中率复查: python -m beta_alpha.forge --check apple_oem_chain
+chain_id: apple_oem_chain
+name: 苹果代工产业链
+desc: 以苹果终端整机EMS代工为枢纽，向上游聚合精密结构件、光学声学、连接器、PCB、功能件、电池及显示触控等零组件供应，形成围绕组装交付的零部件配套网络。
+drivers:
+- 苹果新品发布节奏
+- 组装产能向印度/越南迁移
+- AI终端与折叠屏换机周期
+- 供应链垂直整合与自动化
+nodes:
+- id: assembly
+  name: 终端整机EMS代工
+  keywords:
+  - 电子制造服务
+  - 电子制造
+  - 智能硬件
+  - 智能声学整机
+  - 消费电子
+  sw_l2:
+  - 消费电子
+- id: precision_structure
+  name: 精密结构件及外观件
+  keywords:
+  - CNC精密加工件
+  - 手机金属中框
+  - 外观结构件
+  - 精密结构件
+  - 钛合金中框
+  sw_l2:
+  - 消费电子
+- id: display_touch
+  name: 显示触控模组
+  keywords:
+  - OLED显示模组
+  - 触控显示一体化
+  - 柔性屏模组
+  - 玻璃盖板
+  - 显示面板模组
+  sw_l2:
+  - 光学光电子
+  - 消费电子
+- id: optical
+  name: 光学镜头与摄像头模组
+  keywords:
+  - 光学镜头
+  - 摄像头模组
+  - CMOS图像传感器
+  - 潜望式镜头模组
+  - 精密光学组件
+  - 影像模组
+  sw_l2:
+  - 光学光电子
+  - 消费电子
+- id: acoustics
+  name: 声学零组件
+  keywords:
+  - 扬声器模组
+  - 受话器
+  - MEMS麦克风
+  - 声学传感器
+  - 精密声学组件
+  sw_l2:
+  - 消费电子
+- id: connectors
+  name: 连接器、天线及无线充电
+  keywords:
+  - 连接器及零组件
+  - LCP天线模组
+  - 无线充电模组
+  - 射频连接器
+  - Type-C接口及线缆
+  sw_l2:
+  - 元件
+  - 消费电子
+- id: pcb
+  name: PCB/软板及载板
+  keywords:
+  - 柔性电路板
+  - FPC
+  - HDI
+  - 载板
+  - 电路板
+  - 印制电路板
+  sw_l2:
+  - 元件
+- id: functional_parts
+  name: 精密功能件与散热屏蔽
+  keywords:
+  - 手机内部功能性器件
+  - 精密功能件
+  - 散热模组
+  - 电磁屏蔽件
+  - VC均热板
+  sw_l2:
+  - 消费电子
+- id: battery
+  name: 电池PACK与电源方案
+  keywords:
+  - 锂离子电池PACK
+  - 电池保护板
+  - 无线充电接收端
+  - 快充电源方案
+  - 电源管理模组
+  sw_l2:
+  - 电池
+  - 消费电子
+- id: wearable
+  name: 可穿戴与智能头显代工
+  keywords:
+  - 智能头显与智能穿戴类
+  - 智能手表整机组装
+  - TWS耳机整机代工
+  - XR硬件整机
+  - 健康监测传感器模组
+  sw_l2:
+  - 消费电子
+edges:
+- - precision_structure
+  - assembly
+- - display_touch
+  - assembly
+- - optical
+  - assembly
+- - acoustics
+  - assembly
+- - connectors
+  - assembly
+- - pcb
+  - assembly
+- - functional_parts
+  - assembly
+- - battery
+  - assembly
+- - precision_structure
+  - wearable
+- - display_touch
+  - wearable
+- - optical
+  - wearable
+- - acoustics
+  - wearable
+- - connectors
+  - wearable
+- - pcb
+  - wearable
+- - functional_parts
+  - wearable
+- - battery
+  - wearable
+source: llm

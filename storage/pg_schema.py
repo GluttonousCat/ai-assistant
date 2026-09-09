@@ -482,13 +482,106 @@ CREATE TABLE IF NOT EXISTS fin.sync_meta (
 COMMENT ON TABLE fin.sync_meta IS '财务数据同步水位线(按股票续传)';
 """
 
+# ---------- 主营构成 (fina_mainbz) ----------
+DDL_FINA_MAINBZ = """
+CREATE TABLE IF NOT EXISTS fin.fina_mainbz (
+    ts_code       VARCHAR(16) NOT NULL,
+    end_date      DATE NOT NULL,               -- 报告期
+    biz_type      VARCHAR(16) NOT NULL,        -- 构成维度 bz_code: P产品/D地区/I行业; 其他编码(如455006000)=销售模式等补充维度
+    bz_item       VARCHAR(512) NOT NULL,       -- 主营构成项目 (产品/地区/行业名)
+    bz_sales      NUMERIC(24,4),               -- 主营业务收入 (元)
+    bz_cost       NUMERIC(24,4),               -- 主营业务成本 (元)
+    bz_profit     NUMERIC(24,4),               -- 主营业务利润 (元)
+    curr_type     VARCHAR(8),                  -- 货币
+    created_at    TIMESTAMP DEFAULT now(),
+    PRIMARY KEY (ts_code, end_date, biz_type, bz_item)
+);
+CREATE INDEX IF NOT EXISTS idx_fina_mainbz_end_date ON fin.fina_mainbz (end_date);
+COMMENT ON TABLE fin.fina_mainbz IS '主营构成原始表 (公司x报告期x维度x项目, 金额单位:元; 一次调用返回全部维度, bz_code 即维度标签)';
+"""
+
+# 主营构成清洗视图: 剔除维度表头行(产品/行业/地区)与合计, "其中"/冒号分层子项不计入占比分母, 派生收入占比与毛利率
+DDL_VIEW_MAIN_BIZ = """
+CREATE OR REPLACE VIEW fin.v_main_biz AS
+WITH cleaned AS (
+    SELECT ts_code, end_date, biz_type,
+           regexp_replace(bz_item, '[（(]产品[)）]$', '') AS bz_item,
+           bz_sales, bz_cost, bz_profit, curr_type,
+           (bz_item LIKE '其中%' OR bz_item LIKE '%:%' OR bz_item LIKE '%：%')
+               AS is_sub_item
+    FROM fin.fina_mainbz
+    WHERE bz_sales IS NOT NULL AND bz_sales <> 0
+      AND bz_item NOT IN ('产品', '行业', '地区')
+      AND bz_item NOT LIKE '%合计%'
+      AND bz_item NOT LIKE '%小计%'
+      AND bz_item <> '-'
+),
+denom AS (
+    SELECT ts_code, end_date, biz_type, SUM(bz_sales) AS group_sales
+    FROM cleaned
+    WHERE NOT is_sub_item AND bz_sales > 0
+    GROUP BY ts_code, end_date, biz_type
+)
+SELECT c.ts_code, c.end_date, c.biz_type, c.bz_item,
+       c.bz_sales,
+       c.bz_cost,
+       c.bz_profit,
+       ROUND(c.bz_sales / NULLIF(d.group_sales, 0) * 100, 2) AS sales_share_pct,
+       CASE WHEN c.bz_sales > 0 AND c.bz_cost IS NOT NULL
+            THEN ROUND((c.bz_sales - c.bz_cost) / c.bz_sales * 100, 2) END AS gross_margin_pct,
+       c.curr_type,
+       c.is_sub_item
+FROM cleaned c
+LEFT JOIN denom d USING (ts_code, end_date, biz_type);
+"""
+
+# ---------- 巨潮公告元数据 (年报/定期报告 PDF 来源, 交叉核验用) ----------
+# 幂等: announcement_id (巨潮原生) 主键; 下载存在性检查按 file_path + 文件是否在盘
+DDL_CNINFO_ANNOUNCEMENT = """
+CREATE TABLE IF NOT EXISTS fin.cninfo_announcement (
+    announcement_id  VARCHAR(128) PRIMARY KEY,   -- 巨潮公告 ID
+    ts_code          VARCHAR(16) NOT NULL,       -- 关联 stock.stock_basic
+    sec_code         VARCHAR(12),                -- 巨潮证券代码 (6位)
+    sec_name         VARCHAR(64),                -- 公告时证券简称
+    title            VARCHAR(256) NOT NULL,      -- 公告标题
+    category         VARCHAR(24),                -- ndbg年报/bndbg半年报/yjdbg一季报/sjdbg三季报/other
+    report_year      SMALLINT,                   -- 报告年度 (标题解析)
+    announce_date    DATE,                       -- 公告日期
+    adjunct_url      VARCHAR(512),               -- PDF 相对路径 (static.cninfo.com.cn 前缀)
+    file_path        VARCHAR(1024),              -- 本地路径 (下载后回填)
+    file_size        BIGINT,
+    download_status  VARCHAR(12) DEFAULT 'pending',  -- pending/done/failed
+    error_msg        VARCHAR(512),
+    downloaded_at    TIMESTAMPTZ,
+    created_at       TIMESTAMPTZ DEFAULT now(),
+    updated_at       TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_cninfo_ann_lookup
+    ON fin.cninfo_announcement (ts_code, category, report_year);
+"""
+
+# ---------- 巨潮全量爬取进度 (按股票断点续传; 股票枚举天然有序, 股票级状态非水位线坑) ----------
+DDL_CNINFO_SYNC_STATE = """
+CREATE TABLE IF NOT EXISTS fin.cninfo_sync_state (
+    ts_code        VARCHAR(16) PRIMARY KEY,
+    meta_status    VARCHAR(12) DEFAULT 'pending',  -- pending/done/error
+    dl_status      VARCHAR(12) DEFAULT 'skip',     -- skip/done/partial/error
+    last_error     VARCHAR(512),
+    updated_at     TIMESTAMPTZ DEFAULT now()
+);
+"""
+
 FIN_ALL_DDL = [
     DDL_FIN_SCHEMA,
     DDL_INCOME,
     DDL_BALANCESHEET,
     DDL_CASHFLOW,
     DDL_FINA_INDICATOR,
+    DDL_FINA_MAINBZ,
+    DDL_VIEW_MAIN_BIZ,
     DDL_FIN_SYNC_META,
+    DDL_CNINFO_ANNOUNCEMENT,
+    DDL_CNINFO_SYNC_STATE,
 ]
 
 # 财务表名常量
@@ -496,7 +589,12 @@ T_INCOME = "fin.income"
 T_BALANCESHEET = "fin.balancesheet"
 T_CASHFLOW = "fin.cashflow"
 T_FINA_INDICATOR = "fin.fina_indicator"
+T_FINA_MAINBZ = "fin.fina_mainbz"
 T_FIN_SYNC_META = "fin.sync_meta"
+T_CNINFO_ANNOUNCEMENT = "fin.cninfo_announcement"
+
+# 产业链图谱表 fin.chain_extract 的 DDL 已外迁至 beta_alpha/schema.py
+# (模块内 ensure 函数, 随 beta_alpha 子系统自治)
 
 
 def init_fin_schema(pg_client) -> None:
@@ -723,10 +821,25 @@ CREATE TABLE IF NOT EXISTS fin.report_sync_meta (
 COMMENT ON TABLE fin.report_sync_meta IS '研报同步水位线(zsxq→PG 断点续传)';
 """
 
+# 去重合并删除留痕: sync 幂等靠 file_id 存在性检查, 物理删除后 file_id 消失
+# 会被 _sync_group_files (全量扫描) 重新插入 -> 入库/删除/重插/再分析 乒乓循环 (曾致
+# 同一图片型 PDF 反复 OCR 烧 qwen)。删除前落此表, sync 检查它后永不重插。
+DDL_REPORT_MERGED = """
+CREATE TABLE IF NOT EXISTS fin.report_meta_merged (
+    file_id     BIGINT PRIMARY KEY,            -- 被合并删除的文件ID
+    report_id   INTEGER,
+    topic_id    BIGINT,
+    file_name   VARCHAR(256),
+    merged_at   TIMESTAMP DEFAULT now()
+);
+COMMENT ON TABLE fin.report_meta_merged IS '去重合并删除留痕: 已删条目不再被 sync 重新插入';
+"""
+
 REPORT_DDL = [
     DDL_REPORT_META,
     DDL_REPORT_FORECAST,
     DDL_REPORT_SYNC_META,
+    DDL_REPORT_MERGED,
 ]
 
 T_REPORT_META = "fin.report_meta"

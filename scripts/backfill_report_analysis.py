@@ -148,6 +148,45 @@ def phase_ocr(limit: int) -> None:
     _log(f"[ocr] 完成: ok={ok} fail={fail}")
 
 
+def phase_purge_cn() -> None:
+    """
+    删除中文翻译版条目 (文件名「中文版-」等, is_chinese_translated):
+    同 topic 存在原版时删除中文版 (含 forecast 级联); 无原版的中文版保留 (删则失数据)。
+    幂等可重跑 —— 用于清理旧代码期间入库的中文版。
+    """
+    from utils.helpers import is_chinese_translated
+    with PgClient() as pg:
+        rows = pg.fetch_all(
+            "SELECT report_id, topic_id, file_name FROM fin.report_meta ORDER BY report_id")
+    by_topic: dict = {}
+    for r in rows:
+        by_topic.setdefault(r["topic_id"], []).append(r)
+    doomed = []
+    for r in rows:
+        if not is_chinese_translated(r.get("file_name") or ""):
+            continue
+        sibs = [s for s in by_topic.get(r["topic_id"], [])
+                if s["report_id"] != r["report_id"]]
+        if any(not is_chinese_translated(s.get("file_name") or "") for s in sibs):
+            doomed.append(r["report_id"])
+    if not doomed:
+        _log("[purge-cn] 无成对中文版需要删除")
+        return
+    # 留痕表须存在 (sync 幂等靠它防止被删中文版被全量同步重新插入)
+    from scripts.merge_report_duplicates import _ensure_merged_table
+    _ensure_merged_table()
+    with PgClient() as pg:
+        for rid in doomed:
+            pg.execute(
+                """INSERT INTO fin.report_meta_merged (file_id, report_id, topic_id, file_name)
+                   SELECT file_id, report_id, topic_id, file_name
+                   FROM fin.report_meta WHERE report_id=%s AND file_id IS NOT NULL""",
+                (rid,))
+            pg.execute("DELETE FROM fin.report_forecast WHERE report_id=%s", (rid,))
+            pg.execute("DELETE FROM fin.report_meta WHERE report_id=%s", (rid,))
+    _log(f"[purge-cn] 已删除成对中文版 {len(doomed)} 条")
+
+
 def main():
     parser = argparse.ArgumentParser(description="研报存量积压回填")
     parser.add_argument("--meta-limit", type=int, default=500)
@@ -156,6 +195,8 @@ def main():
                         help="图片型 PDF 处理册数 (0=跳过 OCR)")
     parser.add_argument("--skip-meta", action="store_true")
     parser.add_argument("--only-meta", action="store_true")
+    parser.add_argument("--purge-cn", action="store_true",
+                        help="只做中文翻译版清理 (删除有成对原版的中文版条目)")
     args = parser.parse_args()
 
     if not get_config().openai_api_key:
@@ -163,9 +204,15 @@ def main():
         sys.exit(1)
 
     t0 = time.time()
-    if not args.skip_meta:
+    if args.purge_cn:
+        phase_purge_cn()
+    elif not args.skip_meta:
         phase_meta(args.meta_limit)
-    if not args.only_meta:
+        if not args.only_meta:
+            phase_deep(args.deep_limit)
+            if args.ocr_limit > 0:
+                phase_ocr(args.ocr_limit)
+    else:
         phase_deep(args.deep_limit)
         if args.ocr_limit > 0:
             phase_ocr(args.ocr_limit)
