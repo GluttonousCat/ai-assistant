@@ -34,11 +34,16 @@ from tools.cninfo.client import CninfoClient
 from tools.cninfo.downloader import (CninfoDownloader, _PERIODIC_CATEGORIES)
 from storage.pg_schema import (DDL_CNINFO_ANNOUNCEMENT, DDL_CNINFO_SYNC_STATE)
 
+import psycopg2
+
 logger = get_logger(__name__)
 
 CONSECUTIVE_FAIL_LIMIT = 8      # 连续 N 只失败 → 站点限流, 优雅停止
 BATCH_MIN_DELAY = 2.0           # 批量模式股票间最小延迟 (秒)
 BATCH_MAX_DELAY = 5.0
+
+# PG 服务端断连 (重启/连接被剔): 捕获后重连续跑, 不弃整场数小时任务
+_PG_DOWN_ERRORS = (psycopg2.OperationalError, psycopg2.InterfaceError)
 
 
 def _load_universe() -> List[Dict[str, str]]:
@@ -134,6 +139,60 @@ class BatchCrawler:
 
     # ---------- 主流程 ----------
 
+    PG_RECONNECT_TRIES = 3   # 单股 PG 断连重连次数 (服务端重启等环境抖动)
+
+    @staticmethod
+    def _safe_close(pg) -> None:
+        """关闭可能已断死的连接 (关闭动作本身抛错直接吞掉)"""
+        try:
+            pg.__exit__(None, None, None)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _process_stock(self, pg, stock: Dict[str, str], i: int, n: int,
+                       years: List[int], cats, with_pdf: bool,
+                       resume: bool, total_stats: Dict[str, int]) -> str:
+        """处理单只股票 (幂等可重入)。返回 skip/done/error; 计数进 total_stats。"""
+        ts_code, name = stock["ts_code"], stock["name"]
+
+        if resume:
+            state = self._get_state(pg, ts_code)
+            if state and state["meta_status"] == "done":
+                if not with_pdf or state["dl_status"] == "done":
+                    total_stats["stocks_skip"] += 1
+                    return "skip"
+                # meta 已 done 仅缺 PDF: DB 直读下载, 免重打查询接口
+                dl = self._download_stock_db(pg, ts_code, years, tuple(cats))
+                total_stats["downloaded"] += dl.get("downloaded", 0)
+                total_stats["dl_skipped"] += dl.get("skipped", 0)
+                total_stats["pdf_failed"] = (
+                    total_stats.get("pdf_failed", 0) + dl.get("failed", 0))
+                logger.info(f"[{i}/{n}] {ts_code} {name} "
+                            f"直读下载: {dl.get('downloaded', 0)} 新增 "
+                            f"+ {dl.get('skipped', 0)} 已有"
+                            + (f", {dl['failed']} 失败"
+                               if dl.get("failed") else ""))
+                self._set_state(pg, ts_code, "done",
+                                dl_status="done"
+                                if not dl.get("failed") else "partial")
+                total_stats["stocks_done"] += 1
+                return "done"
+
+        stats = self.dl.sync_stock(ts_code, years, download=with_pdf,
+                                   categories=tuple(cats))
+        if stats.get("failed"):
+            self._set_state(pg, ts_code, "error", "orgId/query failed (限流?)")
+            total_stats["stocks_err"] += 1
+            return "error"
+        self._set_state(pg, ts_code, "done",
+                        dl_status="done" if with_pdf else None)
+        total_stats["stocks_done"] += 1
+        total_stats["queried"] += stats.get("queried", 0)
+        total_stats["saved"] += stats.get("saved", 0)
+        total_stats["downloaded"] += stats.get("downloaded", 0)
+        total_stats["dl_skipped"] += stats.get("skipped", 0)
+        return "done"
+
     def run(self, years: List[int], limit: int = 0, resume: bool = True,
             max_minutes: float = 0, categories: List[str] = None,
             index_code: str = "", with_pdf: bool = False) -> Dict[str, int]:
@@ -143,6 +202,7 @@ class BatchCrawler:
         with_pdf=True:  元数据 + 每股 5年×4类 全文 PDF 下载 (关注池形态,
                         沪深300 ≈ 6000 份 ≈ 15-20GB)。
         断点判定: 元数据模式看 meta_status; PDF 模式须 meta+dl 双 done。
+        韧性: PG 断连 (服务端重启等) 自动重连续跑, 不弃整场任务。
         """
         from storage.pg import PgClient
         cats = categories or list(_PERIODIC_CATEGORIES.keys())
@@ -155,7 +215,10 @@ class BatchCrawler:
         consecutive_fails = 0
         processed = 0
 
-        with PgClient() as pg:
+        # 手动上下文: 便于断连时 __exit__ 释放 + 重新 __enter__ 取健康连接
+        # (PgClient.__enter__ 自带 SELECT 1 健康检查, 池内坏连接自动换新)
+        pg = PgClient().__enter__()
+        try:
             self._ensure_state_table(pg)
             pg.execute(DDL_CNINFO_ANNOUNCEMENT)
             pg.conn.commit()
@@ -169,39 +232,28 @@ class BatchCrawler:
                     break
                 ts_code, name = stock["ts_code"], stock["name"]
 
-                if resume:
-                    state = self._get_state(pg, ts_code)
-                    if state and state["meta_status"] == "done":
-                        if not with_pdf or state["dl_status"] == "done":
-                            total_stats["stocks_skip"] += 1
-                            continue
-                        # meta 已 done 仅缺 PDF: DB 直读下载, 免重打查询接口
-                        dl = self._download_stock_db(pg, ts_code, years,
-                                                     tuple(cats))
-                        total_stats["downloaded"] += dl.get("downloaded", 0)
-                        total_stats["dl_skipped"] += dl.get("skipped", 0)
-                        total_stats["pdf_failed"] = (
-                            total_stats.get("pdf_failed", 0)
-                            + dl.get("failed", 0))
-                        logger.info(f"[{i}/{len(universe)}] {ts_code} {name} "
-                                    f"直读下载: {dl.get('downloaded', 0)} 新增 "
-                                    f"+ {dl.get('skipped', 0)} 已有"
-                                    + (f", {dl['failed']} 失败"
-                                       if dl.get("failed") else ""))
-                        self._set_state(pg, ts_code, "done",
-                                        dl_status="done"
-                                        if not dl.get("failed") else "partial")
-                        total_stats["stocks_done"] += 1
-                        processed += 1
-                        continue
-
-                stats = self.dl.sync_stock(ts_code, years, download=with_pdf,
-                                           categories=tuple(cats))
-                processed += 1
-                if stats.get("failed"):
-                    self._set_state(pg, ts_code, "error",
-                                    "orgId/query failed (限流?)")
+                status = None
+                for attempt in range(1, self.PG_RECONNECT_TRIES + 1):
+                    try:
+                        status = self._process_stock(pg, stock, i,
+                                                     len(universe), years,
+                                                     cats, with_pdf, resume,
+                                                     total_stats)
+                        break
+                    except _PG_DOWN_ERRORS as e:
+                        logger.warning(f"PG 断连 {ts_code} ({attempt}/"
+                                       f"{self.PG_RECONNECT_TRIES}): "
+                                       f"{str(e)[:80]} — 重连后续跑")
+                        self._safe_close(pg)
+                        time.sleep(10 * attempt)
+                        pg = PgClient().__enter__()
+                        self._ensure_state_table(pg)
+                if status is None:      # 重连重试仍失败
                     total_stats["stocks_err"] += 1
+                    status = "error"
+                processed += 0 if status == "skip" else 1
+
+                if status == "error":
                     consecutive_fails += 1
                     logger.warning(f"[{i}/{len(universe)}] {ts_code} {name} "
                                    f"失败 (连续 {consecutive_fails})")
@@ -210,22 +262,16 @@ class BatchCrawler:
                                      f"判定站点限流 — 优雅停止, 进度已保存, 稍后重跑续传")
                         break
                 else:
-                    self._set_state(pg, ts_code, "done",
-                                    dl_status="done" if with_pdf else None)
-                    total_stats["stocks_done"] += 1
-                    total_stats["queried"] += stats.get("queried", 0)
-                    total_stats["saved"] += stats.get("saved", 0)
-                    total_stats["downloaded"] += stats.get("downloaded", 0)
-                    total_stats["dl_skipped"] += stats.get("skipped", 0)
                     consecutive_fails = 0
-                    dl_note = (f", 下载 {stats.get('downloaded', 0)}"
-                               f"+skip{stats.get('skipped', 0)}")
                     if processed % 20 == 0 or processed <= 3:
                         el = time.time() - t0
                         rate = processed / el * 3600 if el else 0
                         eta_h = (len(universe) - i) / rate if rate else -1
-                        logger.info(f"[{i}/{len(universe)}] 进度 {processed} 只{dl_note} "
+                        logger.info(f"[{i}/{len(universe)}] 进度 {processed} 只, "
+                                    f"累计下载 {total_stats['downloaded']} 份 "
                                     f"({rate:.0f} 只/h, 预计剩余 {eta_h:.1f}h)")
+        finally:
+            self._safe_close(pg)
 
         total_stats["elapsed_min"] = round((time.time() - t0) / 60, 1)
         return total_stats

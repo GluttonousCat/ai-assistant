@@ -98,6 +98,7 @@ vision=qwen3.8-flash（deepseek 不收图片）。**思考开关由 `llm.enable_
 | zip 对齐错配 | 多源数据按键(dict)匹配，绝不按位置 zip（range_trading 回测曾全错） |
 | LLM prompt 花括号 | `.format()` 模板里的 JSON 花括号必须转义 `{{}}`（曾致 KeyError） |
 | 视觉 OCR 阻塞请求线程 | OCR 一律后台线程 + 状态 pending_ocr（前端隐藏，完成后自动接续） |
+| PG 服务端重启杀数小时批任务 | 长批任务按工作单元（每股）捕获 OperationalError 重连续跑（batch.py `_process_stock`/sync_holders 模式）；注意 PgClient 连接在 `__enter__` 才从池获取，手动管理必须 `PgClient().__enter__()` 成对使用，裸构造 conn/cur 全是 None |
 
 ## 7. 开发规范（提交前自查）
 

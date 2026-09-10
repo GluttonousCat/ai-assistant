@@ -84,9 +84,11 @@ def sync(ts_code: str, name: str = "", years: int = 5) -> Dict[str, int]:
             except Exception as e:  # noqa: BLE001 限频/积分
                 logger.warning(f"top10 {ts_code} 失败 ({attempt}/{RETRIES}): "
                                f"{str(e)[:80]}")
-                time.sleep(2 * attempt)
+                time.sleep(min(60, 10 * attempt))
         if df is None:
             stats["failed"] = 1
+            logger.warning(f"top10 {ts_code} {name}: 接口重试耗尽, 跳过 "
+                           f"(增量起点不丢失, 重跑自动补)")
             return stats
         if df.empty:
             return stats
@@ -129,8 +131,18 @@ def main() -> int:
         stocks = stocks[:args.limit]
     logger.info(f"十大股东同步: {len(stocks)} 只")
     total = {"saved": 0, "failed": 0}
+    import psycopg2
+    pg_down = (psycopg2.OperationalError, psycopg2.InterfaceError)
     for i, s in enumerate(stocks, 1):
-        st = sync(s["ts_code"], s.get("name", ""), args.years)
+        st = {"saved": 0, "failed": 1}
+        for attempt in range(1, RETRIES + 1):
+            try:
+                st = sync(s["ts_code"], s.get("name", ""), args.years)
+                break
+            except pg_down as e:   # PG 服务端断连: 每股独立连接, 重试即重连
+                logger.warning(f"top10 {s['ts_code']} PG 断连 "
+                               f"({attempt}/{RETRIES}): {str(e)[:80]}")
+                time.sleep(10 * attempt)
         for k in total:
             total[k] += st.get(k, 0)
         if i % 50 == 0:

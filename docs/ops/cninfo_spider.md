@@ -110,6 +110,7 @@ python -m tools.cninfo.batch --download-watchlist 300308,600519 --years 2024  # 
 | pg_schema NameError | DDL 常量定义在 FIN_ALL_DDL 引用之后（Python 自上而下执行） | 定义移到列表之前 |
 | 大文件 PDF 3 次重试全废 | 30MB+ 年报每连接仅得 3-5MB 即被掐断，整文件重试等于重头再来 | Range 断点续传 + 有增量即前进（见 2.2），旧 `.part` 亦可续 |
 | batch run() KeyError 'failed' | DB 直读分支累加 `total_stats['pdf_failed']` 等未初始化键 | 已有键 + `setdefault` 模式累加 |
+| PG 服务端重启杀整场任务 | 数小时批任务握单连接，服务端一断全盘皆输 | run() 重构为 `_process_stock` 按股捕获断连→`PgClient().__enter__()` 重连续跑（`__enter__` 自带健康检查换新连接）；首次踩坑：裸 `PgClient()` 不进上下文 cur=None |
 
 ## 四、验证记录
 
