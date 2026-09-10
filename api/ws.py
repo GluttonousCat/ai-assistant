@@ -11,8 +11,8 @@ from datetime import datetime
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from core.logger import get_logger
-from agent.state import AgentState
-from agent.graph import create_crawler_agent, invoke_agent
+from core.workflow.state import AgentState
+from core.workflow.graph import create_crawler_agent, invoke_agent
 
 ws_router = APIRouter(tags=["agent-ws"])
 

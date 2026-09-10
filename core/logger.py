@@ -24,8 +24,8 @@ _FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 _DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 # 顶层包 → 日志文件名 白名单 (未命中的顶层名也允许, 天然兜底新包)
-_KNOWN_TOPS = ("agent", "mcp", "core", "api", "storage", "tools",
-               "range_trading", "scripts", "evals", "app")
+_KNOWN_TOPS = ("core", "skills", "services", "mcp", "api", "storage", "tools",
+               "jobs", "range_trading", "evals", "app")
 
 
 def _project_root() -> Path:

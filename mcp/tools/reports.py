@@ -130,8 +130,8 @@ def read_report(report_id: int, question: str = "",
     content = row.get("content_text") or ""
     if question:
         # 单篇问答: 走 ReportSkill qa 模式 (LLM, 输出中文)
-        from agent.skills.report.skill import ReportSkill
-        from agent.skills.base import SkillContext
+        from skills.report.skill import ReportSkill
+        from skills.base import SkillContext
         skill = ReportSkill()
         ctx = skill(SkillContext(user_input=question,
                                  params={"mode": "qa", "report_id": int(report_id)}))
@@ -172,7 +172,7 @@ def read_report(report_id: int, question: str = "",
 )
 def get_forecasts(stock: str, limit: int = 6) -> Dict[str, Any]:
     hit = resolve_one(stock)
-    from agent.beta_alpha.skills.alpha import (
+    from skills.beta_alpha.skills.alpha import (
         _load_forecast_divergence, _load_views,
     )
     from storage.pg import PgClient

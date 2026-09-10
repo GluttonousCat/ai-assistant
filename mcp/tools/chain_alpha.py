@@ -29,7 +29,7 @@ from mcp.tools._common import _jsonable, resolve_one
     examples=["有哪些产业链", "支持哪些链条分析"],
 )
 def list_chains() -> Dict[str, Any]:
-    from agent.beta_alpha.analysis import chain_analysis as ca
+    from skills.beta_alpha.analysis import chain_analysis as ca
     chains = ca.load_chains()
     return {"count": len(chains), "chains": [{
         "chain_id": c["chain_id"], "name": c.get("name", c["chain_id"]),
@@ -58,7 +58,7 @@ def list_chains() -> Dict[str, Any]:
     examples=["AI算力产业链有哪些环节", "光模块环节的受益标的", "半导体国产化链哪个环节最强"],
 )
 def analyze_chain(chain: str, node: str = "", member_limit: int = 6) -> Dict[str, Any]:
-    from agent.beta_alpha.analysis import chain_analysis as ca
+    from skills.beta_alpha.analysis import chain_analysis as ca
     chain_obj = ca.match_chain(chain)
     if not chain_obj:
         raise ToolError(f"未匹配到产业链模板: {chain}。可先调 list_chains 查看支持清单, "
@@ -101,7 +101,7 @@ def analyze_chain(chain: str, node: str = "", member_limit: int = 6) -> Dict[str
     notes="调 LLM 多轮 (草稿->校验->修正), 慢; 产物是 YAML 草稿, 不自动写文件",
 )
 def forge_chain(theme: str) -> Dict[str, Any]:
-    from agent.beta_alpha.forge import chain_to_yaml, forge_chain as _forge
+    from skills.beta_alpha.forge import chain_to_yaml, forge_chain as _forge
     try:
         res = _forge(theme)
     except Exception as e:  # noqa: BLE001
@@ -135,7 +135,7 @@ def forge_chain(theme: str) -> Dict[str, Any]:
     examples=["中际旭创的预期差", "市场对贵州茅台的预期", "宁德时代基本面拐点"],
 )
 def analyze_alpha(stock: str) -> Dict[str, Any]:
-    from agent.beta_alpha.skills.alpha import AlphaSkill
+    from skills.beta_alpha.skills.alpha import AlphaSkill
     hit = resolve_one(stock)
     skill = AlphaSkill()
     try:

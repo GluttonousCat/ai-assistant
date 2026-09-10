@@ -27,7 +27,7 @@ from mcp.spec import ToolError, obj_schema, param
     examples=["给中际旭创做个画像", "全面看一下宁德时代"],
 )
 def build_company_profile(stock: str, years: int = 5) -> Dict[str, Any]:
-    from agent.content.profile import build_company_profile as _build
+    from skills.content.profile import build_company_profile as _build
     try:
         return _build(stock, years)
     except Exception as e:  # noqa: BLE001
@@ -52,7 +52,7 @@ def build_company_profile(stock: str, years: int = 5) -> Dict[str, Any]:
     notes="产物 output/articles/YYYYMMDD_*.md; 发布公众号为人工操作 (草稿箱API后续可选)",
 )
 def write_article(stock: str = "", topic: str = "", years: int = 5) -> Dict[str, Any]:
-    from agent.content.article import write_stock_article, write_topic_article
+    from skills.content.article import write_stock_article, write_topic_article
     try:
         if topic:
             return write_topic_article(topic)

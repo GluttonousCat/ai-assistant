@@ -18,34 +18,36 @@
 ## 2. 目录与分层契约（关键 30 秒）
 
 ```
-agent/      智能体域 (一个顶层目录, 解耦语义保留在二级子包):
-            loop/fin_graph/subagent  意图路由 + LLM自主决策工具循环 + 六域子代理
-            skills/                  fin_query(Text-to-SQL) / report(研报) / scanned_report(OCR)
-            beta_alpha/              产业链Beta+个股Alpha (chains种子链/analysis映射与指数/
-                                     streaming SSE/schema DDL/tests; 对话页两条链路全在这)
-            content/                 内容资产管线 (画像→公众号文章/PPT): profile十板块/
-                                     charts五图/article六模块/annual_report年报解读
-mcp/        MCP工具协议层 (21工具ToolSpec, stdio server; 外部客户端 python -m mcp.server,
-            与 agent/loop 函数桥共用一份定义; 保持顶层=对外边界, 勿挪动)
-core/       config(.env+yaml) / logger / security(JWT+bcrypt) / scheduler(Tushare 21:00)
-            zsxq_scheduler(爬虫 07:00/23:00) / lifespan / llm(模型路由工厂) / helpers·paths
-.agents/skills/ ZCode技能模块 (beta-skill/alpha-skill/interpret-skill: SKILL.md 会话内直接调用)
-tools/      zsxq爬虫 / market行情同步(sync_mainbz主营构成, sync_holders十大股东) /
-            cninfo巨潮定期报告 / finance(SQL guard, KB, pdf_vision视觉OCR)
-storage/    pg.py(连接池) / sqlite(爬虫) / pg_schema.py(全部DDL,改表先看这)
-api/        路由+鉴权中间件(JWT) / ws / finance(SSE流式) / reports / auth
-web/src/    Login / Platform(侧边栏壳+角色门控) / AgentChat(SSE) / ChainView(产业链页)
-            Reports / UserAdmin; Markdownish 共享渲染器
-scripts/    管线入口脚本(daily_fetch_zxsq, sync_zxsq_to_pg, merge_report_duplicates, smoke)
+core/        引擎层 + 基础设施 (主流 ToB Agent 同构, 如 Dify core/agent + core/workflow):
+             agent/     loop(自主决策工具循环)/subagent(六域子代理)/intent/history_store/context_store
+             workflow/  fin_graph(意图路由图)/graph+nodes(爬虫图)/state
+             llm(模型路由工厂)/config(.env+yaml)/logger(按顶层包分桶)/security(JWT+bcrypt)/
+             lifespan/net/helpers·paths
+skills/      领域技能 (每技能一目录, 专业知识放 prompt):
+             fin_query(Text-to-SQL) / report(研报) / scanned_report(OCR) /
+             beta_alpha(产业链Beta+个股Alpha: chains种子链/analysis/tests) /
+             content(内容资产管线: 画像/公众号文章/PPT/年报解读)
+services/    用例编排层 (api 与引擎/技能之间): streaming(chain/alpha SSE)
+jobs/        任务层一体: scheduler(Tushare 21:00) / zsxq_scheduler(爬虫 07:00/23:00) /
+             管线入口(daily_fetch_zxsq, sync_zxsq_to_pg, merge_report_duplicates, smoke)
+mcp/         MCP工具协议层 (21工具ToolSpec, stdio server; 外部客户端 python -m mcp.server,
+             与 core/agent/loop 函数桥共用一份定义; 保持顶层=对外边界, 勿挪动)
+tools/       zsxq爬虫 / market行情同步(sync_mainbz主营构成, sync_holders十大股东) /
+             cninfo巨潮定期报告 / finance(SQL guard, KB, pdf_vision视觉OCR)
+storage/     pg.py(连接池) / sqlite(爬虫) / pg_schema.py(全部DDL,改表先看这)
+api/         路由+鉴权中间件(JWT) / ws / finance(SSE流式) / reports / auth
+web/src/     Login / Platform(侧边栏壳+角色门控) / AgentChat(SSE) / ChainView(产业链页)
+             Reports / UserAdmin; Markdownish 共享渲染器
 range_trading/  量化子系统(特征/regime状态机/扫描/回测, 自带tests)
 ```
 
-**分层契约**：`api → agent(内含 skills/beta_alpha/content) → tools → storage`，
-mcp 是与 agent 平行的工具协议出口，只允许上层调下层：
+**分层契约**：`api → services → core(引擎)+skills(领域) → tools → storage`，
+mcp 是与 core 平行的工具协议出口，只允许上层调下层：
 
 - **api**：HTTP/WS 入口，鉴权（middleware 白名单外全 JWT）、参数校验；重逻辑不写在这
-- **agent**：LangGraph 图，意图识别 + 路由；不直接摸 storage
-- **skills**：领域方法论，编排 tools + LLM prompt（专业知识放 prompt，不放代码）
+- **services**：用例编排（SSE 流式把引擎与技能串成完整链路）
+- **core/agent + core/workflow**：引擎——LLM 决策循环、意图路由；不直接摸 storage
+- **skills**：领域方法论，编排 tools + LLM prompt
 - **tools**：原子能力，无业务状态；新视觉/提取能力进 tools（如 pdf_vision）
 - **storage**：唯一碰 PG/SQLite 的层；DDL 全部集中在 `pg_schema.py`/各模块 ensure 函数
 
@@ -117,8 +119,8 @@ vision=qwen3.8-flash（deepseek 不收图片）。**思考开关由 `llm.enable_
 4. **加前端页**：`web/src/` 下新组件 + `Platform.jsx` NAV 注册（注意 adminOnly/superOnly）；
    改完必须 `npm run build`（后端托管 dist，不构建不生效）
 5. **验证**：改研报链路后跑 `python -m tools.finance.report_meta_analysis` 单篇验证；
-   改量化跑 `pytest range_trading/tests`；改 beta_alpha 跑 `pytest agent/beta_alpha/tests`
-   （改链模板另跑 `python -m agent.beta_alpha.analysis.chain_analysis <chain_id>`）；
+   改量化跑 `pytest range_trading/tests`；改 beta_alpha 跑 `pytest skills/beta_alpha/tests`
+   （改链模板另跑 `python -m skills.beta_alpha.analysis.chain_analysis <chain_id>`）；
    改完 git commit（消息带日期与模块）
 6. **日志**：一律 `get_logger(__name__)`（core/logger 按顶层包聚合落
    logs/agent.log / tools.log 等；禁止裸 `logging.getLogger` 与库代码 print；
@@ -136,7 +138,7 @@ vision=qwen3.8-flash（deepseek 不收图片）。**思考开关由 `llm.enable_
 | 扫描件 Agent | [docs/agents/scanned_report_agent.md](docs/agents/scanned_report_agent.md) | PDF→PNG→视觉OCR 解耦设计 |
 | MCP 工具层 | [mcp/README.md](mcp/README.md) | 18 工具/ToolSpec 规范/中文description约定/stdio 服务(默认只读) |
 | Agent 对话循环 | [docs/agents/agent_loop.md](docs/agents/agent_loop.md) | LLM 自主决策+工具循环/多轮追问/累计口径知识/沙盒；新入口 `/api/v1/agent/stream` |
-| 内容资产管线 | [docs/agents/content_pipeline.md](docs/agents/content_pipeline.md) | 上市公司画像/公众号文章/pptgen出片；`python -m agent.content` |
+| 内容资产管线 | [docs/agents/content_pipeline.md](docs/agents/content_pipeline.md) | 上市公司画像/公众号文章/pptgen出片；`python -m skills.content` |
 | Beta/Alpha Skill | [docs/agents/chain_beta_skill.md](docs/agents/chain_beta_skill.md) | 产业链种子链/三源映射/环节指数/预期差四象限；Agent 会话入口在 `.agents/skills/beta-skill`、`.agents/skills/alpha-skill` |
 | 安全 | [docs/ops/security.md](docs/ops/security.md) | 分层防护/事件审计/加固清单 |
 | 数据处理 | [docs/ops/data_process.md](docs/ops/data_process.md) | 历史：同步全流程 |

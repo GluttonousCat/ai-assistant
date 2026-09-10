@@ -30,14 +30,14 @@
 ```
 
 **为什么是编排型而非自由工具循环**：内容生产要求稳定可复现（同一股票重跑结构
-一致、数字单源），自由循环引入不确定性且难以断言评测。对话 Agent（agent/loop.py）
+一致、数字单源），自由循环引入不确定性且难以断言评测。对话 Agent（core/agent/loop.py）
 负责"问"，解读 Agent 负责"产"——两者通过 MCP 工具衔接。
 
 ### 1.3 三入口
 
 | 入口 | 形态 | 说明 |
 |------|------|------|
-| CLI | `python -m agent.content interpret 中芯国际 [--annual-year 2025] [--ppt]` | 主入口, 断点友好 |
+| CLI | `python -m skills.content interpret 中芯国际 [--annual-year 2025] [--ppt]` | 主入口, 断点友好 |
 | ZCode 会话 | `.agents/skills/interpret-skill` (SKILL.md 驱动) | 对齐 beta/alpha-skill 模式, 会话内直接说"给XX做解读" |
 | 对话 Agent | MCP `write_article` (写类, 沙盒默认排除, 需显式放开) | 聊天页触发, 复用既有工具 |
 
@@ -82,10 +82,10 @@ fin.cninfo_announcement (category=ndbg, download_status=done, 文件在盘)
 ## 五、使用
 
 ```bash
-python -m agent.content interpret 中芯国际                    # 最新年报语料 + 六模块 + 五图
-python -m agent.content interpret 中芯国际 --annual-year 2024 # 指定年报年度
-python -m agent.content interpret 中芯国际 --ppt              # 解读完联动出 PPT
-python -m agent.content interpret 中芯国际 --no-annual        # 纯画像模式(=article)
+python -m skills.content interpret 中芯国际                    # 最新年报语料 + 六模块 + 五图
+python -m skills.content interpret 中芯国际 --annual-year 2024 # 指定年报年度
+python -m skills.content interpret 中芯国际 --ppt              # 解读完联动出 PPT
+python -m skills.content interpret 中芯国际 --no-annual        # 纯画像模式(=article)
 ```
 
 ZCode 会话：直接说「给中芯国际做一份解读」触发 interpret-skill。

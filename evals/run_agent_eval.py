@@ -68,7 +68,7 @@ def main() -> int:
     except Exception:
         pass
 
-    from agent.loop import run_agent
+    from core.agent.loop import run_agent
 
     filters = [f.strip().lower() for f in args.only.split(",") if f.strip()]
     cases = [c for c in AGENT_CASES

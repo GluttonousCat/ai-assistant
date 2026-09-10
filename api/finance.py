@@ -17,11 +17,11 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
-from agent.fin_graph import invoke_financial_agent
-from agent.intent import get_intent_classifier
-from agent.skills.base import SkillContext
-from agent.skills.fin_query.skill import FinQuerySkill
-from agent.skills.report.skill import ReportSkill
+from core.workflow.fin_graph import invoke_financial_agent
+from core.agent.intent import get_intent_classifier
+from skills.base import SkillContext
+from skills.fin_query.skill import FinQuerySkill
+from skills.report.skill import ReportSkill
 from tools.finance.schema_info import get_schema_info
 
 fin_router = APIRouter(prefix="/api/v1", tags=["finance"])
@@ -34,7 +34,7 @@ fin_router = APIRouter(prefix="/api/v1", tags=["finance"])
 @fin_router.get("/chains")
 async def list_chains():
     """种子链列表 (轻量, 无 DB)"""
-    from agent.beta_alpha.analysis import chain_analysis as ca
+    from skills.beta_alpha.analysis import chain_analysis as ca
 
     def _build():
         return [{
@@ -51,7 +51,7 @@ async def list_chains():
 @fin_router.get("/chains/{chain_id}/analysis")
 async def get_chain_analysis(chain_id: str, node: Optional[str] = None):
     """链条量化分析 (三源映射+环节指标, 无 LLM; node 参数可只看单环节)"""
-    from agent.beta_alpha.analysis import chain_analysis as ca
+    from skills.beta_alpha.analysis import chain_analysis as ca
 
     def _run():
         chain = ca.get_chain(chain_id)
@@ -84,7 +84,7 @@ async def forge_chain_stream_endpoint(request: Dict[str, Any]):
         raise HTTPException(status_code=400, detail="theme 不能为空")
 
     async def gen():
-        from agent.beta_alpha.forge import chain_to_yaml, forge_chain
+        from skills.beta_alpha.forge import chain_to_yaml, forge_chain
         loop = asyncio.get_running_loop()
         q: asyncio.Queue = asyncio.Queue()
         box: Dict[str, Any] = {}
@@ -134,7 +134,7 @@ async def save_chain_endpoint(request: Dict[str, Any]):
     """保存种子链 (LLM 草稿编辑后/用户手写; 服务端结构校验)"""
     from pathlib import Path as _P
 
-    from agent.beta_alpha.forge import save_chain_yaml
+    from skills.beta_alpha.forge import save_chain_yaml
     yaml_text = request.get("yaml") or ""
     ok, errors, path = await asyncio.to_thread(save_chain_yaml, yaml_text, "web")
     if not ok:
@@ -211,14 +211,14 @@ async def finance_query_stream(request: Dict[str, Any]):
         if intent in ("query", "compare"):
             # 2. Text-to-SQL 链路 (SQL 生成/校验/执行不可流式; 解读流式)
             #    会话上下文: 追问省略主语时沿用上轮股票
-            from agent.context_store import (get_session_stocks,
+            from core.agent.context_store import (get_session_stocks,
                                              update_session_from_result)
             skill = FinQuerySkill()
             ctx = SkillContext(user_input=text)
             context_stocks = get_session_stocks(session_id)
             if context_stocks:
                 ctx.params = {"context_stocks": context_stocks}
-            from agent.skills.fin_query.prompts import RESULT_INTERPRET_PROMPT
+            from skills.fin_query.prompts import RESULT_INTERPRET_PROMPT
 
             sql, explanation, tables = skill._generate_sql(text, context_stocks)
             if not sql:
@@ -264,10 +264,10 @@ async def finance_query_stream(request: Dict[str, Any]):
                     for chunk in skill.llm.stream(prompt):
                         yield _sse("delta", {"text": chunk})
                 except Exception as e:
-                    from agent.skills.fin_query.skill import _result_brief
+                    from skills.fin_query.skill import _result_brief
                     yield _sse("delta", {"text": _result_brief(df)})
             else:
-                from agent.skills.fin_query.skill import _result_brief
+                from skills.fin_query.skill import _result_brief
                 yield _sse("delta", {"text": _result_brief(df)})
 
         elif intent == "report":
@@ -289,13 +289,13 @@ async def finance_query_stream(request: Dict[str, Any]):
                 yield _sse("delta", {"text": result.get("summary", "")})
         elif intent == "chain":
             # 产业链Beta链路 (编排下沉在 beta_alpha.streaming, 此处薄包装)
-            from agent.beta_alpha.streaming import stream_chain
+            from skills.beta_alpha.streaming import stream_chain
             async for chunk in stream_chain(text, _sse):
                 yield chunk
 
         elif intent == "alpha":
             # 个股预期差链路 (同上)
-            from agent.beta_alpha.streaming import stream_alpha
+            from skills.beta_alpha.streaming import stream_alpha
             async for chunk in stream_alpha(text, _sse):
                 yield chunk
 
@@ -340,7 +340,7 @@ async def agent_stream_endpoint(request: Dict[str, Any]):
     session_id = request.get("session_id")
 
     async def gen():
-        from agent.loop import run_agent_stream
+        from core.agent.loop import run_agent_stream
         # 底层模块 (扫描器) 可能 print; SSE 下 stdout 必须只有事件流
         import contextlib
         import sys

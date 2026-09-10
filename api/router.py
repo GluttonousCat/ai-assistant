@@ -232,7 +232,7 @@ async def upload_report(request: dict):
 async def sync_zxsq_reports(group_id: str = None, background_tasks: BackgroundTasks = None):
     """将本地爬取的 zsxq 数据同步到 PG 研报库"""
     def task():
-        from scripts.sync_zxsq_to_pg import ZSXQ2PGSync
+        from jobs.sync_zxsq_to_pg import ZSXQ2PGSync
         gid = group_id or get_config().zsxq_group_id
         if not gid:
             raise HTTPException(status_code=400, detail="未指定群组ID")
@@ -283,7 +283,7 @@ async def agent_chat(request: dict):
 @router.post("/admin/sync-today", tags=["admin"])
 async def sync_today():
     """手动触发每日增量同步 (交易日 18:00 自动执行的同款)"""
-    from core.scheduler import get_scheduler
+    from jobs.scheduler import get_scheduler
     result = await get_scheduler().trigger_now()
     return {"status": "done", "result": result}
 
@@ -291,7 +291,7 @@ async def sync_today():
 @router.get("/admin/scheduler-status", tags=["admin"])
 async def scheduler_status():
     """调度器状态"""
-    from core.scheduler import get_scheduler
+    from jobs.scheduler import get_scheduler
     s = get_scheduler()
     return {
         "running": s._task is not None and not s._task.done(),

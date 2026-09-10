@@ -1,6 +1,6 @@
 # 产业链 Beta / 个股 Alpha Skill 设计
 
-> 模块：`agent/beta_alpha/`（自治子系统：产业链挖掘 + 个股预期差）；Agent 会话入口 `.agents/skills/beta-skill`、`.agents/skills/alpha-skill`
+> 模块：`skills/beta_alpha/`（自治子系统：产业链挖掘 + 个股预期差）；Agent 会话入口 `.agents/skills/beta-skill`、`.agents/skills/alpha-skill`
 > 更新：2026-09-03
 
 ## 一、系统设计
@@ -15,7 +15,7 @@
 
 | 层 | 职责 | 数据来源 |
 |----|------|----------|
-| 知识层 | 产业链模板（环节树+关键词） | `agent/agent/beta_alpha/chains/*.yaml`（LLM 领域知识固化，git 版本化）+ `fin.chain_extract`（研报动态增量，Phase 2） |
+| 知识层 | 产业链模板（环节树+关键词） | `skills/beta_alpha/chains/*.yaml`（LLM 领域知识固化，git 版本化）+ `fin.chain_extract`（研报动态增量，Phase 2） |
 | 映射层 | 环节→标的三源打分 | ① 主营构成收入占比（硬证据）② 申万 L2 行业（兜底）③ 研报 tags/链抽取（佐证） |
 | 量化层 | 环节指数/超额收益/景气度 | `stock.daily`(前复权) 流通市值加权环节组合 vs 沪深300；`fin.fina_indicator` 营收增速中位数；研报热度计数 |
 
@@ -29,7 +29,7 @@
 ### 1.4 代码形态（分层契约遵守）
 
 ```
-agent/beta_alpha/                                     自治模块（对标 range_trading/, 对外只暴露稳定入口）
+skills/beta_alpha/                                     自治模块（对标 range_trading/, 对外只暴露稳定入口）
 ├── chains/*.yaml                种子链模板（专业知识载体）
 ├── analysis/chain_analysis.py   原子能力：load_chains/match_chain/map_chain（纯 SQL+pandas）
 ├── analysis/chain_extract.py    原子能力：研报正文→环节抽取入库（Phase 2）
@@ -67,10 +67,10 @@ agent/beta_alpha/                                     自治模块（对标 rang
 
 - **Phase 1（存量数据）**：种子链 YAML（AI算力/半导体国产化/人形机器人）+ 三源映射打分 + 环节指数/超额收益 + beta skill 上线对话页（SSE 分支 + 徽章）。
 - **Phase 2（研报增量）**：`fin.chain_extract` DDL + 深度提取后挂后台链抽取（fail-safe 不阻塞主链路）+ 映射融合研报环节热度 + AgentChat 升级（markdown 表格、步骤卡片、新徽章）。
-- **Phase 3（alpha）**：`agent/agent/beta_alpha/skills/alpha.py` 预期差四象限上线（不依赖年报全文）；cninfo 年报定向爬取复用 PDF→OCR→LLM 管线（后续独立迭代，见 §6）。
-- **结构重构（2026-09-03 晚）**：三 Phase 落地的散落代码（skills/beta、skills/alpha、tools/finance/chain_*、pg_schema 的 chain_extract DDL、api 的 SSE 编排）整体迁移为自治模块 `agent/beta_alpha/`，api 只留薄包装，旧位置删除，新增 11 例单元测试。
+- **Phase 3（alpha）**：`skills/beta_alpha/skills/alpha.py` 预期差四象限上线（不依赖年报全文）；cninfo 年报定向爬取复用 PDF→OCR→LLM 管线（后续独立迭代，见 §6）。
+- **结构重构（2026-09-03 晚）**：三 Phase 落地的散落代码（skills/beta、skills/alpha、tools/finance/chain_*、pg_schema 的 chain_extract DDL、api 的 SSE 编排）整体迁移为自治模块 `skills/beta_alpha/`，api 只留薄包装，旧位置删除，新增 11 例单元测试。
 - **产品化（2026-09-04）**：新增「产业链」独立页面 `web/src/ChainView.jsx`（链 chips → 环节卡片墙 → 按需 AI 流式解读；标的 chip 跨页跳对话页自动发起预期差提问，`chat:pending` 机制）；后端只读端点 `GET /api/v1/chains`、`GET /api/v1/chains/{id}/analysis`（无 LLM）；Markdownish 抽为共享渲染器。
-- **种子链锻造（2026-09-05）**：`agent/beta_alpha/forge.py` 双通道建链——LLM 生成闭环（草稿喂真实披露语料样本 → 结构校验 → 关键词命中率 vs 全量主营构成 → 零命中自动修正一轮，超时重试）+ 用户自建（`_template.yaml` 模板 / 网页弹窗编辑，`save_chain_yaml` 统一校验落盘并清缓存）；`--check` 命令出每环节每关键词命中报告；API `POST /api/v1/chains/forge/stream`（SSE）与 `POST /api/v1/chains/save`；前端「＋ 新建链」弹窗（生成/手写共用文本框，命中率 chips 红绿标注）。实测：苹果代工链（apple_oem_chain，人工修正 2 个零命中环节后 EMS 23强/PCB 16强）、磷化工链（phosphorus_chemical_chain 生成即 2 轮收敛）。
+- **种子链锻造（2026-09-05）**：`skills/beta_alpha/forge.py` 双通道建链——LLM 生成闭环（草稿喂真实披露语料样本 → 结构校验 → 关键词命中率 vs 全量主营构成 → 零命中自动修正一轮，超时重试）+ 用户自建（`_template.yaml` 模板 / 网页弹窗编辑，`save_chain_yaml` 统一校验落盘并清缓存）；`--check` 命令出每环节每关键词命中报告；API `POST /api/v1/chains/forge/stream`（SSE）与 `POST /api/v1/chains/save`；前端「＋ 新建链」弹窗（生成/手写共用文本框，命中率 chips 红绿标注）。实测：苹果代工链（apple_oem_chain，人工修正 2 个零命中环节后 EMS 23强/PCB 16强）、磷化工链（phosphorus_chemical_chain 生成即 2 轮收敛）。
 
 ## 五、验证记录
 

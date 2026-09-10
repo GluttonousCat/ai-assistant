@@ -26,8 +26,8 @@ from fastapi.security import HTTPBearer
 from core.logger import get_logger
 from core.security import TokenPayload
 from api.deps import get_current_user, require_admin
-from agent.skills.base import SkillContext
-from agent.skills.report.skill import ReportSkill
+from skills.base import SkillContext
+from skills.report.skill import ReportSkill
 from storage.pg import PgClient
 
 logger = get_logger(__name__)

@@ -20,7 +20,7 @@
 ### 1.2 模块结构
 
 ```
-agent/content/  (智能体域子包, 见 AGENTS.md §2)
+skills/content/  (智能体域子包, 见 AGENTS.md §2)
   profile.py   画像组装 (纯数据零 LLM): 内部全部 REGISTRY.call 复用 MCP 工具层;
                十板块: 概况/主营/近N年财务/估值分位/预测分歧/兑现校验/风险/研报/形态
                + 行业坐标(申万二级 ROE 同业对比) + 十大股东(近5年变动)
@@ -37,7 +37,7 @@ agent/content/  (智能体域子包, 见 AGENTS.md §2)
                deepseek 纯文本 --no-vision); 任务书永远落盘, 出片失败可人工两步走
   prompts.py   提示词 (数据纪律禁编数 / 版权纪律: 观点转述标注机构 / 固定免责声明 /
                六模块插图位置指令)
-  cli.py       python -m agent.content profile|article|ppt
+  cli.py       python -m skills.content profile|article|ppt
 ```
 
 MCP 工具 (mcp/tools/content.py): `build_company_profile`(只读, 全循环可用) +
@@ -67,7 +67,7 @@ MCP 工具 (mcp/tools/content.py): `build_company_profile`(只读, 全循环可�
 | digest 财务全 None | digest 取中文列名, SQL 返回字段原名 (revenue/n_income_attr_p) | 按字段原名取数 + 按年聚合 (优先年报行) + 元转亿 |
 | digest 打印 20 行季报 | 未按年聚合, 5 年窗口季度行全量输出 | 按年分组: 优先 12-31 年报行, 缺则当年最新期 |
 | 主营构成混维度重复 | 产品/地区/行业三维度条目混排 | digest 只取产品维度 (biz_type=P) top4 |
-| `python -m agent.content` 不可执行 | 缺 __main__.py | 补入口调用 cli.main |
+| `python -m skills.content` 不可执行 | 缺 __main__.py | 补入口调用 cli.main |
 
 ## 四、验证记录
 
@@ -82,11 +82,11 @@ MCP 工具 (mcp/tools/content.py): `build_company_profile`(只读, 全循环可�
 ## 五、使用
 
 ```bash
-python -m agent.content profile 中际旭创                     # 画像 (秒级, 纯数据)
-python -m agent.content article --stock 中际旭创             # 公众号文章 (画像模式)
-python -m agent.content article --topic 光模块               # 研报主题综述
-python -m agent.content ppt 中际旭创                         # PPT 全自动
-python -m agent.content ppt 中际旭创 --task-book-only        # 只出任务书 (人工两步出片)
+python -m skills.content profile 中际旭创                     # 画像 (秒级, 纯数据)
+python -m skills.content article --stock 中际旭创             # 公众号文章 (画像模式)
+python -m skills.content article --topic 光模块               # 研报主题综述
+python -m skills.content ppt 中际旭创                         # PPT 全自动
+python -m skills.content ppt 中际旭创 --task-book-only        # 只出任务书 (人工两步出片)
 ```
 
 对话内 (放开写工具后): 「给中际旭创做个画像」「写篇光模块研报综述」。

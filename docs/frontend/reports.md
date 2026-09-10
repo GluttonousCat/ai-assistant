@@ -20,7 +20,7 @@
    2. 对新入库的 PDF/docx 逐篇:
       ① LLM Analysis 轻量元数据 (tools/finance/report_meta_analysis.py,
          输入仅文件名 → title/org/target/industry/region/market, 输出中文机构名)
-      ② 深度提取 (agent/skills/report/skill.py 单篇 extract:
+      ② 深度提取 (skills/report/skill.py 单篇 extract:
          正文 → 评级/盈利预测/核心观点/tags; 输出一律中文, 英文原版翻译后输出)
       (话题 txt 条目跳过, 由 merge 归并进同话题 PDF, 不浪费 LLM)
    3. 去重合并 (scripts/merge_report_duplicates.py)
@@ -79,7 +79,7 @@
 **需求**：点击「AI 分析」即时弹窗，把后台 Agent 处理流程流式展示出来；
 模型一旦开始产出内容，即在弹窗内逐块输出。
 
-**后端链路**（api/reports_api.py + agent/skills/report/skill.py）：
+**后端链路**（api/reports_api.py + skills/report/skill.py）：
 
 ```
 POST /api/reports/{id}/analyze/stream   (SSE, 需 JWT)

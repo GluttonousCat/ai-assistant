@@ -11,7 +11,7 @@ from fastapi import FastAPI
 
 from core.config import get_config
 from core.logger import get_logger
-from core.scheduler import get_scheduler
+from jobs.scheduler import get_scheduler
 
 logger = get_logger(__name__)
 
@@ -53,7 +53,7 @@ async def lifespan(app: FastAPI):
     # 启动知识星球研报抓取调度器 (每日 07:00/23:00 抓取+同步+LLM提取, 启动补跑兜底)
     if config.get("zsxq_schedule.enabled", True):
         try:
-            from core.zsxq_scheduler import get_zsxq_scheduler
+            from jobs.zsxq_scheduler import get_zsxq_scheduler
             get_zsxq_scheduler().start()
             logger.info("知识星球研报抓取调度器已启动 (每日 07:00/23:00)")
         except Exception as e:
@@ -82,7 +82,7 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
     try:
-        from core.zsxq_scheduler import get_zsxq_scheduler
+        from jobs.zsxq_scheduler import get_zsxq_scheduler
         await get_zsxq_scheduler().stop()
     except Exception:
         pass

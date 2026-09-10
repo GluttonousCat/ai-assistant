@@ -88,7 +88,7 @@ def _get_agent():
     """懒加载 agent (确保 mode 设置 env 后 import)"""
     global _AGENT_MODULE
     if _AGENT_MODULE is None:
-        from agent.fin_graph import invoke_financial_agent
+        from core.workflow.fin_graph import invoke_financial_agent
         _AGENT_MODULE = invoke_financial_agent
     return _AGENT_MODULE
 
