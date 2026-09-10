@@ -5,6 +5,8 @@
     python -m content profile 中际旭创                     # 画像 (纯数据)
     python -m content article --stock 中际旭创             # 公众号文章 (画像模式)
     python -m content article --topic 光模块               # 公众号文章 (研报综述模式)
+    python -m content interpret 中芯国际                   # 投研解读 (年报语料增强)
+    python -m content interpret 中芯国际 --ppt             # 解读 + PPT 一条龙
     python -m content ppt 中际旭创                         # 画像 -> pptgen 出片
 """
 from __future__ import annotations
@@ -26,6 +28,15 @@ def main() -> int:
     sa.add_argument("--stock", default="", help="股票画像模式")
     sa.add_argument("--topic", default="", help="研报综述模式")
     sa.add_argument("--years", type=int, default=5)
+
+    si = sub.add_parser("interpret",
+                        help="投研解读 (画像+年报语料+六模块+五图, 可联动PPT)")
+    si.add_argument("stock")
+    si.add_argument("--years", type=int, default=5)
+    si.add_argument("--annual-year", type=int, default=0,
+                    help="指定年报年度 (缺省最新已下载)")
+    si.add_argument("--no-annual", action="store_true", help="不用年报语料")
+    si.add_argument("--ppt", action="store_true", help="解读后联动 PPT 出片")
 
     st = sub.add_parser("ppt", help="画像 PPT (走 ../pptgen)")
     st.add_argument("stock")
@@ -49,6 +60,22 @@ def main() -> int:
         print(json.dumps({k: v for k, v in res.items() if k != "preview"},
                          ensure_ascii=False, indent=1))
         print("\n---- 预览 ----\n", res["preview"])
+        return 0
+    if args.cmd == "interpret":
+        from content.article import write_stock_article
+        res = write_stock_article(
+            args.stock, args.years,
+            annual_year=args.annual_year or None,
+            use_annual=not args.no_annual)
+        print(json.dumps({k: v for k, v in res.items() if k != "preview"},
+                         ensure_ascii=False, indent=1))
+        print("\n---- 预览 ----\n", res["preview"])
+        if args.ppt:
+            from content.ppt import generate_profile_ppt
+            p = generate_profile_ppt(args.stock)
+            print(json.dumps({k: p[k] for k in ("ok", "pptx", "error")
+                              if k in p}, ensure_ascii=False, indent=1))
+            return 0 if p.get("ok") else 1
         return 0
     if args.cmd == "ppt":
         from content.ppt import generate_profile_ppt, make_task_book

@@ -65,8 +65,13 @@ def _render_charts(profile: Dict) -> Dict[str, str]:
     return out
 
 
-def write_stock_article(stock: str, years: int = 5) -> Dict[str, Any]:
-    """画像 -> 配图 -> 公众号文章 (六模块, 图文混排)。"""
+def write_stock_article(stock: str, years: int = 5,
+                        annual_year: Optional[int] = None,
+                        use_annual: bool = True) -> Dict[str, Any]:
+    """画像 + 年报语料 -> 配图 -> 公众号文章 (六模块, 图文混排)。
+
+    年报语料 (cninfo PDF 提炼) 全程降级: 无 PDF/无文本层/提炼失败均不阻塞成文。
+    """
     from llm.client import get_agent_llm
     profile = build_company_profile(stock, years)
     digest = profile_digest(profile)
@@ -74,14 +79,29 @@ def write_stock_article(stock: str, years: int = 5) -> Dict[str, Any]:
         raise RuntimeError(f"画像组装失败: {profile.get('failed_sections')}")
     imgs = _render_charts(profile)
 
+    annual_block = "(无语料: 按上方量化画像成文)"
+    if use_annual:
+        try:
+            from content.annual_report import annual_digest
+            annual = annual_digest(profile.get("ts_code", ""),
+                                   profile.get("name", stock), annual_year)
+            if annual:
+                annual_block = (f"### {annual['year']} 年度报告要点 (管理层讨论与"
+                                f"风险章节提炼, 中文转述)\n{annual['digest']}")
+        except Exception as e:  # noqa: BLE001 语料单源失败不挡主链路
+            logger.warning(f"年报语料获取失败, 降级: {e}")
+
     prompt = GZH_STOCK_ARTICLE_PROMPT.format(
-        digest=digest, disclaimer=DISCLAIMER, **imgs)
+        digest=digest, annual_report=annual_block, disclaimer=DISCLAIMER,
+        **imgs)
     article = get_agent_llm().invoke(prompt)
     path = _save(article, "gzh", profile.get("name", stock))
     n_imgs = sum(1 for v in imgs.values() if v.startswith("![]"))
-    logger.info(f"公众号文章已生成: {path} ({len(article)} 字, {n_imgs} 配图)")
+    logger.info(f"公众号文章已生成: {path} ({len(article)} 字, {n_imgs} 配图, "
+                f"年报语料: {'有' if '年度报告要点' in annual_block else '无'})")
     return {"path": str(path), "chars": len(article),
             "charts": n_imgs,
+            "annual_report": "有" if "年度报告要点" in annual_block else "无",
             "ok_sections": profile.get("ok_sections"),
             "preview": article[:400]}
 

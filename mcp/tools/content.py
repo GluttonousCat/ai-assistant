@@ -17,7 +17,7 @@ from mcp.spec import ToolError, obj_schema, param
     domain="report",
     description=(
         "上市公司画像 (纯数据, 不成文): 一次组装八大板块——公司概况/主营构成/"
-        "近5年核心财务/估值分位/盈利预测分歧/预测兑现/风险信号/近期研报观点/量化形态。"
+        "近5年核心财务/估值分位/盈利预测分歧/预测兑现/风险信号/近期研报观点/量价形态。"
         "用户要'全面了解一家公司'/'做个画像'/'体检'时调用; 画像可作为 write_article "
         "(公众号文章) 与 PPT 生成的素材底座。单板块缺数据自动降级不报错。"),
     params_schema=obj_schema({
