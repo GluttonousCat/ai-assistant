@@ -1,90 +1,109 @@
 # -*- encoding: utf-8 -*-
 """
-@date: 2026/03/24
-@file: logger.py
-@author: GluttonousCat
+统一日志 (按顶层包聚合分文件)
+
+设计 (2026-09-10 规范化, 替代旧的"一模块一文件"失控方案):
+- 每个顶层包一个日志文件: logs/agent.log / mcp.log / core.log / api.log /
+  storage.log / tools.log / range_trading.log / scripts.log / evals.log /
+  app.log — 模块全名在日志行 %(name)s 里, 排查仍可按模块过滤
+- `python -m` 直跑时 __name__=="__main__", 取 sys.modules['__main__'].__package__
+  (-m 方式运行时已置好真实包名) 兜底 "cli" — 消灭旧 __main__.log 大锅饭
+- 级别/目录/保留天数读 config.yaml logging 段 (level/dir/backup_count), 缺省 INFO/logs/30
+- LOG_DIR 锚定项目根 (向上找 config.yaml), 任何 CWD 启动都落在同一处
+
+用法不变: from core.logger import get_logger; logger = get_logger(__name__)
 """
 from __future__ import annotations
 
 import logging
 import sys
-from pathlib import Path
 from logging.handlers import TimedRotatingFileHandler
+from pathlib import Path
+
+_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+# 顶层包 → 日志文件名 白名单 (未命中的顶层名也允许, 天然兜底新包)
+_KNOWN_TOPS = ("agent", "mcp", "core", "api", "storage", "tools",
+               "range_trading", "scripts", "evals", "app")
 
 
-class LogColors:
-    DEBUG = '\033[94m'
-    INFO = '\033[92m'
-    WARNING = '\033[93m'
-    ERROR = '\033[91m'
-    CRITICAL = '\033[1;91m'
-    RESET = '\033[0m'
+def _project_root() -> Path:
+    """向上找 config.yaml 定位项目根 (与 core.config._find_project_root 同规则)"""
+    p = Path(__file__).resolve()
+    for cand in (p.parents[1], *p.parents[2:7]):
+        if (cand / "config.yaml").exists():
+            return cand
+    return p.parents[1]
 
 
-class LogManager:
+def _settings() -> dict:
+    """logging 配置 (level/dir/backup_count), 读失败用缺省, 不让日志拖垮业务"""
+    cfg = {"level": "INFO", "dir": "logs", "backup_count": 30}
+    try:
+        import yaml
+        with open(_project_root() / "config.yaml", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        lg = data.get("logging") or {}
+        for k in cfg:
+            if lg.get(k) is not None:
+                cfg[k] = lg[k]
+    except Exception:  # noqa: BLE001
+        pass
+    return cfg
 
-    _initialized_loggers = {}
 
-    LOG_DIR = Path("logs")
-    DEFAULT_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+def _bucket(name: str) -> str:
+    """模块全名 → 顶层包名 (日志文件桶)"""
+    if name == "__main__":
+        pkg = getattr(sys.modules.get("__main__"), "__package__", "") or ""
+        name = pkg or "cli"
+    top = name.split(".")[0]
+    return top if top.isidentifier() else "app"
+
+
+class _LogManager:
+    """按桶懒建 logger (每桶一个文件 handler, 进程内幂等)"""
+
+    _buckets: dict = {}
 
     @classmethod
-    def setup_logger(
-            cls,
-            name: str,
-            level: int = logging.INFO,
-            log_to_file: bool = True,
-            log_file_name: str | None = None
-    ) -> logging.Logger:
+    def setup(cls, name: str) -> logging.Logger:
+        bucket = _bucket(name)
+        if bucket not in cls._buckets:
+            cfg = _settings()
+            logger = logging.getLogger(bucket)
+            logger.setLevel(
+                getattr(logging, str(cfg["level"]).upper(), logging.INFO))
+            formatter = logging.Formatter(_FORMAT, datefmt=_DATE_FORMAT)
 
-        if name in cls._initialized_loggers:
-            return cls._initialized_loggers[name]
+            console = logging.StreamHandler(sys.stdout)
+            console.setFormatter(formatter)
+            logger.addHandler(console)
 
-        logger = logging.getLogger(name)
-        logger.setLevel(level)
+            log_dir = _project_root() / str(cfg["dir"])
+            log_dir.mkdir(parents=True, exist_ok=True)
+            fh = TimedRotatingFileHandler(
+                filename=str(log_dir / f"{bucket}.log"),
+                when="D", interval=1,
+                backupCount=int(cfg["backup_count"]),
+                encoding="utf-8")
+            fh.setFormatter(formatter)
+            logger.addHandler(fh)
+            logger.propagate = False       # 桶即终点, 不冒泡到 root (防 uvicorn 双打)
+            cls._buckets[bucket] = logger
 
-        if logger.handlers:
-            return logger
-
-        formatter = logging.Formatter(
-            cls.DEFAULT_FORMAT, datefmt=cls.DATE_FORMAT)
-
-        console_handler = logging.StreamHandler(sys.stdout)
-        console_handler.setFormatter(formatter)
-        logger.addHandler(console_handler)
-
-        if log_to_file:
-            if not cls.LOG_DIR.exists():
-                cls.LOG_DIR.mkdir(parents=True, exist_ok=True)
-
-            file_path = cls.LOG_DIR / (log_file_name or f"{name}.log")
-
-            file_handler = TimedRotatingFileHandler(
-                filename=str(file_path),
-                when='D',
-                interval=1,
-                backupCount=30,
-                encoding='utf-8'
-            )
-            file_handler.setFormatter(formatter)
-            logger.addHandler(file_handler)
-
-        logger.propagate = False
-
-        cls._initialized_loggers[name] = logger
-        return logger
+        # 返回「以模块全名为名」的子 logger: 级别继承自桶, %(name)s 打全名
+        child = logging.getLogger(name)
+        if name != bucket:
+            child.propagate = True         # 冒泡到桶 logger 统一输出
+        return child
 
 
-def get_logger(name: str = "App") -> logging.Logger:
-    return LogManager.setup_logger(name)
+def get_logger(name: str = "app") -> logging.Logger:
+    """入口: get_logger(__name__)。__main__ 直跑自动按真实包名归桶。"""
+    return _LogManager.setup(name)
 
 
-if __name__ == "__main__":
-    log = get_logger("DBClient")
-    log.info("数据库连接成功")
-    log.warning("连接池剩余空间不足")
-    log.error("执行 SQL 失败: Select * from unknown_table")
-
-    another_log = get_logger("DBClient")
-    another_log.debug("这条 debug 默认不会显示，因为级别是 INFO")
+# 兼容旧引用 (LogManager 曾被 core/__init__ 导出)
+LogManager = _LogManager

@@ -10,6 +10,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from core.logger import get_logger
 from agent.state import AgentState
 from agent.graph import create_crawler_agent, invoke_agent
 
@@ -91,7 +92,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
 
     except WebSocketDisconnect:
         manager.disconnect(session_id)
-        print(f"会话 {session_id} 断开")
+        get_logger(__name__).info(f"ws 会话 {session_id} 断开")
 
 
 @ws_router.post("/chat/{session_id}")

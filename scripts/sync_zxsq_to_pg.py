@@ -24,6 +24,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from core.logger import get_logger
+logger = get_logger(__name__)
+
 from core.config import get_config
 from storage.pg import PgClient
 from storage.pg_schema import (
@@ -72,7 +75,7 @@ class ZSXQ2PGSync:
         (供下载流水线对刚入库的研报立即做单篇 LLM 分析).
         """
         if not os.path.exists(self.db_path) and self.files_db is None:
-            print(f"❌ 话题库/文件库均不存在: {self.db_path}")
+            logger.error(f"话题库/文件库均不存在: {self.db_path}")
             print("   请先运行爬虫: python -m cli.interactive 或 API /crawl/*")
             return []
 
@@ -135,7 +138,7 @@ class ZSXQ2PGSync:
                 total += 1
 
             self._set_sync_marker(pg, "last_topic_id", value_int=max_topic_id)
-            print(f"📄 话题文本已同步 (本批次 {total} 条, 跳过 {skipped} 条短内容)")
+            logger.info(f"📄 话题文本已同步 (本批次 {total} 条, 跳过 {skipped} 条短内容)")
 
     # ---------- 附件同步 ----------
     def _sync_files(self):
@@ -194,7 +197,7 @@ class ZSXQ2PGSync:
                 total += 1
 
             self._set_sync_marker(pg, "last_file_id", value_int=max_file_id)
-            print(f"📎 附件已同步 (本批次 {total} 个"
+            logger.info(f"📎 附件已同步 (本批次 {total} 个"
                   + (f", 跳过中文版 {skipped_cn} 个" if skipped_cn else "") + ")")
 
             # 回填: 先同步时文件未下载 (pending), 现在文件已到 -> 提取正文更新
@@ -214,7 +217,7 @@ class ZSXQ2PGSync:
                         (text[:MAX_TEXT_CHARS], len(text), pr["report_id"]))
                     backfilled += 1
             if backfilled:
-                print(f"📎 附件正文回填 {backfilled} 个 (此前文件未就绪)")
+                logger.info(f"📎 附件正文回填 {backfilled} 个 (此前文件未就绪)")
 
     # ---------- 群文件同步 (files 库, 猫哥研报圈等以文件为主的群) ----------
     def _sync_group_files(self):
@@ -291,7 +294,7 @@ class ZSXQ2PGSync:
                 total += 1
 
             self._set_sync_marker(pg, marker_key, value_int=max_file_id)
-            print(f"📁 群文件已同步 (本批次 {total} 个"
+            logger.info(f"📁 群文件已同步 (本批次 {total} 个"
                   + (f", 跳过中文版 {skipped_cn} 个" if skipped_cn else "") + ")")
 
     # ---------- 工具方法 ----------
@@ -388,14 +391,14 @@ def main():
 
     group_id = args.group or get_config().zsxq_group_id
     if not group_id:
-        print("❌ 未指定群组ID (--group 或 .env ZSXQ_GROUP_ID)")
+        logger.error("未指定群组ID (--group 或 .env ZSXQ_GROUP_ID)")
         sys.exit(1)
 
     pm = PathManager()
     topics_db = pm.get_topics_db_path(str(group_id))
     files_db = pm.get_files_db_path(str(group_id))
     if not os.path.exists(topics_db) and not os.path.exists(files_db):
-        print("❌ 话题库/文件库均不存在, 请先爬取 (python -m cli.interactive)")
+        logger.error("话题库/文件库均不存在, 请先爬取 (python -m cli.interactive)")
         sys.exit(1)
 
     sync = ZSXQ2PGSync(group_id, args.limit)

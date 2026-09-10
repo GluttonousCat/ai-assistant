@@ -114,7 +114,7 @@ class StockKB:
         except Exception as e:
             # 表不存在时降级为空
             import logging
-            logging.getLogger(__name__).warning(f"StockKB 加载失败: {e}")
+            from core.logger import get_logger; get_logger(__name__).warning(f"StockKB 加载失败: {e}")
         self._loaded = True
 
     # ---------- 股票匹配 ----------

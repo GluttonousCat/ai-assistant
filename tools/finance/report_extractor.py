@@ -10,14 +10,15 @@
 """
 from __future__ import annotations
 
-import logging
+
 import os
 import re
 import zipfile
 from typing import Dict, Optional
 from xml.etree import ElementTree
 
-logger = logging.getLogger(__name__)
+from core.logger import get_logger
+logger = get_logger(__name__)
 
 SUPPORTED_EXTS = {".pdf", ".docx", ".doc", ".txt", ".md", ".markdown"}
 

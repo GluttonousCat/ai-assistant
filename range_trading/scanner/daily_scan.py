@@ -147,7 +147,7 @@ def describe_symbol(symbol: str, as_of: Optional[date] = None,
         start = estimate_start_date(as_of)
         df = load_daily_bars(pg, [symbol], start, as_of)
     if df.empty:
-        print(f"{symbol}: 无数据")
+        logger.warning(f"{symbol}: 无数据")
         return
 
     detail, state = run_daily_regime(df, symbol=symbol, config=cfg)

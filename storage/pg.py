@@ -13,7 +13,7 @@ PostgreSQL 底层封装
 """
 from __future__ import annotations
 
-import logging
+
 import math
 import threading
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
@@ -25,7 +25,8 @@ from psycopg2.pool import SimpleConnectionPool
 
 from core.config import get_config
 
-logger = logging.getLogger(__name__)
+from core.logger import get_logger
+logger = get_logger(__name__)
 
 # pscopg2 连接默认行为
 _CONN_KW = dict(application_name="ai-assistant")

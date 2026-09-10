@@ -23,6 +23,9 @@ from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from core.logger import get_logger
+logger = get_logger(__name__)
+
 from core.config import get_config
 from tools.zsxq.downloader import FileDownloader
 from storage.sqlite.files import FilesDatabase
@@ -70,11 +73,11 @@ def _process_one_report(group_id: str) -> str:
                         ctx = ReportSkill()(SkillContext(user_input="", params={
                             "mode": "extract", "report_id": rid, "limit": 1}))
                         if ctx.error:
-                            print(f"⚠️ 研报 #{rid} 深度提取失败: {ctx.error}")
+                            logger.warning(f"研报 #{rid} 深度提取失败: {ctx.error}")
                         else:
                             extracted += 1
                     except Exception as e:
-                        print(f"⚠️ 研报 #{rid} 单篇分析失败: {e}")
+                        logger.warning(f"研报 #{rid} 单篇分析失败: {e}")
         else:
             # 无新文件: 顺手清理积压元数据 (最旧优先)
             from tools.finance.report_meta_analysis import analyze_pending
@@ -97,7 +100,7 @@ def run_once(group_id: str, max_fetch: int = 10, max_pages: int = 10,
     """执行一次抓取, 返回统计"""
     cookie = get_config().zsxq_cookie
     if not cookie:
-        print("❌ 未配置 ZSXQ_COOKIE")
+        logger.error("未配置 ZSXQ_COOKIE")
         return {"error": "no cookie"}
 
     result = {"time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "group": group_id}
@@ -144,9 +147,9 @@ def run_once(group_id: str, max_fetch: int = 10, max_pages: int = 10,
                     dl.db.update_status(file_id, 'pending')
                     retried += 1
                 if retried:
-                    print(f"🔁 重置 {retried} 个失败任务重试")
+                    logger.info(f"🔁 重置 {retried} 个失败任务重试")
             except Exception as e:
-                print(f"⚠️ 重试重置失败: {e}")
+                logger.warning(f"重试重置失败: {e}")
 
             # 逐个下载 (download_pending 内部会按 pending 状态取)
             stats = dl.download_pending(max_files=1)
@@ -156,7 +159,7 @@ def run_once(group_id: str, max_fetch: int = 10, max_pages: int = 10,
             # 立即处理刚下载的文件
             status = _process_one_report(group_id)
             processed += 1
-            print(f"🔬 已入库分析 {processed} 篇 ({status})")
+            logger.info(f"🔬 已入库分析 {processed} 篇 ({status})")
 
     after_stats = dl.db.get_stats()
     result["download"] = after_stats
@@ -187,7 +190,7 @@ def main():
 
     group_id = args.group or get_config().zsxq_group_id
     if not group_id:
-        print("❌ 未指定群组ID (--group 或 .env ZSXQ_GROUP_ID)")
+        logger.error("未指定群组ID (--group 或 .env ZSXQ_GROUP_ID)")
         sys.exit(1)
 
     if args.check:
