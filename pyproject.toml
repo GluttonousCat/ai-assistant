@@ -31,7 +31,6 @@ dependencies = [
 
     # 配置 / 日志
     "pyyaml>=6.0",
-    "loguru>=0.7.0",
 
     # SQL 解析/校验 (Text-to-SQL)
     "sqlglot>=25.0.0",
