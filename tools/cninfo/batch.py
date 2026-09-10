@@ -171,9 +171,28 @@ class BatchCrawler:
 
                 if resume:
                     state = self._get_state(pg, ts_code)
-                    if state and state["meta_status"] == "done" and (
-                            not with_pdf or state["dl_status"] == "done"):
-                        total_stats["stocks_skip"] += 1
+                    if state and state["meta_status"] == "done":
+                        if not with_pdf or state["dl_status"] == "done":
+                            total_stats["stocks_skip"] += 1
+                            continue
+                        # meta 已 done 仅缺 PDF: DB 直读下载, 免重打查询接口
+                        dl = self._download_stock_db(pg, ts_code, years,
+                                                     tuple(cats))
+                        total_stats["downloaded"] += dl.get("downloaded", 0)
+                        total_stats["dl_skipped"] += dl.get("skipped", 0)
+                        total_stats["pdf_failed"] = (
+                            total_stats.get("pdf_failed", 0)
+                            + dl.get("failed", 0))
+                        logger.info(f"[{i}/{len(universe)}] {ts_code} {name} "
+                                    f"直读下载: {dl.get('downloaded', 0)} 新增 "
+                                    f"+ {dl.get('skipped', 0)} 已有"
+                                    + (f", {dl['failed']} 失败"
+                                       if dl.get("failed") else ""))
+                        self._set_state(pg, ts_code, "done",
+                                        dl_status="done"
+                                        if not dl.get("failed") else "partial")
+                        total_stats["stocks_done"] += 1
+                        processed += 1
                         continue
 
                 stats = self.dl.sync_stock(ts_code, years, download=with_pdf,
@@ -224,6 +243,133 @@ class BatchCrawler:
             logger.info(f"关注池下载 {s}: {stats}")
         return total
 
+    def _download_stock_db(self, pg, ts_code: str, years: List[int],
+                           cats: tuple) -> Dict[str, int]:
+        """单股 DB 直读下载: 按 (年, 类) 挑全文行, 直接 download_pdf。
+
+        供 run() 的"meta done 缺 PDF"分支与 --download-db 模式共用;
+        零查询接口调用 (PDF 链接来自 fin.cninfo_announcement)。
+        """
+        from datetime import datetime
+        from pathlib import Path
+        from tools.cninfo.downloader import DOWNLOAD_ROOT
+        from tools.cninfo.filters import is_full_periodic_report
+        total = {"downloaded": 0, "skipped": 0, "failed": 0}
+        rows = pg.fetch_all(
+            """
+            SELECT announcement_id, title, category, report_year, adjunct_url,
+                   file_path, download_status
+            FROM fin.cninfo_announcement
+            WHERE ts_code=%s AND category=ANY(%s) AND report_year=ANY(%s)
+            ORDER BY report_year
+            """, (ts_code, list(cats), list(years)))
+        picked: Dict[tuple, Dict] = {}
+        for r in rows:
+            if not is_full_periodic_report(r["title"] or ""):
+                continue
+            key = (r["report_year"], r["category"])
+            if key not in picked:
+                picked[key] = r
+        for (year, cat), r in picked.items():
+            dest = DOWNLOAD_ROOT / ts_code / f"{year}_{cat}.pdf"
+            if (r["download_status"] == "done" and r["file_path"]
+                    and Path(r["file_path"]).exists()):
+                total["skipped"] += 1
+                continue
+            ok, size = self.client.download_pdf(r["adjunct_url"], dest)
+            if ok:
+                pg.execute(
+                    "UPDATE fin.cninfo_announcement SET file_path=%s, "
+                    "file_size=%s, download_status='done', error_msg=NULL, "
+                    "downloaded_at=%s, updated_at=now() WHERE announcement_id=%s",
+                    (str(dest.resolve()), size, datetime.now(),
+                     r["announcement_id"]))
+                total["downloaded"] += 1
+            else:
+                pg.execute(
+                    "UPDATE fin.cninfo_announcement SET download_status='failed', "
+                    "error_msg='download failed', updated_at=now() "
+                    "WHERE announcement_id=%s", (r["announcement_id"],))
+                total["failed"] += 1
+            pg.conn.commit()
+        return total
+
+    def download_from_db(self, index_code: str, years: List[int],
+                         categories: List[str] = None,
+                         max_minutes: float = 0) -> Dict[str, int]:
+        """DB 直读下载: 元数据已入库的指数成分股, 免查询接口直接按库内链接下载。
+
+        适合"元数据已批量爬完、再补 PDF"的两段式 (查询接口限流敏感, 此路零查询);
+        只下"报告全文"行 (filters 筛选), 摘要等干扰版本留痕不下载。
+        """
+        from datetime import datetime
+        from pathlib import Path
+        from tools.cninfo.downloader import DOWNLOAD_ROOT
+        from tools.cninfo.filters import is_full_periodic_report
+        cats = tuple(categories) if categories else ("ndbg",)
+        constituents = {s["ts_code"] for s in _load_index_universe(index_code)}
+        total = {"downloaded": 0, "skipped": 0, "failed": 0}
+        t0 = time.time()
+
+        from storage.pg import PgClient
+        with PgClient() as pg:
+            rows = pg.fetch_all(
+                """
+                SELECT a.announcement_id, a.ts_code, a.title, a.category,
+                       a.report_year, a.adjunct_url, a.file_path,
+                       a.download_status
+                FROM fin.cninfo_announcement a
+                JOIN fin.cninfo_sync_state s ON s.ts_code = a.ts_code
+                    AND s.meta_status = 'done'
+                WHERE a.category = ANY(%s) AND a.report_year = ANY(%s)
+                ORDER BY a.ts_code, a.report_year
+                """, (list(cats), list(years)))
+            # 同 (股, 年, 类) 多行只挑"全文"那条 (摘要/更正版留痕不下载)
+            picked: Dict[tuple, Dict] = {}
+            for r in rows:
+                if r["ts_code"] not in constituents:
+                    continue
+                if not is_full_periodic_report(r["title"] or ""):
+                    continue
+                key = (r["ts_code"], r["report_year"], r["category"])
+                if key not in picked:
+                    picked[key] = r
+            logger.info(f"DB 直读下载: {len(picked)} 份待下 "
+                        f"({index_code} {years} {cats})")
+
+            for i, (key, r) in enumerate(picked.items(), 1):
+                if max_minutes and (time.time() - t0) > max_minutes * 60:
+                    logger.info(f"时间预算用尽, 优雅停止 ({i - 1}/{len(picked)})")
+                    break
+                ts_code, year, cat = key
+                dest = DOWNLOAD_ROOT / ts_code / f"{year}_{cat}.pdf"
+                if (r["download_status"] == "done" and r["file_path"]
+                        and Path(r["file_path"]).exists()):
+                    total["skipped"] += 1
+                    continue
+                ok, size = self.client.download_pdf(r["adjunct_url"], dest)
+                if ok:
+                    pg.execute(
+                        "UPDATE fin.cninfo_announcement SET file_path=%s, "
+                        "file_size=%s, download_status='done', error_msg=NULL, "
+                        "downloaded_at=%s, updated_at=now() "
+                        "WHERE announcement_id=%s",
+                        (str(dest.resolve()), size, datetime.now(),
+                         r["announcement_id"]))
+                    total["downloaded"] += 1
+                else:
+                    pg.execute(
+                        "UPDATE fin.cninfo_announcement SET "
+                        "download_status='failed', "
+                        "error_msg='download failed', updated_at=now() "
+                        "WHERE announcement_id=%s", (r["announcement_id"],))
+                    total["failed"] += 1
+                pg.conn.commit()
+                if i % 20 == 0:
+                    logger.info(f"下载进度 {i}/{len(picked)}: {total}")
+        total["elapsed_min"] = round((time.time() - t0) / 60, 1)
+        return total
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="巨潮全市场批量爬取")
@@ -240,10 +386,22 @@ def main() -> int:
                         help="只爬指数成分股 (如 000300.SH 沪深300 / 000905.SH 中证500)")
     parser.add_argument("--with-pdf", action="store_true",
                         help="连带下载全文 PDF (关注池形态; 缺省仅元数据)")
+    parser.add_argument("--download-db", action="store_true",
+                        help="DB 直读下载: 元数据已入库的 --index 成分股, "
+                             "免查询接口直接补 PDF (需配 --index)")
     args = parser.parse_args()
 
     years = [int(y) for y in args.years.split(",") if y.strip()]
     bc = BatchCrawler()
+
+    if args.download_db:
+        if not args.index:
+            print("--download-db 需配 --index (如 000300.SH)")
+            return 1
+        stats = bc.download_from_db(args.index, years,
+                                    max_minutes=args.max_minutes)
+        print(f"[DOWNLOAD-DB] {stats}")
+        return 0
 
     if args.download_watchlist:
         stocks = [s for s in args.download_watchlist.split(",") if s.strip()]

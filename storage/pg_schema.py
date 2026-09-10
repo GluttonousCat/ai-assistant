@@ -116,6 +116,25 @@ CREATE TABLE IF NOT EXISTS stock.sync_meta (
 COMMENT ON TABLE stock.sync_meta IS '数据同步水位线(断点续传用)';
 """
 
+# ---------- 十大股东 (Tushare top10_holders; 单接口已含流通比例/变动) ----------
+DDL_TOP10_HOLDERS = """
+CREATE TABLE IF NOT EXISTS stock.top10_holders (
+    ts_code          VARCHAR(16) NOT NULL,   -- TS代码
+    ann_date         DATE,                   -- 公告日期
+    end_date         DATE NOT NULL,          -- 报告期
+    holder_name      VARCHAR(128) NOT NULL,  -- 股东名称
+    hold_amount      NUMERIC(20,2),          -- 持股数量 (万股)
+    hold_ratio       NUMERIC(10,4),          -- 持股比例 %
+    hold_float_ratio NUMERIC(10,4),          -- 流通股持股比例 %
+    hold_change      NUMERIC(20,2),          -- 持股变动 (万股)
+    holder_type      VARCHAR(32),            -- 股东性质 (实际返回中文: 投资公司/自然人/基金等)
+    updated_at       TIMESTAMPTZ DEFAULT now(),
+    PRIMARY KEY (ts_code, end_date, holder_name, holder_type)
+);
+CREATE INDEX IF NOT EXISTS idx_top10_holders_lookup
+    ON stock.top10_holders (ts_code, end_date);
+"""
+
 # 建表顺序 (依赖关系: stock_basic 无依赖, daily_basic 独立, 均可并行)
 ALL_DDL = [
     DDL_STOCK_SCHEMA,
@@ -125,6 +144,7 @@ ALL_DDL = [
     DDL_ADJ_FACTOR,
     DDL_DAILY_BASIC,
     DDL_SYNC_META,
+    DDL_TOP10_HOLDERS,
 ]
 
 # 表名常量
@@ -134,6 +154,7 @@ T_DAILY = "stock.daily"
 T_ADJ_FACTOR = "stock.adj_factor"
 T_DAILY_BASIC = "stock.daily_basic"
 T_SYNC_META = "stock.sync_meta"
+T_TOP10_HOLDERS = "stock.top10_holders"
 
 
 def init_schema(pg_client) -> None:

@@ -1,7 +1,7 @@
 # 巨潮资讯爬虫（定期报告 PDF）设计文档
 
 > Alpha Finance Radar · 数据获取子系统
-> 更新：2026-09-08
+> 更新：2026-09-10
 
 ## 一、系统设计
 
@@ -75,10 +75,26 @@ output/cninfo/downloads/<ts_code>/<year>_<category>.pdf
 ```bash
 python -m tools.cninfo.batch --limit 20                        # 试跑
 python -m tools.cninfo.batch --max-minutes 120                 # 每晚 2h, 自动续传
+python -m tools.cninfo.batch --index 000016.SH --with-pdf --years 2021,2022,2023,2024,2025
+                                      # 上证50 五年四类全文 PDF (≈1000 份)
 python -m tools.cninfo.batch --download-watchlist 300308,600519 --years 2024  # 关注池 PDF
 ```
 
-### 2.2 按需单只
+### 2.2 指数成分 + PDF 批量（2026-09-10 增补）
+
+`--index 000300.SH/000016.SH` 圈定成分股；`--with-pdf` 连带下载全文 PDF。
+两段式优化——**meta 已 done 仅缺 PDF 的股票走 DB 直读下载**
+（`_download_stock_db`: 按 (年,类) 挑全文行直接 `download_pdf`，零查询接口调用，
+查询接口限流敏感而静态下载不敏感，分开打）；下载失败行标 `failed`，
+重跑因文件不存在自动重试。
+
+**PDF 断点续传（2026-09-10）**：大文件年报（30MB+）实测每连接仅得 3-5MB
+即被服务端掐断（ChunkedEncodingError），旧实现 3 次整文件重试全废。
+现 `download_pdf` 重试带 `Range: bytes=N-` 从 `.part` 尾部续传累加
+（static 服务器实测支持 206），"有增量即前进"——断流但拿到字节不消耗重试名额，
+连续 `retries` 次零增量才放弃；绝对上限 40 次/文件。
+
+### 2.3 按需单只
 
 - MCP 工具化后 Agent 可直接说"拉一下 XX 年报"；写类副作用工具，
   默认被对话沙盒排除（`openai_tools(include_write=False)`），需要时显式放开
@@ -92,6 +108,8 @@ python -m tools.cninfo.batch --download-watchlist 300308,600519 --years 2024  # 
 | 「半年度报告」被误分类为年报 | 筛选词序问题："半**年度报告**"含子串"年度报告" | 类别匹配顺序改为 季报/半年报在前、年报最后 + 单测防回归 |
 | 无 orgId 查询返回 0 | hisAnnouncement 必须带 orgId | orgId 成为必经路径，三级策略保障 |
 | pg_schema NameError | DDL 常量定义在 FIN_ALL_DDL 引用之后（Python 自上而下执行） | 定义移到列表之前 |
+| 大文件 PDF 3 次重试全废 | 30MB+ 年报每连接仅得 3-5MB 即被掐断，整文件重试等于重头再来 | Range 断点续传 + 有增量即前进（见 2.2），旧 `.part` 亦可续 |
+| batch run() KeyError 'failed' | DB 直读分支累加 `total_stats['pdf_failed']` 等未初始化键 | 已有键 + `setdefault` 模式累加 |
 
 ## 四、验证记录
 
@@ -101,6 +119,8 @@ python -m tools.cninfo.batch --download-watchlist 300308,600519 --years 2024  # 
 | 2026-09-08 | E2E：中际旭创+贵州茅台 2024 年报 查询→入库→下载（6.9MB/3.6MB，%PDF 校验过）；幂等重跑 downloaded=0 skipped=2 | ✅ |
 | 2026-09-08 | MCP 工具 fetch_annual_report：实测含 504→重试成功→幂等跳过全程 31.8s，返回元数据+file_path | ✅ |
 | 2026-09-08 | pytest：tools/cninfo/tests + mcp/tests + agent/tests 共 53 passed | ✅ |
+| 2026-09-10 | static 服务器 Range 探测：`-r 0-99` 回 206/100B，续传前提成立 | ✅ |
+| 2026-09-10 | 沪深300 试跑暴露大文件断流（单份 5 分钟 3 连败）→ Range 补丁；改跑上证50 `--index 000016.SH --with-pdf`（50 只×5年×4类），首股 600028.SH ~5s/份正常下载 | ✅ |
 
 ## 五、使用
 

@@ -69,17 +69,59 @@ def build_company_profile(stock: str, years: int = 5) -> Dict[str, Any]:
             failed.append(name)
             logger.warning(f"画像板块 {name} 失败: {env.get('error', '')[:80]}")
 
-    basic = sections.get("basic") or {}
+    basic = (sections.get("basic") or {}).get("stocks") or [{}]
+    ts_code = basic[0].get("ts_code")
+
+    # 行业坐标 (依赖 basic 的行业名, 故循环后追加): 申万二级 ROE 同业对比
+    ind_name = basic[0].get("industry_l2") or basic[0].get("industry_l1")
+    if ind_name:
+        env = registry.call("query_financials", {
+            "mode": "industry", "industry": ind_name,
+            "metrics": ["净资产收益率"], "top_n": 12})
+        if env.get("ok"):
+            sections["industry"] = env["data"]
+            ok.append("industry")
+
+    # 十大股东 (最新期 + 持股变动信号)
+    if ts_code:
+        holders = _load_holders(ts_code)
+        if holders:
+            sections["holders"] = holders
+            ok.append("holders")
+
     return {
         "stock": stock,
-        "ts_code": (basic.get("stocks") or [{}])[0].get("ts_code"),
-        "name": (basic.get("stocks") or [{}])[0].get("name", stock),
+        "ts_code": ts_code,
+        "name": basic[0].get("name", stock),
         "years": years,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "sections": sections,
         "ok_sections": ok,
         "failed_sections": failed,
     }
+
+
+def _load_holders(ts_code: str) -> Dict[str, Any]:
+    """最新报告期十大股东 + 变动信号 (持股比例/变动, 来源 stock.top10_holders)"""
+    from storage.pg import PgClient
+    try:
+        with PgClient() as pg:
+            latest = pg.fetch_one(
+                "SELECT MAX(end_date) d FROM stock.top10_holders WHERE ts_code=%s",
+                (ts_code,))
+            if not latest or not latest["d"]:
+                return {}
+            rows = pg.fetch_all(
+                "SELECT holder_name, hold_ratio, hold_float_ratio, "
+                "       hold_change, holder_type, end_date "
+                "FROM stock.top10_holders WHERE ts_code=%s AND end_date=%s "
+                "ORDER BY hold_ratio DESC NULLS LAST LIMIT 10",
+                (ts_code, latest["d"]))
+            return {"end_date": str(latest["d"]),
+                    "holders": [dict(r) for r in rows]}
+    except Exception as e:  # noqa: BLE001 表可能未同步
+        logger.debug(f"十大股东读取跳过: {e}")
+        return {}
 
 
 def _yi(v) -> str:
@@ -163,10 +205,30 @@ def profile_digest(profile: Dict[str, Any], max_chars: int = 6000) -> str:
             f"{r.get('org')}《{str(r.get('title'))[:24]}》{r.get('rating') or ''}"
             for r in rp["reports"][:4]))
 
-    rg = s.get("regime") or {}
-    if rg.get("regime"):
-        parts.append(f"[量化形态] {rg.get('state_hint')} "
-                     f"(区间 {rg['regime'].get('lower')}~{rg['regime'].get('upper')})")
+    ind = s.get("industry") or {}
+    if ind.get("data"):
+        rank = [(i + 1, r["stock_name"], r["value"])
+                for i, r in enumerate(ind["data"])]
+        mine = [(i, n, v) for i, n, v in rank if n == profile.get("name")]
+        if mine:
+            parts.append(f"[行业坐标] 申万同业 ROE 排名: 第 {mine[0][0]}/"
+                         f"{len(rank)} (ROE {mine[0][2]}%); "
+                         f"同业前列: " + ", ".join(
+                             f"{n} {v}%" for _, n, v in rank[:3]))
+
+    hd = s.get("holders") or {}
+    if hd.get("holders"):
+        items = []
+        for h in hd["holders"][:5]:
+            chg = h.get("hold_change")
+            mark = ""
+            if chg is not None and float(chg or 0) != 0:
+                mark = f" (变动 {float(chg)/1e4:+.0f}万)"
+            items.append(f"{(h['holder_name'] or '')[:14]} "
+                         f"{h.get('hold_ratio')}%{mark}")
+        parts.append(f"[十大股东·{hd.get('end_date', '')}] " + "; ".join(items))
+
+    # 注: 量化形态(regime)板块刻意不进成文摘要 — 文章不含量化内容
 
     text = "\n".join(parts)
     return text[:max_chars] + ("\n…(截断)" if len(text) > max_chars else "")

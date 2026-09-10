@@ -35,19 +35,53 @@ def _save(markdown: str, kind: str, key: str) -> Path:
     return path
 
 
+def _render_charts(profile: Dict) -> Dict[str, str]:
+    """画像板块 -> 配图 (相对路径占位符; 失败的图返回占位说明文本)"""
+    from content import charts
+    s = profile.get("sections", {})
+    ts_code = profile.get("ts_code") or ""
+    name = profile.get("name", "")
+    out = {}
+
+    def _placeholder(key: str, path) -> str:
+        return f"![](assets/{Path(path).name})" if path else "*(该配图数据不足, 跳过)*"
+
+    try:
+        out["img_mainbiz"] = _placeholder("mainbiz",
+            charts.mainbiz_chart(s.get("main_business") or {}, ts_code))
+        out["img_growth"] = _placeholder("growth",
+            charts.growth_chart(s.get("financials") or {}, ts_code))
+        out["img_margin"] = _placeholder("margin",
+            charts.margin_chart(s.get("financials") or {}, ts_code))
+        out["img_valuation"] = _placeholder("valuation",
+            charts.valuation_chart(s.get("valuation") or {}, ts_code))
+        out["img_industry"] = _placeholder("industry",
+            charts.industry_chart(s.get("industry") or {}, ts_code, name))
+    except Exception as e:  # noqa: BLE001 单图失败不挡成文
+        logger.warning(f"配图生成部分失败: {e}")
+        for k in ("img_mainbiz", "img_growth", "img_margin",
+                  "img_valuation", "img_industry"):
+            out.setdefault(k, "*(配图生成失败, 此处无图)*")
+    return out
+
+
 def write_stock_article(stock: str, years: int = 5) -> Dict[str, Any]:
-    """画像 -> 公众号文章。返回 {path, chars, digest_ok_sections, preview}"""
+    """画像 -> 配图 -> 公众号文章 (六模块, 图文混排)。"""
     from llm.client import get_agent_llm
     profile = build_company_profile(stock, years)
     digest = profile_digest(profile)
     if not profile.get("ok_sections"):
         raise RuntimeError(f"画像组装失败: {profile.get('failed_sections')}")
+    imgs = _render_charts(profile)
 
-    prompt = GZH_STOCK_ARTICLE_PROMPT.format(digest=digest, disclaimer=DISCLAIMER)
+    prompt = GZH_STOCK_ARTICLE_PROMPT.format(
+        digest=digest, disclaimer=DISCLAIMER, **imgs)
     article = get_agent_llm().invoke(prompt)
     path = _save(article, "gzh", profile.get("name", stock))
-    logger.info(f"公众号文章已生成: {path} ({len(article)} 字)")
+    n_imgs = sum(1 for v in imgs.values() if v.startswith("![]"))
+    logger.info(f"公众号文章已生成: {path} ({len(article)} 字, {n_imgs} 配图)")
     return {"path": str(path), "chars": len(article),
+            "charts": n_imgs,
             "ok_sections": profile.get("ok_sections"),
             "preview": article[:400]}
 

@@ -23,7 +23,9 @@ skills/     fin_query(Text-to-SQL) / report(研报) / scanned_report(扫描件OC
 beta_alpha/ 产业链Beta+个股Alpha自治模块 (chains种子链/analysis映射与指数/skills编排/
             streaming SSE/schema DDL/tests; 对话页两条链路+研报链抽取钩子全在这)
 .agents/skills/ ZCode技能模块 (beta-skill/alpha-skill: SKILL.md 驱动会话内直接调用)
-tools/      zsxq爬虫 / market行情同步(sync_mainbz主营构成) / finance(SQL guard, KB, pdf_vision视觉OCR)
+tools/      zsxq爬虫 / market行情同步(sync_mainbz主营构成, sync_holders十大股东) /
+            cninfo巨潮定期报告 / finance(SQL guard, KB, pdf_vision视觉OCR)
+content/    内容资产管线 (画像→公众号文章/PPT): profile十板块 / charts五图 / article六模块
 storage/    pg.py(连接池) / sqlite(爬虫) / pg_schema.py(全部DDL,改表先看这)
 api/        路由+鉴权中间件(JWT) / ws / finance(SSE流式) / reports / auth
 core/       config(.env+yaml) / security(JWT+bcrypt) / scheduler(Tushare 21:00)

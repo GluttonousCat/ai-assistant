@@ -158,30 +158,53 @@ class CninfoClient:
             page += 1
         return out
 
+    MAX_DL_ATTEMPTS = 40   # 单文件绝对尝试上限 (续传模式下大文件常需 5-10 次)
+
     def download_pdf(self, adjunct_url: str, dest: Path) -> Tuple[bool, int]:
-        """下载公告 PDF 到 dest。返回 (ok, size); 校验 %PDF 魔数。"""
-        for attempt in range(1, self.retries + 1):
+        """下载公告 PDF 到 dest。返回 (ok, size); 校验 %PDF 魔数。
+
+        大文件 (年报 30MB+) 实测常被服务端中途掐断, 每连接仅得 3-5MB, 故:
+        - 断点续传: 重试带 Range: bytes=N- 从 .part 尾部续传累加;
+          服务端不支持 Range (回 200 而非 206) 则整文件重下
+        - 有增量即前进: 断流但拿到了字节就不消耗重试名额,
+          连续 self.retries 次"零增量"才放弃
+        """
+        tmp = dest.with_suffix(".part")
+        strikes = 0
+        for attempt in range(1, self.MAX_DL_ATTEMPTS + 1):
             self._sleep()
+            before = tmp.stat().st_size if tmp.exists() else 0
             try:
                 dest.parent.mkdir(parents=True, exist_ok=True)
-                tmp = dest.with_suffix(".part")
+                headers = {"Range": f"bytes={before}-"} if before else None
                 with self.session.get(f"{STATIC_BASE}/{adjunct_url}",
-                                      timeout=120, stream=True) as r:
+                                      timeout=120, stream=True,
+                                      headers=headers) as r:
                     r.raise_for_status()
-                    size = 0
-                    with open(tmp, "wb") as f:
+                    resume = bool(before and r.status_code == 206)
+                    with open(tmp, "ab" if resume else "wb") as f:
                         for chunk in r.iter_content(chunk_size=1 << 16):
                             f.write(chunk)
-                            size += len(chunk)
+                size = tmp.stat().st_size
                 with open(tmp, "rb") as f:
                     if f.read(4) != b"%PDF":
                         logger.warning(f"cninfo 下载非 PDF 内容: {adjunct_url}")
                         tmp.unlink(missing_ok=True)
                         return False, 0
                 tmp.rename(dest)
+                if attempt > 1:
+                    logger.info(f"PDF 续传完成 ({attempt} 次): {dest.name} "
+                                f"({size / 1e6:.1f}MB)")
                 return True, size
-            except Exception as e:  # noqa: BLE001
-                logger.warning(f"cninfo PDF 下载失败 ({attempt}/{self.retries}) "
-                               f"{type(e).__name__}: {e}")
-                time.sleep(2 * attempt)
+            except Exception as e:  # noqa: BLE001 断流是常态, 落盘增量后继续续传
+                grew = (tmp.stat().st_size if tmp.exists() else 0) - before
+                logger.warning(f"cninfo PDF 下载中断 ({attempt}/"
+                               f"{self.MAX_DL_ATTEMPTS}) @{before}B+{grew}B "
+                               f"{type(e).__name__}: {str(e)[:120]}")
+                time.sleep(2 * min(attempt, 5))
+                strikes = strikes + 1 if grew == 0 else 0
+                if strikes >= self.retries:
+                    logger.warning(f"cninfo PDF 连续 {strikes} 次零增量, 放弃: "
+                                   f"{adjunct_url}")
+                    return False, 0
         return False, 0
