@@ -120,6 +120,9 @@ vision=qwen3.8-flash（deepseek 不收图片）。**思考开关由 `llm.enable_
    改量化跑 `pytest range_trading/tests`；改 beta_alpha 跑 `pytest agent/beta_alpha/tests`
    （改链模板另跑 `python -m agent.beta_alpha.analysis.chain_analysis <chain_id>`）；
    改完 git commit（消息带日期与模块）
+6. **日志**：一律 `get_logger(__name__)`（core/logger 按顶层包聚合落
+   logs/agent.log / tools.log 等；禁止裸 `logging.getLogger` 与库代码 print；
+   CLI 最终汇总/报表输出可保留 print）；级别/保留天数在 config.yaml `logging` 段
 
 ## 8. 文档地图（深入阅读）
 

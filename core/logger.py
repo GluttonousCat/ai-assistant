@@ -101,7 +101,10 @@ class _LogManager:
 
 
 def get_logger(name: str = "app") -> logging.Logger:
-    """入口: get_logger(__name__)。__main__ 直跑自动按真实包名归桶。"""
+    """入口: get_logger(__name__)。__main__ 直跑自动按真实包名归桶+显示。"""
+    if name == "__main__":
+        pkg = getattr(sys.modules.get("__main__"), "__package__", "") or ""
+        name = pkg or "cli"          # %(name)s 也打真实包名, 不再显示 __main__
     return _LogManager.setup(name)
 
 
