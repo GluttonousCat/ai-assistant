@@ -113,8 +113,8 @@ class ZSXQScheduleScheduler:
 
         # 4: LLM 深度提取 (评级/盈利预测/观点/tags)
         try:
-            from skills.base import SkillContext
-            from skills.report.skill import ReportSkill
+            from agent.skills.base import SkillContext
+            from agent.skills.report.skill import ReportSkill
             limit = EXTRACT_LIMITS.get(hour, 8)
             if get_config().openai_api_key:
                 ctx = ReportSkill()(SkillContext(

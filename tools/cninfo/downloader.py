@@ -38,7 +38,7 @@ _PERIODIC_CATEGORIES = {
 
 def _resolve_ts_code(stock: str) -> Optional[str]:
     """股票名/代码 -> ts_code (复用 fin_query 的映射)"""
-    from skills.fin_query.skill import lookup_ts_code
+    from agent.skills.fin_query.skill import lookup_ts_code
     return lookup_ts_code(stock.strip())
 
 

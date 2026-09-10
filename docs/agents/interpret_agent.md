@@ -37,7 +37,7 @@
 
 | 入口 | 形态 | 说明 |
 |------|------|------|
-| CLI | `python -m content interpret 中芯国际 [--annual-year 2025] [--ppt]` | 主入口, 断点友好 |
+| CLI | `python -m agent.content interpret 中芯国际 [--annual-year 2025] [--ppt]` | 主入口, 断点友好 |
 | ZCode 会话 | `.agents/skills/interpret-skill` (SKILL.md 驱动) | 对齐 beta/alpha-skill 模式, 会话内直接说"给XX做解读" |
 | 对话 Agent | MCP `write_article` (写类, 沙盒默认排除, 需显式放开) | 聊天页触发, 复用既有工具 |
 
@@ -82,10 +82,10 @@ fin.cninfo_announcement (category=ndbg, download_status=done, 文件在盘)
 ## 五、使用
 
 ```bash
-python -m content interpret 中芯国际                    # 最新年报语料 + 六模块 + 五图
-python -m content interpret 中芯国际 --annual-year 2024 # 指定年报年度
-python -m content interpret 中芯国际 --ppt              # 解读完联动出 PPT
-python -m content interpret 中芯国际 --no-annual        # 纯画像模式(=article)
+python -m agent.content interpret 中芯国际                    # 最新年报语料 + 六模块 + 五图
+python -m agent.content interpret 中芯国际 --annual-year 2024 # 指定年报年度
+python -m agent.content interpret 中芯国际 --ppt              # 解读完联动出 PPT
+python -m agent.content interpret 中芯国际 --no-annual        # 纯画像模式(=article)
 ```
 
 ZCode 会话：直接说「给中芯国际做一份解读」触发 interpret-skill。

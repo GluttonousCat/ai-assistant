@@ -201,7 +201,7 @@ def _extract_sql(text: str) -> Optional[str]:
 def _alias_digest(limit: int = 34) -> str:
     """指标中文别名 -> 字段 映射摘要 (进 prompt, 控制长度)"""
     try:
-        from skills.fin_query.skill import METRIC_ALIAS_FULL
+        from agent.skills.fin_query.skill import METRIC_ALIAS_FULL
         items = list(METRIC_ALIAS_FULL.items())[:limit]
         return "; ".join(f"{k}={v['field']}" for k, v in items)
     except Exception:  # noqa: BLE001
@@ -215,7 +215,7 @@ def _llm_nl2sql(text: str, context_stocks=None) -> Optional[str]:
     时序跨度失真 — LLM 生成对时间/指标/复合条件更稳, 规则引擎仅作兜底。
     """
     import re
-    from llm.client import get_nl2sql_llm
+    from core.llm.client import get_nl2sql_llm
     from mcp.tools._common import resolve_stocks
     from tools.finance.sql_guard import validate_sql
 
@@ -278,7 +278,7 @@ async def _fast_query_stream(text: str, session_id: Optional[str],
     与 Agent 循环同事件协议; 结果写入会话历史, 追问可无缝衔接。
     """
     from agent.context_store import get_session_stocks, update_session_from_result
-    from skills.fin_query.skill import FinQuerySkill, _result_brief
+    from agent.skills.fin_query.skill import FinQuerySkill, _result_brief
     from tools.finance.sql_guard import validate_sql, force_limit
 
     yield sse("stage", {"stage": "intent", "message": "意图识别: query (快车道)"})
@@ -493,7 +493,7 @@ async def run_agent_stream(text: str, session_id: Optional[str],
             yield chunk
         return
 
-    from llm.client import get_agent_llm
+    from core.llm.client import get_agent_llm
     from mcp.bridge import openai_tools
     from agent.subagent import DOMAIN_DEFS, domain_manifest, route_domain
 

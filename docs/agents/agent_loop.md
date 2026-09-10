@@ -71,7 +71,7 @@ AgentChat.jsx (session_id 每页生成一次, 全程携带)
 |------|------|
 | `agent/loop.py` | Agent 主循环：系统提示词（口径知识/数据纪律/多轮规则）、沙盒参数、事件流 |
 | `agent/history_store.py` | 会话历史（内存，完整轮配对注入，6 轮/6000 字符双限截断） |
-| `llm/client.py` | 新增 `invoke_with_tools`（function-calling，返回完整 message） |
+| `core/llm/client.py` | 新增 `invoke_with_tools`（function-calling，返回完整 message） |
 | `api/finance.py` | 新端点 `POST /api/v1/agent/stream`（旧 `/query/stream` 保留作回退） |
 | `web/src/AgentChat.jsx` | 切换到 agentStream + session_id + 🤖 徽章 + 工具步骤元信息 |
 | `mcp/server.py` | stdio MCP 服务默认只读模式（`ALPHA_MCP_READ_ONLY=1`） |

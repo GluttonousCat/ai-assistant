@@ -47,7 +47,7 @@ def is_image_pdf(path: str, max_pages_check: int = 3) -> bool:
 
 def _vision_llm():
     """多模态模型客户端 (purpose=vision 路由, 见 llm/client.py)"""
-    from llm.client import get_vision_llm
+    from core.llm.client import get_vision_llm
     return get_vision_llm()
 
 

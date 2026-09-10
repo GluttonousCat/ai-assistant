@@ -3,7 +3,7 @@
 import sys, types
 sys.path.insert(0, '.')
 
-import skills.report.skill as mod
+import agent.skills.report.skill as mod
 
 FAKE_JSON = ('{"market": "A股", "ts_codes": ["600519.SH"], "symbols": [], '
              '"company_names": ["贵州茅台"], "commodities": [], "report_type": "深度", '

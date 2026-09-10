@@ -17,7 +17,7 @@
 
 ### 1.2 思考开关体系（2026-09-03）
 
-思考参数由 **`llm/client.py LLMClient._default_kwargs()` 统一注入**，业务代码一律不传：
+思考参数由 **`core/llm/client.py LLMClient._default_kwargs()` 统一注入**，业务代码一律不传：
 
 ```
 优先级: 显式 kwargs > llm.models.<用途>.enable_thinking > llm.enable_thinking(全局) > True
@@ -65,7 +65,7 @@ llm:
 调用方 (skill / api / tool)
    │ get_agent_llm() / get_vision_llm() ...
    ▼
-llm/client.py LLMClient(purpose=...)
+core/llm/client.py LLMClient(purpose=...)
    │ core/config.py llm_model_for(purpose)   ← 用途→模型名
    │ core/config.py llm_model_override(purpose) ← 用途→key/base_url 覆盖
    ▼
@@ -87,6 +87,6 @@ OpenAI SDK (dashscope compatible-mode)
 1. **不要在业务代码里写模型名**——用 `get_*_llm()` 工厂，用途路由自动解析
 2. **不要在业务代码里传 `enable_thinking`/`max_tokens`**——LLMClient 按 config 统一注入
    （优先级见 1.2）；调用途嫌慢/要静音在 config 里按用途覆盖
-3. 新增用途：config.yaml 加 `llm.models.<新用途>` + `llm/client.py` 加工厂函数，两处各一行
+3. 新增用途：config.yaml 加 `llm.models.<新用途>` + `core/llm/client.py` 加工厂函数，两处各一行
 4. 视觉调用成本敏感（每页一次）：单册页数上限护栏（默认 10 页）
 5. 面向用户的输出（提取结果/解读）：prompt 里显式要求简体中文

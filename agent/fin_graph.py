@@ -16,11 +16,11 @@ from langgraph.graph import END, StateGraph
 
 from agent.state import AgentState
 from agent.intent import LayeredIntentClassifier, get_intent_classifier
-from skills.base import SkillContext
-from skills.fin_query.skill import FinQuerySkill
-from skills.report.skill import ReportSkill
-from beta_alpha.skills.beta import BetaSkill
-from beta_alpha.skills.alpha import AlphaSkill
+from agent.skills.base import SkillContext
+from agent.skills.fin_query.skill import FinQuerySkill
+from agent.skills.report.skill import ReportSkill
+from agent.beta_alpha.skills.beta import BetaSkill
+from agent.beta_alpha.skills.alpha import AlphaSkill
 
 
 def parse_financial_intent_node(state: AgentState) -> AgentState:

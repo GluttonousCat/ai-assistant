@@ -16,7 +16,7 @@ from mcp.tools._common import df_payload, resolve_one, resolve_stocks
 
 # 指标名 -> sql_builder 的 (field, prefix) 映射直接复用 FinQuerySkill 的别名表
 def _metric_alias() -> Dict[str, Dict[str, str]]:
-    from skills.fin_query.skill import METRIC_ALIAS_FULL
+    from agent.skills.fin_query.skill import METRIC_ALIAS_FULL
     return METRIC_ALIAS_FULL
 
 

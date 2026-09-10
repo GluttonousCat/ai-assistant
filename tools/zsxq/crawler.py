@@ -13,8 +13,8 @@ from typing import Dict, Optional
 from datetime import datetime, timedelta
 
 from storage.sqlite.topics import TopicsDatabase
-from utils.paths import PathManager
-from utils.helpers import clean_cookie, decrement_time
+from core.paths import PathManager
+from core.helpers import clean_cookie, decrement_time
 from tools.zsxq.anti_detect import AntiDetectManager
 
 

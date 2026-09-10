@@ -25,7 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.logger import get_logger
 from storage.pg import PgClient
-from utils.helpers import is_chinese_translated
+from core.helpers import is_chinese_translated
 
 logger = get_logger(__name__)
 

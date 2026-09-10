@@ -36,14 +36,14 @@ from storage.pg_schema import (
 from storage.sqlite.files import FilesDatabase
 from storage.sqlite.topics import TopicsDatabase
 from tools.finance.report_extractor import get_extractor
-from utils.helpers import strip_zsxq_tags, is_chinese_translated
+from core.helpers import strip_zsxq_tags, is_chinese_translated
 
 # 幂等检查: 现存 OR 已被去重合并删除留痕 (留痕过的永不重插, 防
 # 入库→merge删除→全量sync重插→再分析 的乒乓循环)
 _EXISTS_SQL = (
     f"SELECT 1 FROM fin.report_meta WHERE file_id=%s "
     f"UNION ALL SELECT 1 FROM fin.report_meta_merged WHERE file_id=%s LIMIT 1")
-from utils.paths import PathManager
+from core.paths import PathManager
 
 # 研报文本提取的最大长度 (避免超大文件占满 PG 字段, 只保留头部核心内容)
 MAX_TEXT_CHARS = 200_000
@@ -219,7 +219,7 @@ class ZSXQ2PGSync:
     # ---------- 群文件同步 (files 库, 猫哥研报圈等以文件为主的群) ----------
     def _sync_group_files(self):
         """文件库中 files 表 → report_meta (source='zsxq_file'), 提取已下载文件文本"""
-        from utils.helpers import sanitize_filename
+        from core.helpers import sanitize_filename
         if self.files_db is None:
             return
 
@@ -313,7 +313,7 @@ class ZSXQ2PGSync:
 
     def _resolve_local_path(self, row) -> str:
         """附件本地路径: 先查 local_path, 再按 sanitize 后文件名猜, 最后原始名"""
-        from utils.helpers import sanitize_filename
+        from core.helpers import sanitize_filename
         local = row.get("local_path")
         if local and os.path.exists(local):
             return local

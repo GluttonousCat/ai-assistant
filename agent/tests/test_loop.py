@@ -36,7 +36,7 @@ def test_alias_digest_non_empty():
 def test_nl2sql_config_registered():
     """nl2sql 用途必须在 config 注册且关思考 (时延关键: 思考版实测 4~27s)"""
     from core.config import get_config
-    from llm.client import get_nl2sql_llm
+    from core.llm.client import get_nl2sql_llm
     cfg = get_config()
     assert cfg.llm_model_for("nl2sql"), "config.yaml llm.models.nl2sql 未配置"
     assert cfg.get("llm.models.nl2sql.enable_thinking") is False

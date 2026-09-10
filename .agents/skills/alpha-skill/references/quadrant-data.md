@@ -26,7 +26,7 @@
 
 ## 平台内 vs ZCode 内
 
-同一实现被两处消费：平台对话页（`beta_alpha/streaming.py` 的 `stream_alpha`，api 只做薄包装）与本模块的 CLI（`python -m beta_alpha.skills.alpha`）。取数逻辑只改 `beta_alpha/skills/alpha.py` 的四个 `_load_*`；前端平表由 `AlphaSkill.build_table` 单点生成，两处共用，无镜像代码。
+同一实现被两处消费：平台对话页（`beta_alpha/streaming.py` 的 `stream_alpha`，api 只做薄包装）与本模块的 CLI（`python -m agent.beta_alpha.skills.alpha`）。取数逻辑只改 `beta_alpha/skills/alpha.py` 的四个 `_load_*`；前端平表由 `AlphaSkill.build_table` 单点生成，两处共用，无镜像代码。
 
 ## 意图触发词
 

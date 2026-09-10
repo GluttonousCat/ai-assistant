@@ -3,7 +3,7 @@
 OpenAI function-calling 桥: 内部 Agent Loop (deepseek, OpenAI 兼容接口) 直接消费
 
 用法 (Agent Loop 内):
-    from llm.client import get_agent_llm
+    from core.llm.client import get_agent_llm
     from mcp.bridge import openai_tools, run_tool_call
 
     tools = openai_tools()

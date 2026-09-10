@@ -12,8 +12,8 @@ from datetime import datetime, timedelta
 
 from storage.sqlite.files import FilesDatabase
 from storage.sqlite.topics import TopicsDatabase
-from utils.paths import PathManager
-from utils.helpers import clean_cookie, sanitize_filename, is_chinese_translated
+from core.paths import PathManager
+from core.helpers import clean_cookie, sanitize_filename, is_chinese_translated
 from tools.zsxq.anti_detect import AntiDetectManager
 
 

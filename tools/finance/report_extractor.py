@@ -131,7 +131,7 @@ class ReportExtractor:
         if not get_config().openai_api_key:
             return None
 
-        from llm.client import get_vision_llm
+        from core.llm.client import get_vision_llm
         llm = get_vision_llm()
 
         pages_text: list = []

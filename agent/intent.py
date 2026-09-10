@@ -100,7 +100,7 @@ class LayeredIntentClassifier:
     def llm(self) -> Optional[Any]:
         """懒加载 LLM"""
         if self._llm is None and self._enable_llm:
-            from llm.client import LLMClient
+            from core.llm.client import LLMClient
             self._llm = LLMClient()
         return self._llm
 
@@ -207,7 +207,7 @@ class LayeredIntentClassifier:
         if not self.llm:
             return None
         try:
-            from skills.fin_query.prompts import INTENT_ROUTER_PROMPT
+            from agent.skills.fin_query.prompts import INTENT_ROUTER_PROMPT
             fallback_intent = self._rule_classify(text).intent
             prompt = (
                 "你是一个金融查询意图分类器。\n"

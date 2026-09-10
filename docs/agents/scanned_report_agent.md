@@ -37,7 +37,7 @@ ScannedReportSkill (编排层)
 | 视觉工具 | `tools/finance/pdf_vision.py` | is_image_pdf / ocr_page_png / ocr_pdf，零业务逻辑 | 低（换视觉模型只改 config） |
 | 专业 prompt | `skills/scanned_report/prompts.py` | OCR 版式规则 + 分析视角，**专业知识载体** | 高（持续调优，不动代码） |
 | 编排 skill | `skills/scanned_report/skill.py` | 流程串联，④组合 ReportSkill 而非复制其逻辑 | 低 |
-| 常规链路复用 | `skills/report/skill.py _vision_backfill` | 常规提取发现无正文图片 PDF 时调**同一工具**自动回填 | — |
+| 常规链路复用 | `agent/skills/report/skill.py _vision_backfill` | 常规提取发现无正文图片 PDF 时调**同一工具**自动回填 | — |
 
 **可扩展方向**（设计预留）：prompt 按研报类型分化（个股/行业/宏观不同分析框架）、OCR 页数与 dpi 按需调、并发识别加速、表格结构化输出（直接吐 markdown 表）。
 

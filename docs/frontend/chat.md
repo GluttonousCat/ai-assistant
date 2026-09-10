@@ -74,7 +74,7 @@
 
 ### 1.6 结果解读 Prompt 策略（v2, 2026-09-02）
 
-`skills/fin_query/prompts.py RESULT_INTERPRET_PROMPT` v2——数值已由前端图表呈现，解读不复述数据：
+`agent/skills/fin_query/prompts.py RESULT_INTERPRET_PROMPT` v2——数值已由前端图表呈现，解读不复述数据：
 
 | 原则 | 说明 |
 |------|------|

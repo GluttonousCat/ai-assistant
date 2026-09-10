@@ -26,7 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.config import get_config
 from tools.zsxq.downloader import FileDownloader
 from storage.sqlite.files import FilesDatabase
-from utils.paths import PathManager
+from core.paths import PathManager
 
 
 def _process_one_report(group_id: str) -> str:
@@ -60,8 +60,8 @@ def _process_one_report(group_id: str) -> str:
             docs = [r for r in rows if (r.get("file_name") or "").lower()
                     .endswith((".pdf", ".docx", ".doc"))]
             if docs:
-                from skills.base import SkillContext
-                from skills.report.skill import ReportSkill
+                from agent.skills.base import SkillContext
+                from agent.skills.report.skill import ReportSkill
                 from tools.finance.report_meta_analysis import analyze_report_meta
                 for r in docs:
                     rid = r["report_id"]
