@@ -86,7 +86,7 @@ def write_stock_article(stock: str, years: int = 5,
             annual = annual_digest(profile.get("ts_code", ""),
                                    profile.get("name", stock), annual_year)
             if annual:
-                annual_block = (f"### {annual['year']} 年度报告要点 (管理层讨论与"
+                annual_block = (f"### {annual['label']}要点 (管理层讨论与"
                                 f"风险章节提炼, 中文转述)\n{annual['digest']}")
         except Exception as e:  # noqa: BLE001 语料单源失败不挡主链路
             logger.warning(f"年报语料获取失败, 降级: {e}")
@@ -94,14 +94,15 @@ def write_stock_article(stock: str, years: int = 5,
     prompt = GZH_STOCK_ARTICLE_PROMPT.format(
         digest=digest, annual_report=annual_block, disclaimer=DISCLAIMER,
         **imgs)
-    article = get_agent_llm().invoke(prompt)
+    # 思考模式 + 画像摘要 + 年报语料的六模块长文单次成文, 常态 2~4 分钟
+    article = get_agent_llm(timeout=300.0).invoke(prompt)
     path = _save(article, "gzh", profile.get("name", stock))
     n_imgs = sum(1 for v in imgs.values() if v.startswith("![]"))
     logger.info(f"公众号文章已生成: {path} ({len(article)} 字, {n_imgs} 配图, "
-                f"年报语料: {'有' if '年度报告要点' in annual_block else '无'})")
+                f"年报语料: {'有' if '报告要点' in annual_block else '无'})")
     return {"path": str(path), "chars": len(article),
             "charts": n_imgs,
-            "annual_report": "有" if "年度报告要点" in annual_block else "无",
+            "annual_report": "有" if "报告要点" in annual_block else "无",
             "ok_sections": profile.get("ok_sections"),
             "preview": article[:400]}
 
