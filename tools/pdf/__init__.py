@@ -20,6 +20,7 @@ from tools.pdf.text import extract_text, is_pdf_file
 from tools.pdf.render import is_image_pdf, render_pages_png
 from tools.pdf.ocr import ocr_page_png, ocr_pdf
 from tools.pdf.tables import extract_tables
+from tools.pdf.markdown import to_markdown
 
 __all__ = ["extract_text", "is_pdf_file", "is_image_pdf",
            "render_pages_png", "ocr_page_png", "ocr_pdf", "extract_tables"]

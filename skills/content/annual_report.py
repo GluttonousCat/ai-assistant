@@ -54,7 +54,7 @@ def _locate_report_pdfs(ts_code: str,
         with PgClient() as pg:
             return pg.fetch_all(
                 """
-                SELECT report_year, file_path, category
+                SELECT announcement_id, report_year, file_path, category
                 FROM fin.cninfo_announcement
                 WHERE ts_code=%s AND category=ANY('{ndbg,bndbg}')
                   AND download_status='done' AND file_path IS NOT NULL
