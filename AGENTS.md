@@ -72,10 +72,13 @@ DB 实时角色校验）、`storage/pg.py`（PgClient 是上下文管理器，�
 `fin.report_forecast`（盈利预测）。market 词表：A股/H股/TW股/日股/韩股/美股/欧洲股/东南亚股/商品/宏观/其他。
 
 另：**年报披露项提取**（skills/content/annual_items.py，纯文件产物不碰 SQL）：
-cninfo 报告 PDF → MD（output/cninfo/md/）→ 标题锚定提取披露项
-（近三年会计数据/非经常损益/经营回顾/风险/前五大/员工/募投/战略/子公司）
-→ `output/cninfo/md/<代码>/<年度>_<类别>_items.json`（每项 title/text/tables 三件，
-标题锚定跨三种排版方言：准则式「第X节」/A+H 主题式/数字编号式）。
+cninfo 报告 PDF → MD（output/cninfo/md/）→ `{items, sections}` JSON。
+items=第二章精确两项（kpi3y/nonrecurring，词表+相似度兜底，分季度走 Tushare SQL）；
+sections=三~七节按 L1 小节全量（mdna 全量/治理·事项关键词/股东整节+节首前文/
+债券<500字跳过；结构不符的节跳过并记审计，`--audit` 看命中方式与跳过原因）→
+`output/cninfo/md/<代码>/<年度>_<类别>_items.json`。节定位双方言+混合式
+（`第X节/章`锚≥4 / 主题式动态选节级），详见
+[docs/agents/profile_extraction_handoff.md](docs/agents/profile_extraction_handoff.md)。
 
 ## 4. 模型路由（改模型只动 config.yaml）
 

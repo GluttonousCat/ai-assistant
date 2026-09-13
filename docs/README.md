@@ -44,6 +44,7 @@ docs/
 | 换 LLM 模型 | [agents/llm_models.md](agents/llm_models.md) |
 | 处理扫描件 PDF | [agents/scanned_report_agent.md](agents/scanned_report_agent.md) |
 | 加/改产业链Beta、个股Alpha Skill | [agents/chain_beta_skill.md](agents/chain_beta_skill.md) |
+| 改年报披露项提取 (items/sections) | [agents/profile_extraction_handoff.md](agents/profile_extraction_handoff.md) |
 | 改主题/品牌 | [frontend/framework_theme.md](frontend/framework_theme.md) |
 | 域名/启动/看日志 | [ops/domain_setup.md](ops/domain_setup.md) |
 | 安全与加固 | [ops/security.md](ops/security.md) |

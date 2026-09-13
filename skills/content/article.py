@@ -67,10 +67,11 @@ def _render_charts(profile: Dict) -> Dict[str, str]:
 
 def _annual_block_from_items(ts_code: str,
                              year: Optional[int] = None) -> str:
-    """年报语料块: annual_items 的 items.json → 成文素材 (确定性零 LLM)。
+    """年报语料块: annual_items 的 items+sections → 成文素材 (确定性零 LLM)。
 
-    语料 = kpi3y(指标说明) + business_review(经营回顾/管理层归因) + risks(风险)
-    的 text 合并; items.json 不存在则现场 build_items (秒级 MD 转换)。
+    语料 = kpi3y(指标说明) + mdna 经营讨论小节 + mdna 风险小节的 text 合并;
+    items.json 不存在则现场 build_items (秒级 MD 转换)。sections 结构不符
+    被跳过的公司 (B 方言/ESG 式治理) 退回 kpi3y 或量化画像, 不阻塞成文。
     """
     if not ts_code:
         return "(无语料: 按上方量化画像成文)"
@@ -88,15 +89,33 @@ def _annual_block_from_items(ts_code: str,
         paths = [Path(r["json"])]
     d = json.loads(paths[0].read_text(encoding="utf-8"))
     items = d.get("items", {})
+    sections = d.get("sections", {})
     label = (f"{d['report_year']} 年度报告" if d.get("category") == "ndbg"
              else f"{d['report_year']} 半年度报告")
     parts = []
-    for key, head in (("kpi3y", "主要会计数据与指标说明"),
-                      ("business_review", "经营情况讨论(管理层口径)"),
-                      ("risks", "公司自认风险")):
-        it = items.get(key)
-        if it and it.get("text"):
-            parts.append(f"### {head}\n{it['text'][:2500]}")
+    kpi = items.get("kpi3y")
+    if kpi and kpi.get("text"):
+        parts.append(f"### 主要会计数据与指标说明\n{kpi['text'][:2500]}")
+    mdna_subs = sections.get("mdna", {}).get("subsections", [])
+    picks = (("经营情况讨论(管理层口径)",
+              ("经营情况讨论", "主要经营情况", "经营情况分析", "业务情况分析")),
+             ("公司自认风险", ("风险",)))
+    for head, kws in picks:
+        block = next((s["text"] for s in mdna_subs
+                      if s.get("text") and any(kw in s["title"] for kw in kws)),
+                     None)
+        if block is None and head.startswith("经营"):
+            # 银行等措辞漂移兜底: 取 mdna 首个非空小节 (兴业 '十四五成就回顾')
+            block = next((s["text"] for s in mdna_subs if s.get("text")), None)
+        if block:
+            parts.append(f"### {head}\n{block[:2500]}")
+    if not parts:
+        # 旧版 items.json 兼容 (business_review/risks 词表键)
+        for key, head in (("business_review", "经营情况讨论(管理层口径)"),
+                          ("risks", "公司自认风险")):
+            it = items.get(key)
+            if it and it.get("text"):
+                parts.append(f"### {head}\n{it['text'][:2500]}")
     if not parts:
         return "(无语料: 按上方量化画像成文)"
     return f"### {label}要点 (年报披露项提取)\n" + "\n\n".join(parts)

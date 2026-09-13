@@ -1,15 +1,26 @@
 # -*- encoding: utf-8 -*-
 """
-年报披露项提取: 全文 MD → {item: {title, text, tables}} (纯文件产物, 不碰 SQL)
+年报披露项提取: 全文 MD → {items, sections} JSON (纯文件产物, 不碰 SQL)
 
-逻辑 (四步, 无方言判定/无节切分 — 披露项标题即锚点, 证监会准则规定跨排版稳定):
-  ① 定位  独立短行命中词表别名 (守卫: 行≈别名, 排除叙述句)
-  ② 切块  标题行 → 下一同级标记行 (编号种类判兄弟: 一、=兄弟, （一）=子内容)
-  ③ 分离  块内管道行 → tables; 其余 → text
-  ④ 清洗  标题去编号/装饰; text 去页码/表格/<br>; tables 单位行并表名
+两层结构:
+  items     第二章精确两项 (词表锚定): kpi3y 近三年会计数据 / nonrecurring 非经常损益
+  sections  三~七节按小节全量: mdna 全量 / governance·matters 关键词 /
+            shareholders 整节+节首前文 / bonds 整节<500字跳过 (用户拍板规则)
 
-五条硬规则 (实证, 见各函数注释): 标题守卫/编号判兄弟/行尾rstrip/
-短节接受(≥150字或含表)/词表按实证扩。
+节定位双方言 (§5.1, 三十只上证50实测):
+  A 准则式   `## 第X节 …` 或 `### **第X章** …` (兴业带粗体装饰, 旧正则漏匹配的根因)
+             锚 ≥4 个才判 A 式 — 目录页有 1~3 个"第X节"残留 (兴业实证踩坑)
+  B 主题式   无"第X节" (中石化600028 等 A+H/央企蓝筹 18/55 只): 动态选节级
+             = 可归一节名数 ≥3 的最浅标题级 (按节名映射数而非标题总数 —
+             中石化 ### 级有 4 个杂项标题但仅 1 个可归一, 按总数会误选)
+
+小节切分: 编号形态判兄弟 (一、=2.5 / N.M=3.0 / N.M.K=3.1 / （一）=3.5),
+# 层数不可信 — 澜起 L1 与 L2 同为 ####; 兴业 L1 混用 ####/#####/######。
+historical 根因修复: 顿号后空格 (`#### 二、 经营…` 澜起实证) 曾使 _L1_NUM
+失配 → L1 被判 rank 4.0 深层 → 块边界塌缩到紧邻 #### 行 → risks/top5/capex
+漏提取 + business_review 158 字薄壳 (§6 缺口的共同根因)。
+
+清洗 (§5.3): 标题去编号/装饰; text 剥表格/页码/标题行/页眉; tables <br> 接合。
 
 用法:
     python -m skills.content.annual_items 澜起科技 [--year 2025]
@@ -21,7 +32,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Iterator, List, Optional, Tuple
 
 from core.logger import get_logger
 
@@ -51,24 +62,26 @@ def _locate_report_pdfs(ts_code: str,
 
 MD_ROOT = Path("output/cninfo/md")
 
-# 披露项词表 (受控 item_key; 别名按实证扩充, 遇新措辞加一条)
+# 第二章披露项词表 (受控 item_key; 别名按实证扩充, 遇新措辞加一条)。
+# 三~七节内容不再走词表 — sections 结构按小节全量, 覆盖面更完整。
 ITEM_ALIASES: Dict[str, List[str]] = {
-    "kpi3y": ["主要会计数据和财务指标", "主要财务数据及指标", "近三年主要会计数据"],
+    "kpi3y": ["主要会计数据和财务指标", "主要财务数据及指标", "近三年主要会计数据",
+              "近三年主要财务数据", "会计数据和财务指标摘要", "主要会计数据及财务指标",
+              "财务概要", "财务摘要"],
+    # 注: 不收「主要财务指标」短别名 — 会把 kpi3y 锚到第二节节标题
+    # (澜起 '## 第二节 公司简介和主要财务指标' 实证); 该措辞由相似度兜底覆盖
     "nonrecurring": ["非经常性损益项目和金额", "非经常性损益项目及涉及金额",
-                     "非经常性损益项目"],
-    "business_review": ["经营情况讨论与分析", "报告期内主要经营情况", "主营业务分析",
-                        "经营业绩回顾"],
-    "risks": ["可能面对的风险", "风险因素"],
-    "top5": ["前五名客户", "前五大客户"],
-    "staff": ["员工情况"],
-    "capex": ["募集资金使用情况", "募集资金使用进展", "募集资金使用"],
-    "strategy": ["未来发展的讨论与分析", "公司发展战略", "经营计划"],
-    "subsidiaries": ["主要子公司情况", "主要控股参股公司"],
+                     "非经常性损益项目", "非经常性损益明细表", "非经常性损益表"],
 }
+
+# 勾选框后缀 '√适用□不适用' 常贴在标题尾 (万华600309/中铝601600 实证,
+# 曾把非标记行守卫挤爆致 miss); 独立成行时是纯噪声
+_CHECKBOX = re.compile(r"[□√]\s*(?:不\s*)?适\s*用(?:\s*[□√]\s*(?:不\s*)?适\s*用)?")
 
 # ---------------- ① 定位与② 边界 ----------------
 
-_L1_NUM = re.compile(r"^[一二三四五六七八九十]+、\S{0,50}$")
+# 编号后容忍空格 (澜起 '#### 二、 经营情况讨论与分析' 实证 — 曾致 L1 误判深层)
+_L1_NUM = re.compile(r"^[一二三四五六七八九十]+、\s*\S{0,50}$")
 _L2_NUM = re.compile(r"^[（(][一二三四五六七八九十]+[）)]\s*\S{0,50}$")
 _D_NUM = re.compile(r"^\d+(?:\.\d+)+\s*\S{0,50}$")
 _HEAD = re.compile(r"^(#{1,6})\s+\S")
@@ -79,13 +92,16 @@ _BARE_STRIP = re.compile(r"[#\s、。（(）)0-9.\-—第三节第四五六年�
 
 def marker_rank(line: str) -> Optional[float]:
     """行标记秩 (浅→深)。编号优先于#层级 — 实证澜起 L1(六、)与L2((一))同为####,
-    #层数分不了兄弟, 必须按编号种类判。秩: #标题=层数; 一、=2.5; N.M=3.0; （一）=3.5"""
-    line = line.rstrip()          # MD 行尾常带尾随空格, 会击穿 $ 锚点
-    body = re.sub(r"^#{1,6}\s*", "", line)
+    #层数分不了兄弟, 必须按编号种类判。秩: #标题=层数; 一、=2.5; N.M=3.0;
+    N.M.K=3.0+0.1·多段数 (兴业 '4.1.6'/'4.1.6.1' 与 '4.1' 同秩曾误切边界);
+    （一）=3.5。** 粗体先剥 (兴业 '##### **4.1.6**' 实证)。"""
+    line = _CHECKBOX.sub("", line.rstrip()).rstrip()   # 尾缀勾选框剥离
+    body = re.sub(r"^#{1,6}\s*", "", line).replace("*", "")
     if _L1_NUM.match(body):
         return 2.5
-    if _D_NUM.match(body):
-        return 3.0
+    m = _D_NUM.match(body)
+    if m:
+        return 3.0 + 0.1 * (m.group(0).count(".") - 1)
     if _L2_NUM.match(body):
         return 3.5
     m = _HEAD.match(line)
@@ -94,14 +110,54 @@ def marker_rank(line: str) -> Optional[float]:
     return None
 
 
+_CN_NUM_RANKS = (
+    (re.compile(r"^[一二三四五六七八九十]+、\s*[^\n]{0,60}$"), 2.5),
+    (re.compile(r"^[（(][一二三四五六七八九十]+[）)]\s*[^\n]{0,60}$"), 3.5),
+)
+
+
+def _anchor_rank(line: str) -> Optional[float]:
+    """小节锚秩 (sections 路径专用): 只认编号形态, 裸 # 标题不算锚。
+
+    # 标记行信任度高 — 标题放宽到 60 字可含空格/** (实证: 兴业
+    '#### 5.5 公司及董事、监事、高级管理人员受处 罚情况' PDF 折行空格;
+    澜起 '#### 二、控股股东…具体 措施，以及…' 78 字长标题)。
+    纯文本行走 marker_rank 严判 (叙述句防误切, 药明纯文本标题实证)。"""
+    line = _CHECKBOX.sub("", line.rstrip()).rstrip()
+    hashed = _HEAD.match(line) is not None
+    body = re.sub(r"^#{1,6}\s*", "", line)
+    body = body.replace("*", "") if hashed else body
+    if hashed:
+        for rx, rank in _CN_NUM_RANKS:
+            if rx.match(body):
+                return rank
+        m = re.match(r"^(\d+(?:\.\d+)+)\s*[^\n]{0,60}$", body)
+        if m:
+            return 3.0 + 0.1 * (m.group(1).count(".") - 1)
+        return None
+    return marker_rank(line)
+
+
 _TOC_LINE = re.compile(r"…|\.{4,}|\s\d+\s*$")
+
+_SIM_STRIP = re.compile(r"[\s、，,。；;：:（）()\[\]【】/**#0-9.\-—·_`]")
+
+
+def _sim(line: str, alias: str) -> float:
+    """归一化字符相似度 (difflib 比率)。剥空白/标点/数字/装饰后比对 —
+    '非经常性损益项目及涉及金额' vs '非经常性损益项目和金额' ≈ 0.87。"""
+    from difflib import SequenceMatcher
+    a = _SIM_STRIP.sub("", line)
+    b = _SIM_STRIP.sub("", alias)
+    return SequenceMatcher(None, a, b).ratio() if a and b else 0.0
 
 
 def _alias_hit(line: str, aliases: List[str]) -> Optional[str]:
-    """行命中词表别名 (守卫: 行≈别名)。
-    守卫1 覆盖率: 去#编号装饰后的 bare ≥ 别名 60%;
-    守卫2 标记行: 非标记行仅在纯别名行(bare≤别名+3)时放行 — 排除叙述句
-    (实证澜起: '报告期末公司前三年主要会计数据和财务指标如下…' 曾冒充标题)。"""
+    """行命中词表别名: 精确包含 → 相似度兜底 (标记行≥0.75/纯文本行≥0.85)。
+    守卫: ①目录条目排除; ②覆盖率 bare ≥ 别名 60%; ③非标记行仅在纯别名行
+    (bare≤别名+3, 兜底通道收紧到 ≤30) 放行 — 排除叙述句 (实证澜起:
+    '报告期末公司前三年主要会计数据和财务指标如下…' 曾冒充标题)。"""
+    line = _CHECKBOX.sub("", line).rstrip()
     for al in aliases:
         if al not in line:
             continue
@@ -114,7 +170,20 @@ def _alias_hit(line: str, aliases: List[str]) -> Optional[str]:
         if marker_rank(line) is None and len(bare) > len(al_bare) + 3:
             continue
         return al
-    return None
+    # 相似度兜底: 仅结构守卫内的行参与; 非标记行 (纯文本, 信任低) 阈值收紧
+    if _TOC_LINE.search(line):
+        return None
+    bare = _BARE_STRIP.sub("", line)
+    is_marker = marker_rank(line) is not None
+    if not is_marker and len(bare) > 30:
+        return None
+    best_al, best_r = None, 0.0
+    for al in aliases:
+        r = _sim(line, al)
+        if r > best_r:
+            best_al, best_r = al, r
+    threshold = 0.75 if is_marker else 0.85
+    return best_al if best_r >= threshold else None
 
 
 def _block_end(md: str, from_pos: int, title_rank: float,
@@ -128,6 +197,176 @@ def _block_end(md: str, from_pos: int, title_rank: float,
         if m.start() > max_chars:
             return from_pos + m.start()
     return len(md)
+
+
+# ---------------- 节层: 双方言定位 (§5.1) ----------------
+
+# 兴业实证: '### **第一章 公司简介**' — 章式+粗体装饰, 旧版只认 '第X节' 故漏
+_SECTION_ANCHOR_RE = re.compile(
+    r"^#{1,6}[ \t*]*第[一二三四五六七八九十百]+[节章][ \t]*(?P<title>[^\n]*?)[ \t*]*$",
+    re.M)
+
+# 节名 → 内部键 (按名匹配不按序号; 实证: 各家合并节方式不一,
+# 中石化 '关联交易' 独立成节而准则式并入重要事项)
+_SECTION_KEYS = [
+    ("管理层讨论", "mdna"), ("经营业绩", "mdna"), ("业务回顾", "mdna"),
+    ("董事会报告", "mdna"), ("经营情况", "mdna"), ("业绩概述", "mdna"),
+    ("业务概要", "mdna"), ("未来展望", "mdna"), ("专项分析", "mdna"),
+    ("公司治理", "governance"), ("ESG", "governance"),
+    ("重要事项", "matters"), ("关联交易", "matters"),
+    ("股份变动", "shareholders"), ("股东", "shareholders"),
+    ("主要财务数据", "summary"), ("主要会计数据", "summary"),
+    ("公司简介", "summary"),
+    ("财务报表", "financial"), ("财务报告", "financial"),
+    ("释义", "definitions"),
+    ("债券", "bonds"),
+]
+
+_TOPIC_HEAD_RE = re.compile(r"^(?P<marks>#{1,6})\s+(?P<title>[^\n]+)$", re.M)
+
+
+def _section_key(title: str) -> str:
+    for kw, key in _SECTION_KEYS:
+        if kw in title:
+            return key
+    return "other"
+
+
+def _pick_topic_level(md: str) -> Optional[int]:
+    """主题式方言的节标题级: 可归一节名数 ≥3 的最浅标题级。
+
+    按可归一数而非标题总数 — 中石化 ### 级有 4 个杂项标题
+    ('释义：'/'换算比例：'/走势图/'**1.**') 但仅释义可归一, 按总数会误选 ###。"""
+    mapped: Dict[int, int] = {}
+    for m in _TOPIC_HEAD_RE.finditer(md):
+        title = m.group("title").strip()
+        if title == "目录" or set(title) <= set("# *"):
+            continue
+        if _section_key(title) != "other":
+            lvl = len(m.group("marks"))
+            mapped[lvl] = mapped.get(lvl, 0) + 1
+    for lvl in sorted(mapped):
+        if mapped[lvl] >= 3:
+            return lvl
+    return None
+
+
+def split_sections_titled(md: str) -> List[Tuple[str, str, str]]:
+    """切节 (双方言)。返回 [(内部键, 节名, 节内文本)] 按文档序。
+
+    「第X节/章」锚 ≥4 → 准则式 (目录页有 1~3 个残留, ≥1 就判会误入 —
+    兴业实证踩坑); 否则主题式动态选节级 (中石化 ## 级实证)。
+
+    空标题节锚 (华泰'## 第一节'+下一行'## 释义' 两行式, 中建'##### 第一节'
+    +'### **释义**' 实证): 节名取节内首个标题行。节名统一剥 **/反引号
+    装饰 (工行 '## **5.** `财务概要`' 实证)。"""
+    anchors = list(_SECTION_ANCHOR_RE.finditer(md))
+    if len(anchors) >= 4:
+        out = []
+        for i, m in enumerate(anchors):
+            end = anchors[i + 1].start() if i + 1 < len(anchors) else len(md)
+            title = _clean_sec_title(m.group("title"))
+            if not title:
+                hm = re.search(r"^#{1,6}[ \t*`]*([^\n]+)$",
+                               md[m.end():end][:400], re.M)
+                if hm:
+                    title = _clean_sec_title(hm.group(1))
+            out.append((_section_key(title), title, md[m.end():end]))
+        # 混合式补齐 (中建601668实证: '第X节'锚仅首尾各二, 中段节是
+        # '## **管理层讨论 与分析**' 主题标题): 未覆盖的键取首个可归一标题,
+        # 节界按同级下一标题
+        covered = {k for k, _t, _x in out}
+        heads: Dict[int, list] = {}
+        for hm in _TOPIC_HEAD_RE.finditer(md):
+            heads.setdefault(len(hm.group("marks")), []).append(hm)
+        for lvl in sorted(heads):
+            for j, hm in enumerate(heads[lvl]):
+                title = _clean_sec_title(hm.group("title"))
+                key = _section_key(title) if title else "other"
+                if key == "other" or key in covered:
+                    continue
+                hs = heads[lvl]
+                end = hs[j + 1].start() if j + 1 < len(hs) else len(md)
+                out.append((key, title, md[hm.end():end]))
+                covered.add(key)
+        return out
+    lvl = _pick_topic_level(md)
+    if lvl is None:
+        return []
+    heads = [m for m in _TOPIC_HEAD_RE.finditer(md)
+             if len(m.group("marks")) == lvl]
+    out = []
+    for i, m in enumerate(heads):
+        title = _clean_sec_title(m.group("title"))
+        if not title or title == "目录":
+            continue
+        key = _section_key(title)
+        if key == "other":             # 节界仍按该级全部标题切, 未映射节丢弃
+            continue
+        end = heads[i + 1].start() if i + 1 < len(heads) else len(md)
+        out.append((key, title, md[m.end():end]))
+    return out
+
+
+def _clean_sec_title(title: str) -> str:
+    """节名清洗: 剥勾选框/**/反引号装饰 (中建 '**债券相关情况' 曾带尾星)。"""
+    return re.sub(r"[*`]+", "", _CHECKBOX.sub("", title)).strip()
+
+
+# ---------------- 小节层: 编号锚切分 (§5.2) ----------------
+
+_PUNCT_END = ("。", "；", "，", "：", ":", "！", "？")
+
+
+def _subsection_anchors(text: str) -> List[Tuple[int, int, float]]:
+    """节内编号锚扫描。返回 [(锚行起始, 锚行结束, 锚秩)] 按序。
+
+    纯文本锚守卫 (药明实证: pymupdf4llm 未标记的 '十四、募集资金…'):
+    ≤50 字且不以句读结尾 — 叙述段落(长行/带句号)不命中。
+    # 标记锚守卫放宽到 120 字 (澜起 78 字长标题实证)。"""
+    out = []
+    for m in re.finditer(r"^[^\n]{1,120}$", text, re.M):
+        line = m.group(0)
+        rank = _anchor_rank(line)
+        if rank is None:
+            continue
+        if _HEAD.match(line) is None:
+            s = line.strip()
+            if len(s) > 50 or s.endswith(_PUNCT_END):
+                continue
+        out.append((m.start(), m.end(), rank))
+    return out
+
+
+def _body_end(anchors: List[Tuple[int, int, float]], i: int,
+              text_len: int) -> int:
+    """anchors[i] 的正文终点 = 下一秩≤本秩锚的起始 (深层子锚是内容不截断)。"""
+    for j in range(i + 1, len(anchors)):
+        if anchors[j][2] <= anchors[i][2]:
+            return anchors[j][0]
+    return text_len
+
+
+def _render_body(section_text: str,
+                 anchors: List[Tuple[int, int, float]], i: int) -> str:
+    """anchors[i] 的 L1 正文 = 直述 + 其后连续深层子块; 子块标题转 [标题] 行
+    保留 (直接清洗会剥掉标记行标题 — 澜起 '五、主要经营情况' 的 (一)(二)
+    子节标题实证), 孙层以下原样留在各自子块正文里。
+
+    边界只认编号锚 — 裸 # 标题不算边界 (兴业第一章 '### 公司组织架构图'
+    与 '#### 1.1' 同视觉层级, 按 # 层切曾丢内容)。"""
+    _, a_end, rank = anchors[i]
+    end = _body_end(anchors, i, len(section_text))
+    parts, pos = [], a_end
+    for j in range(i + 1, len(anchors)):
+        s, e, r = anchors[j]
+        if s >= end or r <= rank:
+            break                      # r<=rank 与 end 定义一致, 保险
+        parts.append(section_text[pos:s])
+        parts.append(f"\n[{_clean_title(section_text[s:e])}]\n")
+        pos = e
+    parts.append(section_text[pos:end])
+    return "".join(parts)
 
 
 # ---------------- ③ 分离与④ 清洗 ----------------
@@ -170,10 +409,11 @@ def parse_md_tables(text: str) -> List[Dict]:
 
 
 def _clean_title(line: str) -> str:
-    """标题清洗: 去 #/装饰符(<u> ** 等)/编号, 留纯文本。
+    """标题清洗: 去 #/装饰符(<u> ** 等)/编号/勾选框, 留纯文本。
     装饰先剥 — 实证 '<u>(3)</u> …' 的编号在装饰符之内。"""
-    t = re.sub(r"^#{1,6}\s*", "", line)
-    t = re.sub(r"<[^>]+>|[*_]+", "", t)
+    t = _CHECKBOX.sub("", line)
+    t = re.sub(r"^#{1,6}\s*", "", t)
+    t = re.sub(r"<[^>]+>|[*_`]+", "", t)
     t = re.sub(r"^[（(]?(?:[一二三四五六七八九十]+|\d+)[）)]?[、．.]?\s*", "", t)
     t = re.sub(r"^\d+(?:\.\d+)*\s*", "", t)
     return t.strip()
@@ -188,21 +428,26 @@ def _header_lines(md: str) -> set:
             if n >= 10 and not l[-1] in "。；，：！？" and not l.startswith("|")}
 
 
+_BARE_PAGE = re.compile(r"^\d{1,4}$")
+
+
 def _clean_text(block: str, headers: set = frozenset()) -> str:
     """叙述文本: 剥表格行/页码行/标题标记行/重复页眉/HTML装饰/多余空行。
 
     重复页眉: 同一行在块内出现≥3次视为页眉 (每页重复的公司名/年报名, 实证澜起)。
-    """
+    裸页码: 兴业式独立数字行 ('15') 不是 'N / M' 形态, 单列守卫。"""
     from collections import Counter
     lines_ = []
     for line in block.splitlines():
         line = re.sub(r"<[^>]+>|[*_]+", "", line.rstrip())   # 装饰先剥
-        if _ROW_RE.match(line) or _PAGE_NO.match(line.strip()):
+        line = _CHECKBOX.sub("", line)              # 勾选框行/尾缀 (纯行变空被滤)
+        s = line.strip()
+        if _ROW_RE.match(line) or _PAGE_NO.match(s) or _BARE_PAGE.match(s):
             continue
         if marker_rank(line) is not None:      # 标题标记行是结构不是内容
             continue
-        if line.strip() and line.strip() not in headers:
-            lines_.append(line.strip())
+        if s and s not in headers:
+            lines_.append(s)
     # 重复页眉: 短名状行(≤30字无句读)出现≥2次即页眉 (实证: '澜起科技股份有限公司')
     freq = Counter(lines_)
     return "\n".join(
@@ -222,17 +467,108 @@ def _clean_tables(tables: List[Dict], title: str) -> List[Dict]:
     return tables
 
 
+def _subsection_dict(title: str, body: str, headers: set) -> Dict:
+    """小节三件套 {title, text, tables}: 复用 items 的清洗管线。"""
+    tables = _clean_tables(parse_md_tables(body), title)
+    um = re.search(r"^\s*单位[:：]\s*([^\s|]+)", body, re.M)
+    if um and tables and not tables[0].get("unit"):
+        tables[0]["unit"] = um.group(1)   # 表前独立单位行
+    return {"title": title, "text": _clean_text(body, headers),
+            "tables": tables}
+
+
+# ---------------- 三~七节规则 (§3, 用户拍板) ----------------
+
+SECTION_RULES: Dict[str, Dict] = {
+    "mdna":         {"mode": "all"},          # 全量 (用户原话"全部重要")
+    "governance":   {"mode": "keyword",
+                     "keywords": ["董监高", "董事和高级管理人员", "员工",
+                                  "股权激励", "审计委员会"]},
+    "matters":      {"mode": "keyword",
+                     "keywords": ["募集资金", "募投", "承诺", "关联交易",
+                                  "担保", "诉讼", "退市", "非标"]},
+    "shareholders": {"mode": "all", "include_head": True},   # 节首前文=股东总数字段
+    "bonds":        {"mode": "all", "skip_short": 500},      # 多数公司"不适用"
+}
+
+
+def extract_sections(md: str, audit: Optional[Dict] = None) -> Dict[str, Dict]:
+    """全文 MD → {section_key: {title, subsections: [{title, text, tables}]}}。
+
+    同键多节合并 (中石化 mdna = 业绩回顾/管理层讨论/董事会报告 三主题节,
+    子节列表按文档序拼接)。结构不符的节直接跳过, 不产整节兜底大块
+    (用户决策「不和规范的先跳过」): 节内无编号小节 (中石化 B 方言) /
+    keyword 节零命中 (兴业 ESG 式治理节) — 跳过原因写入 audit 供批量审计。
+
+    audit 形如 {"sections": {key: {"status": "ok|skip_no_anchors|
+    skip_no_keyword|skip_short|miss", "n": 小节数}}}。"""
+    headers = _header_lines(md)
+    out: Dict[str, Dict] = {}
+    seen: Dict[str, str] = {}
+    for key, sec_title, text in split_sections_titled(md):
+        rule = SECTION_RULES.get(key)
+        if not rule or not text.strip():
+            continue
+        if rule.get("skip_short") and len(text.strip()) < rule["skip_short"]:
+            seen[key] = "skip_short"
+            continue
+        anchors = _subsection_anchors(text)
+        # L1 = 节内最浅锚秩 (澜起 '一、'=2.5 / 兴业 'N.M'=3.0); 深层子锚
+        # (（一）=3.5 / N.M.K=3.1) 由 _render_body 并入父块, 不单独成节
+        l1 = min((a[2] for a in anchors), default=None)
+        l1_anchors = [a for a in anchors if abs(a[2] - l1) < 1e-9] if l1 else []
+        entries: List[Tuple[str, str]] = []    # [(标题, 正文)]
+        if rule.get("include_head") and l1_anchors:
+            head = text[:l1_anchors[0][0]]
+            if head.strip():
+                entries.append(("(节首前文)", head))
+        for i in (anchors.index(a) for a in l1_anchors):
+            a_start, a_end, _r = anchors[i]
+            title = _clean_title(text[a_start:a_end])
+            if rule["mode"] == "keyword" and not any(
+                    kw in title for kw in rule["keywords"]):
+                continue
+            entries.append((title, _render_body(text, anchors, i)))
+        if not entries:                        # 不规范节: 跳过不兜底
+            if l1_anchors:
+                seen.setdefault(key, "skip_no_keyword")
+            else:
+                seen.setdefault(key, "skip_no_anchors")
+            continue
+        sec = out.setdefault(key, {"title": _clean_title(sec_title),
+                                   "subsections": []})
+        for title, body in entries:
+            sec["subsections"].append(_subsection_dict(title, body, headers))
+        seen[key] = "ok"
+    if audit is not None:
+        sec_audit = {}
+        for key in SECTION_RULES:
+            if key in out:
+                sec_audit[key] = {"status": "ok",
+                                  "n": len(out[key]["subsections"])}
+            else:
+                sec_audit[key] = {"status": seen.get(key, "miss"), "n": 0}
+        audit["sections"] = sec_audit
+    return out
+
+
 # ---------------- 编排 ----------------
 
-def extract_items(md: str) -> Dict[str, Dict]:
-    """全文 MD → {item_key: {title, text, tables}}。miss 容忍 (不出现的键不返回)。"""
+def extract_items(md: str, audit: Optional[Dict] = None) -> Dict[str, Dict]:
+    """全文 MD → {item_key: {title, text, tables}}。miss 容忍 (不出现的键不返回)。
+
+    audit 形如 {"items": {key: {"status": "exact|fuzzy|miss", "title": …,
+    "score": 相似度}}} — 批量跑完审一遍, fuzzy/miss 的措辞补进词表。"""
     out: Dict[str, Dict] = {}
     headers = _header_lines(md)
+    item_audit: Dict[str, Dict] = {}
     for item, aliases in ITEM_ALIASES.items():
         for m in re.finditer(r"^[^\n]{0,60}$", md, re.M):
             line = m.group(0)
-            if _alias_hit(line, aliases) is None:
+            hit = _alias_hit(line, aliases)
+            if hit is None:
                 continue
+            exact = hit in line
             rank = marker_rank(line)
             rank = rank if rank is not None else 2.0
             end = _block_end(md, m.end(), rank)
@@ -241,19 +577,21 @@ def extract_items(md: str) -> Dict[str, Dict]:
             if len(block.strip()) < 150 and "|" not in block:
                 continue                     # 目录条目/页眉噪声, 试下一处
             title = _clean_title(line)
-            tables = _clean_tables(parse_md_tables(block), title)
-            um = re.search(r"^\s*单位[:：]\s*([^\s|]+)", block, re.M)
-            if um and tables and not tables[0].get("unit"):
-                tables[0]["unit"] = um.group(1)   # 表前独立单位行
-            out[item] = {"title": title,
-                         "text": _clean_text(block, headers),
-                         "tables": tables}
+            out[item] = _subsection_dict(title, block, headers)
+            item_audit[item] = {
+                "status": "exact" if exact else "fuzzy",
+                "title": title, "score": 1.0 if exact else round(_sim(line, hit), 3)}
             break
+        else:
+            item_audit[item] = {"status": "miss"}
+    if audit is not None:
+        audit["items"] = item_audit
     return out
 
 
-def build_items(stock: str, year: Optional[int] = None) -> Dict:
-    """单股: 定位报告 PDF (年报→半年报降级链) → MD → 披露项 → JSON 落盘。"""
+def build_items(stock: str, year: Optional[int] = None,
+                want_audit: bool = False) -> Dict:
+    """单股: 定位报告 PDF (年报→半年报降级链) → MD → items+sections → JSON 落盘。"""
     from skills.fin_query.skill import lookup_ts_code
 
     ts_code = lookup_ts_code(stock.strip())
@@ -282,25 +620,69 @@ def build_items(stock: str, year: Optional[int] = None) -> Dict:
     (out_dir / f"{loc['report_year']}_{loc['category']}.md").write_text(
         md, encoding="utf-8")
 
-    items = extract_items(md)
+    audit: Dict = {}
+    items = extract_items(md, audit=audit if want_audit else None)
+    sections = extract_sections(md, audit=audit if want_audit else None)
     json_path = out_dir / f"{loc['report_year']}_{loc['category']}_items.json"
     json_path.write_text(
         json.dumps({"ts_code": ts_code, "report_year": loc["report_year"],
-                    "category": loc["category"], "items": items},
+                    "category": loc["category"], "items": items,
+                    "sections": sections},
                    ensure_ascii=False, indent=1), encoding="utf-8")
+    sec_stat = {k: len(v["subsections"]) for k, v in sections.items()}
     logger.info(f"披露项提取: {ts_code} {loc['report_year']} "
-                f"{len(items)} 项 → {json_path}")
-    return {"ok": True, "ts_code": ts_code, "report_year": loc["report_year"],
-            "items": list(items), "json": str(json_path)}
+                f"items {list(items)} + sections {sec_stat} → {json_path}")
+    r = {"ok": True, "ts_code": ts_code, "report_year": loc["report_year"],
+         "items": list(items), "sections": sec_stat, "json": str(json_path)}
+    if want_audit:
+        r["audit"] = audit
+    return r
+
+
+def build_for_index(index_code: str, year: Optional[int] = None) -> Dict[str, int]:
+    """指数成分股批量 → 每股 items.json (幂等: 已存在则跳过)。"""
+    import time
+    from datetime import date, timedelta
+    import tushare as ts
+    from core.config import get_config
+
+    pro = ts.pro_api(get_config().tushare_token)
+    start = (date.today() - timedelta(days=95)).strftime("%Y%m%d")
+    df = pro.index_weight(
+        index_code=index_code,
+        start_date=start, end_date=date.today().strftime("%Y%m%d"))
+    latest = df["trade_date"].max()
+    codes = sorted(df[df["trade_date"] == latest]["con_code"].unique())
+    logger.info(f"披露项批量: {index_code} {len(codes)} 只")
+    stats = {"ok": 0, "err": 0}
+    for i, code in enumerate(codes, 1):
+        r = build_items(code, year=year)
+        stats["ok" if r["ok"] else "err"] += 1
+        if not r["ok"]:
+            logger.warning(f"[{i}/{len(codes)}] {code} 失败: {r['error']}")
+        else:
+            logger.info(f"[{i}/{len(codes)}] {code} {len(r['items'])}项 "
+                        f"{r.get('sections', {})}")
+        time.sleep(1)
+    return stats
 
 
 def main() -> int:
     import argparse
     p = argparse.ArgumentParser(description="年报披露项提取 (JSON 文件产物)")
-    p.add_argument("stock", help="股票名或代码")
+    p.add_argument("stock", nargs="?", default="", help="股票名或代码")
     p.add_argument("--year", type=int, default=0, help="指定报告年度")
+    p.add_argument("--index", default="", help="指数成分批量 (如 000016.SH)")
+    p.add_argument("--audit", action="store_true",
+                   help="输出审计 (items 命中方式/sections 跳过原因)")
     args = p.parse_args()
-    r = build_items(args.stock, year=args.year or None)
+    if args.index:
+        stats = build_for_index(args.index, year=args.year or None)
+        print(f"[ITEMS] {stats}")
+        return 0 if stats["err"] == 0 else 1
+    if not args.stock:
+        p.error("stock 或 --index 至少一个")
+    r = build_items(args.stock, year=args.year or None, want_audit=args.audit)
     print(json.dumps(r, ensure_ascii=False, indent=1))
     return 0 if r["ok"] else 1
 
