@@ -1,6 +1,6 @@
 # -*- encoding: utf-8 -*-
 """
-年报三~七节 L1 小节块提取入库: fin.annual_chunk
+年报核心信息提取入库 (第二节目标子章节→fin.annual_sec2; 三~七节 L1 块→fin.annual_chunk), 一遍 MD 产两表
 
 取舍 (2026-09-13 实证审核, 澜起/药明两样本; 上市公司画像视角):
 - 第三节 MD&A     全量 (用户决策: 全部重要)
@@ -19,16 +19,17 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 
 from core.logger import get_logger
 from skills.content.annual_core import (
-    _subsection_with_children, split_sections, split_subsections,
+    _subsection_with_children, split_sections, split_sections_titled,
+    split_subsections,
 )
 from skills.content.annual_report import _locate_report_pdfs
-from skills.content.annual_sec2 import parse_md_tables
 
 logger = get_logger(__name__)
 
@@ -48,20 +49,120 @@ _RULES: Dict[str, Dict] = {
 }
 
 
+# 子章节标题关键词 → 入库键 (编号各司不同: 澜起六/九 药明七/十, 按名匹配)
+_SEC2_TARGETS = [
+    ("kpi3y", "近三年主要会计数据"),
+    ("nonrecurring", "非经常性损益项目和金额"),
+]
+
+
+_ROW_RE = re.compile(r"^\|.+\|\s*$")
+
+
+def _clean_cell(cell: str) -> str:
+    """单元格清洗: 去首尾空白与包裹符; <br> 是 pymupdf4llm 的折行产物, 去除后
+    跨行词自然接合 (实证: '归属于上市公司股<br>东的净利润')。"""
+    return cell.strip().strip("|").replace("<br>", "").strip()
+
+
+
+def parse_md_tables(text: str) -> List[Dict]:
+    """解析 MD 管道表格块。返回 [{"header": [...], "rows": [[...], ...]}]。
+
+    规则 (实证 澜起2025 L80-92):
+    - 连续 |..| 行为一块; 分隔行 |---| 的上一行是表头, 其后到下一分隔行为数据
+    - 一块内多个分隔行 → 拆多表 (拼接无空行的连续表)
+    - 内嵌子表头行 (如 '||2025年末|2024年末|…' 首列空+年份列) 保留为数据行 —
+      它承载口径切换信息 (年度数据→年末数据), 下游可识别
+    """
+    tables: List[Dict] = []
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        if not _ROW_RE.match(lines[i]):
+            i += 1
+            continue
+        block: List[str] = []
+        while i < len(lines) and _ROW_RE.match(lines[i]):
+            block.append(lines[i])
+            i += 1
+        cells = [[_clean_cell(c) for c in row.split("|")[1:-1]]
+                 for row in block]
+
+        current: Optional[Dict] = None
+        for j, row in enumerate(cells):
+            is_sep = row and all(set(c) <= set("-: ") and c for c in row)
+            if is_sep:
+                if current and current["rows"]:
+                    tables.append(current)
+                current = {"header": cells[j - 1] if j else [],
+                           "rows": []}
+            elif current is not None:
+                if any(c for c in row):          # 跳过全空行
+                    current["rows"].append(row)
+        if current and current["rows"]:
+            tables.append(current)
+    return tables
+
+
+
+def extract_sec2(md: str) -> Dict[str, Dict]:
+    """从全文 MD 提取第二节目标子章节。返回 {key: {title, text, tables}}。
+
+    命中不到的键不出现在结果里 (miss 容忍, 由调用方决定是否告警)。
+    """
+    titled = split_sections_titled(md)
+    sections = {k: text for k, _title, text in titled}
+    subs = split_subsections(sections.get("summary", ""))
+    out: Dict[str, Dict] = {}
+    for key, kw in _SEC2_TARGETS:
+        for idx, (title, _, level) in enumerate(subs):
+            if kw in title and level == 1:
+                # L1 全文 (含 (一)(二) 子小节的表格 + 父小节尾部的指标说明文字)
+                body = _subsection_with_children(subs, idx)
+                text = f"{title}\n{body.strip()}"
+                out[key] = {"title": title, "text": text,
+                            "tables": parse_md_tables(body)}
+                break
+        if key in out:
+            continue
+        # 主题式方言兜底 (A+H/央企, 中石化实证):
+        # kpi3y ← 含「主要财务数据/主要会计数据」的主题节整块;
+        # nonrecurring ← 正文含「非经常性损益」的主题节 (通常同在财务数据主题内)
+        for sec_key, sec_title, text_ in titled:
+            if key == "kpi3y" and any(
+                    w in sec_title for w in ("主要财务数据", "主要会计数据")):
+                out[key] = {"title": sec_title,
+                            "text": f"{sec_title}\n{text_.strip()}",
+                            "tables": parse_md_tables(text_)}
+                break
+            if key == "nonrecurring" and "非经常性损益" in text_:
+                out[key] = {"title": sec_title,
+                            "text": f"{sec_title}\n{text_.strip()}",
+                            "tables": parse_md_tables(text_)}
+                break
+    return out
+
+
+
 def extract_chunks(md: str) -> List[Dict]:
     """按 _RULES 提取各节 L1 小节块。返回 [{section_key, sub_order, title,
-    text, tables}]。"""
-    sections = split_sections(md)
+    text, tables}]。
+
+    主题式方言 (A+H/央企, 中石化实证): 节内常无「一、二、」小节 (用 **1** 等
+    阿拉伯编号) → 小节为空时整节成单块, 保证不丢内容。
+    """
     out: List[Dict] = []
 
-    for section_key, rule in _RULES.items():
-        text = sections.get(section_key, "")
-        if not text:
+    for section_key, section_title, text in split_sections_titled(md):
+        rule = _RULES.get(section_key)
+        if not rule or not text:
             continue
         if rule.get("skip_short") and len(text.strip()) < rule["skip_short"]:
             continue
 
         subs = split_subsections(text)
+        n_before = len(out)
         if rule.get("include_head"):
             # 节首前文 (第一个 L1 小节之前): 第六节股东总数/股本变动所在
             head = text[:_first_sub_offset(text)]
@@ -84,6 +185,12 @@ def extract_chunks(md: str) -> List[Dict]:
                         "title": title,
                         "text": f"{title}\n{body.strip()}",
                         "tables": parse_md_tables(body)})
+        if len(out) == n_before:
+            # 主题式方言兜底 (A+H/央企, 中石化实证: 节内无「一、二、」小节) → 整节单块
+            out.append({"section_key": section_key, "sub_order": 1,
+                        "title": section_title,
+                        "text": f"{section_title}\n{text.strip()}",
+                        "tables": parse_md_tables(text)})
     return out
 
 
@@ -147,6 +254,7 @@ def build_sections(stock: str, year: Optional[int] = None,
             md_path.write_text(md, encoding="utf-8")
 
         chunks = extract_chunks(md)
+        sec2 = extract_sec2(md)
         if dry_run:
             by_sec: Dict[str, int] = {}
             for c in chunks:
@@ -175,15 +283,30 @@ def build_sections(stock: str, year: Optional[int] = None,
                 (ts_code, loc["report_year"], loc["category"],
                  c["section_key"], c["sub_order"], c["title"], c["text"],
                  json.dumps(c["tables"], ensure_ascii=False)))
+        for key, v in sec2.items():
+            pg.execute(
+                """
+                INSERT INTO fin.annual_sec2
+                    (ts_code, report_year, category, subsection_key,
+                     title, text, tables, updated_at)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,now())
+                ON CONFLICT (ts_code, report_year, subsection_key) DO UPDATE SET
+                    category=EXCLUDED.category, title=EXCLUDED.title,
+                    text=EXCLUDED.text, tables=EXCLUDED.tables, updated_at=now()
+                """,
+                (ts_code, loc["report_year"], loc["category"], key,
+                 v["title"], v["text"],
+                 json.dumps(v["tables"], ensure_ascii=False)))
         pg.conn.commit()
         by_sec: Dict[str, int] = {}
         for c in chunks:
             by_sec[c["section_key"]] = by_sec.get(c["section_key"], 0) + 1
-        logger.info(f"三~七节块入库: {ts_code} {loc['report_year']} "
-                    f"{len(chunks)} 块 {by_sec}")
+        logger.info(f"年报核心入库: {ts_code} {loc['report_year']} "
+                    f"{len(chunks)} 块 {by_sec} + sec2 {list(sec2)}")
         return {"ok": True, "ts_code": ts_code,
                 "report_year": loc["report_year"],
-                "chunks": len(chunks), "by_section": by_sec}
+                "chunks": len(chunks), "by_section": by_sec,
+                "sec2": list(sec2)}
 
 
 def build_for_index(index_code: str, force: bool = False) -> Dict[str, int]:

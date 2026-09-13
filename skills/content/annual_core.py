@@ -49,8 +49,23 @@ _SECTION_KEYS = [
     ("债券", "bonds"),
 ]
 
-_SECTION_RE = re.compile(r"^#{1,4}\s*第[一二三四五六七八九十]+节\s*(.*)$",
-                         re.M)
+_SECTION_RE = re.compile(
+    r"^#{1,4}\s*第[一二三四五六七八九十]+节\s*(.*)$", re.M)
+
+# 主题式方言 (A+H/央企蓝筹: 四大行/两桶油/险资/中芯, 全篇 0 个「第X节」,
+# 实证中石化600028: '## 公司简介'/'## 主要财务数据及指标'/'## 经营业绩回顾及展望')
+_TOPIC_KEYS = [
+    ("管理层讨论", "mdna"), ("经营业绩", "mdna"), ("业务回顾", "mdna"),
+    ("董事会报告", "mdna"), ("经营情况", "mdna"),
+    ("公司治理", "governance"),
+    ("重要事项", "matters"),
+    ("股东", "shareholders"), ("股份变动", "shareholders"),
+    ("主要财务数据", "summary"), ("公司简介", "summary"),
+    ("财务报表", "financial"), ("财务报告", "financial"),
+    ("释义", "definitions"),
+    ("债券", "bonds"),
+]
+_TOPIC_RE = re.compile(r"^#{1,2}\s+(?P<title>[^\n]+)$", re.M)
 
 
 def _section_key(title: str) -> str:
@@ -60,13 +75,46 @@ def _section_key(title: str) -> str:
     return "other"
 
 
-def split_sections(md: str) -> Dict[str, str]:
-    """按「第X节」标题切节。返回 {内部键: 节内文本} (同名键后者覆盖, 实际不重现)。"""
-    out: Dict[str, str] = {}
+def _topic_key(title: str) -> str:
+    for kw, key in _TOPIC_KEYS:
+        if kw in title:
+            return key
+    return "other"
+
+
+def split_sections_titled(md: str) -> List[Tuple[str, str, str]]:
+    """切节 (双方言)。返回 [(内部键, 原文节名, 节内文本)]。
+
+    方言判定: 「第X节」锚点 ≥4 个 → 准则式(澜起/药明); 否则 → 主题式
+    (A+H/央企: ## 主题名标题)。主题式跳过 目录/未映射主题。
+    """
+    out: List[Tuple[str, str, str]] = []
     matches = list(_SECTION_RE.finditer(md))
-    for i, m in enumerate(matches):
-        end = matches[i + 1].start() if i + 1 < len(matches) else len(md)
-        out[_section_key(m.group(1))] = md[m.end():end]
+    if matches:
+        for i, m in enumerate(matches):
+            end = matches[i + 1].start() if i + 1 < len(matches) else len(md)
+            out.append((_section_key(m.group(1)), m.group(1).strip(),
+                        md[m.end():end]))
+        return out
+    # 主题式: ## 标题即节
+    topics = list(_TOPIC_RE.finditer(md))
+    for i, m in enumerate(topics):
+        title = m.group("title").strip()
+        if title == "目录" or set(title) <= set("# "):
+            continue
+        key = _topic_key(title)
+        if key == "other":
+            continue
+        end = topics[i + 1].start() if i + 1 < len(topics) else len(md)
+        out.append((key, title, md[m.end():end]))
+    return out
+
+
+def split_sections(md: str) -> Dict[str, str]:
+    """按方言切节。返回 {内部键: 节内文本} (兼容旧调用方)。"""
+    out: Dict[str, str] = {}
+    for key, _title, text in split_sections_titled(md):
+        out[key] = text
     return out
 
 
