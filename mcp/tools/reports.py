@@ -289,8 +289,10 @@ def extract_document(file_path: str, ocr_if_image: bool = True,
     if (not text or len(text.strip()) < 200) and ocr_if_image:
         from tools.pdf import is_image_pdf, ocr_pdf
         from skills.report.prompts import VISION_OCR_PROMPT
+        from core.llm.client import get_vision_llm
         if path.lower().endswith(".pdf") and is_image_pdf(path):
-            text = ocr_pdf(path, prompt=VISION_OCR_PROMPT) or ""
+            text = ocr_pdf(path, prompt=VISION_OCR_PROMPT,
+                           vision_llm=get_vision_llm()) or ""
             used_ocr = True
     if not text or not text.strip():
         raise ToolError(f"未能从 {os.path.basename(path)} 抽取到文本 "

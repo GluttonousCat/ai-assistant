@@ -10,7 +10,8 @@ ScannedReportSkill - 扫描件研报分析 Agent
     ⑤ 可选: 综合解读 (SCANNED_ANALYSIS_PROMPT, 买方研究员视角)
 
 【解耦设计】
-    - 视觉能力在 tools/pdf (通用 PDF 工具层)
+    - 视觉能力在 tools/pdf (通用 PDF 工具层); 视觉模型客户端由本 skill 注入
+      (ocr_pdf/ocr_page_png 的 vision_llm 参数), tools 层不感知 core.llm
     - 本 skill 只做编排; 深度提取委托 ReportSkill (组合)
     - 专业知识全部在 prompts.py — 调优 prompt 不动代码
     - 常规链路 (ReportSkill) 发现无正文图片 PDF 时也调用同一工具自动回填
@@ -70,11 +71,12 @@ class ScannedReportSkill(BaseSkill):
                 context.result = {"summary": f"#{report_id} 非图片型 PDF 或文件缺失: {path}"}
                 return context
 
-            # ①② 视觉 OCR (专业版式 prompt)
+            # ①② 视觉 OCR (专业版式 prompt; 视觉客户端由本层注入, tools/pdf 不感知 LLM)
+            from core.llm.client import get_vision_llm
             from skills.scanned_report.prompts import SCANNED_OCR_PROMPT
             context.log(f"#{report_id} 开始视觉识别 (最多 {self.MAX_OCR_PAGES} 页)…")
             text = ocr_pdf(path, max_pages=self.MAX_OCR_PAGES,
-                           prompt=SCANNED_OCR_PROMPT)
+                           prompt=SCANNED_OCR_PROMPT, vision_llm=get_vision_llm())
             if not text:
                 context.error = f"#{report_id} 视觉识别失败 (全部页面无有效内容)"
                 return context

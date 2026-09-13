@@ -176,10 +176,12 @@ class ReportSkill(BaseSkill):
 
         def _job():
             from tools.pdf import ocr_pdf
+            from core.llm.client import get_vision_llm
             from skills.report.prompts import VISION_OCR_PROMPT
             try:
                 with _OCR_SEMAPHORE:  # 并发限流: 同时最多 4 册 OCR
-                    text = ocr_pdf(path, prompt=VISION_OCR_PROMPT, max_pages=10)
+                    text = ocr_pdf(path, prompt=VISION_OCR_PROMPT, max_pages=10,
+                                   vision_llm=get_vision_llm())
                 from storage.pg import PgClient as _Pg
                 ok = False
                 with _Pg() as _pg:

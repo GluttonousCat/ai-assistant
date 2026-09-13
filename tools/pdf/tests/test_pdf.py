@@ -107,3 +107,52 @@ def test_extract_tables_text_pdf_empty(tmp_path):
     p = tmp_path / "t.pdf"
     _make_text_pdf(p)
     assert extract_tables(str(p)) == []
+
+
+# ---------- markdown ----------
+
+def test_to_markdown(tmp_path):
+    pytest.importorskip("pymupdf4llm")
+    from tools.pdf import to_markdown
+    p = tmp_path / "t.pdf"
+    _make_text_pdf(p)
+    md = to_markdown(str(p))
+    assert "管理层讨论与分析测试文本" in md
+
+
+# ---------- ocr (注入假视觉客户端, 不调真实 LLM) ----------
+
+class _FakeVisionLLM:
+    """tools/pdf.ocr 的注入契约: .invoke(messages) -> str"""
+
+    def __init__(self):
+        self.calls = []
+
+    def invoke(self, messages):
+        self.calls.append(messages)
+        return "假OCR识别文本"
+
+
+def test_ocr_page_png_injects_prompt_and_image():
+    from tools.pdf import ocr_page_png
+    fake = _FakeVisionLLM()
+    out = ocr_page_png("QUJD", prompt="版式prompt", vision_llm=fake)
+    assert out == "假OCR识别文本"
+    (system, user), = fake.calls
+    assert system == {"role": "system", "content": "版式prompt"}
+    img, txt = user["content"]
+    assert img["image_url"]["url"] == "data:image/png;base64,QUJD"
+    assert txt["text"] == "提取这一页的全部内容。"
+
+
+def test_ocr_pdf_with_fake_vision_llm(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr("core.config.get_config",
+                        lambda: SimpleNamespace(openai_api_key="test-key"))
+    from tools.pdf import ocr_pdf
+    p = tmp_path / "img.pdf"
+    _make_image_pdf(p, pages=2)
+    fake = _FakeVisionLLM()
+    text = ocr_pdf(str(p), prompt="p", vision_llm=fake, dpi=72)
+    assert text == "假OCR识别文本\n假OCR识别文本"   # 逐页识别后拼接
+    assert len(fake.calls) == 2

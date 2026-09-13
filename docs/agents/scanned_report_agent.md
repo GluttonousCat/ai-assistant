@@ -1,7 +1,7 @@
 # 扫描件研报分析 Agent 设计
 
 > Alpha Finance Radar 平台 · ScannedReportSkill（图片型 PDF 分析）
-> 更新：2026-08-30
+> 更新：2026-09-13
 
 ## 一、系统设计
 
@@ -22,7 +22,7 @@
 ```
 ScannedReportSkill (编排层)
   ① 校验: report_id → 有正文则直接分析; 无正文且 is_image_pdf 才走 OCR
-  ② OCR:  tools/pdf.ocr_pdf
+  ② OCR:  tools/pdf.ocr_pdf (视觉客户端由 skill 注入 get_vision_llm())
           PyMuPDF 渲染 PNG (dpi 130) → qwen3.8-flash 逐页识别
           prompt = SCANNED_OCR_PROMPT (金融研报版式知识: 表格转文本行/数字精确/跳过页眉页脚)
   ③ 回写: content_text = OCR 全文 → 从此与普通文本研报同构
@@ -34,7 +34,7 @@ ScannedReportSkill (编排层)
 
 | 层 | 文件 | 职责 | 变更频率 |
 |----|------|------|---------|
-| 视觉工具 | `tools/pdf` | is_image_pdf / ocr_page_png / ocr_pdf，零业务逻辑 | 低（换视觉模型只改 config） |
+| 视觉工具 | `tools/pdf` | is_image_pdf / ocr_page_png / ocr_pdf，零业务逻辑、不 import core.llm（视觉客户端 `vision_llm` 由调用方注入） | 低（换视觉模型只改 config） |
 | 专业 prompt | `skills/scanned_report/prompts.py` | OCR 版式规则 + 分析视角，**专业知识载体** | 高（持续调优，不动代码） |
 | 编排 skill | `skills/scanned_report/skill.py` | 流程串联，④组合 ReportSkill 而非复制其逻辑 | 低 |
 | 常规链路复用 | `skills/report/skill.py _vision_backfill` | 常规提取发现无正文图片 PDF 时调**同一工具**自动回填 | — |
