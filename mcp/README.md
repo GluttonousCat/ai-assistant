@@ -1,4 +1,4 @@
-# mcp/ — MCP 工具层 (18 只读 + 3 写类 = 21 个投研能力)
+# mcp/ — MCP 工具层 (19 只读 + 3 写类 = 22 个投研能力)
 
 > 2026-09-07 首版。目标: 把平台散落在 skills/tools/beta_alpha/range_trading 的原子能力
 > 统一包成 **带 JSON Schema 的标准工具**, 同时服务两条消费链路:
@@ -14,7 +14,7 @@
 mcp/
   spec.py       ToolSpec 规范 (一个工具长什么样, 见下节)
   registry.py   注册表: @REGISTRY.tool 装饰器 / call 统一入口 / 双协议导出
-  tools/        21 个工具实现 (18 只读 + forge_chain/fetch_annual_report/write_article 3 写类), 按 7 域分组
+  tools/        22 个工具实现 (19 只读 + forge_chain/fetch_annual_report/write_article 3 写类), 按 7 域分组
     _common.py        公共助手 (股票解析/DataFrame 序列化/日K加载)
     entity.py         3 个: 实体与知识
     financial.py      3 个: 财务与行情
@@ -40,7 +40,8 @@ mcp/
 | 7 | report | `search_reports` | 研报检索 (关键词/标的/标签/评级) | `fin.report_meta` | ✓ |
 | 8 | report | `read_report` | 读研报 (元数据+正文节选; 带 question 走 LLM 单篇问答) | `ReportSkill(qa)` | ✓ |
 | 9 | report | `get_forecasts` | 盈利预测+分歧度 CV+上修/下修方向 | `report_forecast` + alpha 统计 | ✓ |
-| 10 | report | `extract_document` | 本地文档→文本 (扫描件自动视觉 OCR) | `report_extractor` + `pdf_vision` | ✓ |
+| 10 | report | `extract_document` | 本地文档→文本 (扫描件自动视觉 OCR) | `report_extractor` + `tools/pdf` | ✓ |
+| 10e | report | `extract_pdf_tables` | PDF 线框表格→结构化行列 (pdfplumber, 不调模型, 数字精确) | `tools/pdf/tables` | ✓ |
 | 10b | report | `fetch_annual_report` | 巨潮定期报告拉取 (元数据入库+PDF下载) | `tools/cninfo` 爬虫 | ✗ |
 | 10c | report | `build_company_profile` | 上市公司画像 (八大板块数据组装) | `content/profile` | ✓ |
 | 10d | report | `write_article` | 公众号文章生成 (画像/研报综述) | `content/article` | ✗ |

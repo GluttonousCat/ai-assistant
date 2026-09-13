@@ -67,14 +67,9 @@ def _locate_report_pdfs(ts_code: str,
 
 
 def _pdf_text(path: str) -> str:
-    """fitz 全文提取 (年报绝大多数有文本层; 失败返回空走降级)"""
-    try:
-        import fitz  # PyMuPDF
-        with fitz.open(path) as doc:
-            return "\n".join(p.get_text() for p in doc)
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"年报 PDF 提取失败: {e}")
-        return ""
+    """文本层提取 (fitz→pdfplumber→pypdf 降级链, 见 tools/pdf/text.py)"""
+    from tools.pdf import extract_text
+    return extract_text(path)
 
 
 def _slice(text: str, pat: str, max_chars: int) -> str:
@@ -112,7 +107,7 @@ def annual_digest(ts_code: str, name: str,
                     f"无文本层 ({len(text)} 字, 疑图片型), 试下一候选")
     if loc is None:
         logger.info(f"{ts_code} 全部候选报告均无文本层, 语料跳过 "
-                    f"(图片版可后续挂 pdf_vision OCR)")
+                    f"(图片版可后续挂 tools/pdf 的 ocr_pdf)")
         return None
     label = (f"{loc['report_year']} 年度报告" if loc["category"] == "ndbg"
              else f"{loc['report_year']} 半年度报告")

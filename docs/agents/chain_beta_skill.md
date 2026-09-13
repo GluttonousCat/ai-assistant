@@ -99,7 +99,7 @@ skills/beta_alpha/                                     自治模块（对标 ran
 
 ## 六、后续（不在本期）
 
-1. **cninfo 年报定向爬取**：目标池=链环节成分股+高覆盖股，复用 `tools/zsxq/downloader` 反检测与 `report_extractor`/`pdf_vision` 提取管线；入库 `fin.annual_report_text`；喂给 alpha 定性象限（管理层指引/在手订单/送样进展——主营构成覆盖不到的"CPO 送样"类信息）。
+1. **cninfo 年报定向爬取**：目标池=链环节成分股+高覆盖股，复用 `tools/zsxq/downloader` 反检测与 `report_extractor`/`tools/pdf` 提取管线；入库 `fin.annual_report_text`；喂给 alpha 定性象限（管理层指引/在手订单/送样进展——主营构成覆盖不到的"CPO 送样"类信息）。
 2. 深度提取全文分段（突破 1.2 万字窗口）。
 3. 产业链树前端可视化（`data.nodes` 已含 edges 结构，组件化在 Reports 弹窗成熟后复用）。
 4. alpha 挂周报调度自动产出"预期差清单"。

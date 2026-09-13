@@ -23,6 +23,11 @@ dependencies = [
     "akshare>=1.12.0",
     "chinese-calendar>=1.10.0",
 
+    # PDF 工具层 (tools/pdf: 文本提取/渲染/表格)
+    "pymupdf>=1.24.0",
+    "pdfplumber>=0.11.0",
+    "pypdf>=4.0.0",
+
     # LLM / Agent
     "openai>=1.0.0",
     "langgraph>=0.2.0",

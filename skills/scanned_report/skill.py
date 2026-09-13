@@ -10,7 +10,7 @@ ScannedReportSkill - 扫描件研报分析 Agent
     ⑤ 可选: 综合解读 (SCANNED_ANALYSIS_PROMPT, 买方研究员视角)
 
 【解耦设计】
-    - 视觉能力在 tools/finance/pdf_vision (纯工具, 无业务)
+    - 视觉能力在 tools/pdf (通用 PDF 工具层)
     - 本 skill 只做编排; 深度提取委托 ReportSkill (组合)
     - 专业知识全部在 prompts.py — 调优 prompt 不动代码
     - 常规链路 (ReportSkill) 发现无正文图片 PDF 时也调用同一工具自动回填
@@ -29,7 +29,7 @@ from core.logger import get_logger
 from storage.pg import PgClient
 from skills.base import BaseSkill, SkillContext
 from skills.report.skill import ReportSkill
-from tools.finance.pdf_vision import is_image_pdf, ocr_pdf
+from tools.pdf import is_image_pdf, ocr_pdf
 
 logger = get_logger(__name__)
 

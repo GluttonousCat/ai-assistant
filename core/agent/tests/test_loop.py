@@ -139,7 +139,7 @@ def test_tool_manifest_read_only():
     tools = openai_tools(include_write=False)
     names = {t["function"]["name"] for t in tools}
     assert "forge_chain" not in names
-    assert len(names) == 18   # 18 只读 (含 build_company_profile)
+    assert len(names) == 19   # 19 只读 (含 build_company_profile)
     assert "query_financials" in names and "verify_forecasts" in names
 
 

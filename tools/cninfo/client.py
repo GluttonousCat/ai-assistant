@@ -186,11 +186,11 @@ class CninfoClient:
                         for chunk in r.iter_content(chunk_size=1 << 16):
                             f.write(chunk)
                 size = tmp.stat().st_size
-                with open(tmp, "rb") as f:
-                    if f.read(4) != b"%PDF":
-                        logger.warning(f"cninfo 下载非 PDF 内容: {adjunct_url}")
-                        tmp.unlink(missing_ok=True)
-                        return False, 0
+                from tools.pdf import is_pdf_file
+                if not is_pdf_file(str(tmp)):
+                    logger.warning(f"cninfo 下载非 PDF 内容: {adjunct_url}")
+                    tmp.unlink(missing_ok=True)
+                    return False, 0
                 tmp.rename(dest)
                 if attempt > 1:
                     logger.info(f"PDF 续传完成 ({attempt} 次): {dest.name} "

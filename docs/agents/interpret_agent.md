@@ -56,7 +56,7 @@ fin.cninfo_announcement (category=ndbg, download_status=done, 文件在盘)
 
 - 版权边界：年报是公司公开披露文件，摘录转述无版权问题（区别于券商研报），
   但 prompt 仍要求"提炼转述，不整段搬运"
-- 图片型 PDF（无文本层）：fitz 提取为空 → 降级跳过（OCR 走 pdf_vision 属后续可选）
+- 图片型 PDF（无文本层）：fitz 提取为空 → 降级跳过（OCR 走 tools/pdf 的 ocr_pdf 属后续可选）
 
 ## 二、需求优化
 

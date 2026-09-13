@@ -175,10 +175,11 @@ class ReportSkill(BaseSkill):
                 "WHERE report_id=%s", (rid,))
 
         def _job():
-            from tools.finance.pdf_vision import ocr_pdf
+            from tools.pdf import ocr_pdf
+            from skills.report.prompts import VISION_OCR_PROMPT
             try:
                 with _OCR_SEMAPHORE:  # 并发限流: 同时最多 4 册 OCR
-                    text = ocr_pdf(path, max_pages=10)
+                    text = ocr_pdf(path, prompt=VISION_OCR_PROMPT, max_pages=10)
                 from storage.pg import PgClient as _Pg
                 ok = False
                 with _Pg() as _pg:

@@ -6,7 +6,7 @@
 不动代码链路 (skill.py 只做编排)。每个 prompt 独立成块, 便于单独调优。
 """
 
-# ---- 页面 OCR (可注入 tools/finance/pdf_vision.DEFAULT_OCR_PROMPT 覆盖) ----
+# ---- 页面 OCR (prompt 由 skills/report/prompts.VISION_OCR_PROMPT 提供) ----
 # 金融研报版式感知: 表格保真 + 数字精确是财务分析的地基
 SCANNED_OCR_PROMPT = """你是券商研报 OCR 引擎。逐字提取图片中的全部内容, 保持原始顺序:
 - 正文、标题、要点符号 (■/●/►) 完整保留

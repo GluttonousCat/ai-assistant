@@ -32,8 +32,8 @@ jobs/        任务层一体: scheduler(Tushare 21:00) / zsxq_scheduler(爬虫 0
              管线入口(daily_fetch_zxsq, sync_zxsq_to_pg, merge_report_duplicates, smoke)
 mcp/         MCP工具协议层 (21工具ToolSpec, stdio server; 外部客户端 python -m mcp.server,
              与 core/agent/loop 函数桥共用一份定义; 保持顶层=对外边界, 勿挪动)
-tools/       zsxq爬虫 / market行情同步(sync_mainbz主营构成, sync_holders十大股东) /
-             cninfo巨潮定期报告 / finance(SQL guard, KB, pdf_vision视觉OCR)
+tools/       pdf(通用PDF工具: 文本/渲染/OCR/表格) / zsxq爬虫 / market行情同步 /
+             cninfo巨潮定期报告 / finance(SQL guard, KB, 研报文件提取器)
 storage/     pg.py(连接池) / sqlite(爬虫) / pg_schema.py(全部DDL,改表先看这)
 api/         路由+鉴权中间件(JWT) / ws / finance(SSE流式) / reports / auth
 web/src/     Login / Platform(侧边栏壳+角色门控) / AgentChat(SSE) / ChainView(产业链页)
@@ -48,7 +48,7 @@ mcp 是与 core 平行的工具协议出口，只允许上层调下层：
 - **services**：用例编排（SSE 流式把引擎与技能串成完整链路）
 - **core/agent + core/workflow**：引擎——LLM 决策循环、意图路由；不直接摸 storage
 - **skills**：领域方法论，编排 tools + LLM prompt
-- **tools**：原子能力，无业务状态；新视觉/提取能力进 tools（如 pdf_vision）
+- **tools**：原子能力，无业务状态；新视觉/提取能力进 tools/pdf（PDF 文本/渲染/OCR/表格）
 - **storage**：唯一碰 PG/SQLite 的层；DDL 全部集中在 `pg_schema.py`/各模块 ensure 函数
 
 **写代码前先看**：`core/config.py`（配置优先级 env > yaml）、`api/deps.py`（require_admin 是
@@ -136,7 +136,7 @@ vision=qwen3.8-flash（deepseek 不收图片）。**思考开关由 `llm.enable_
 | 前端框架 | [docs/frontend/framework_theme.md](docs/frontend/framework_theme.md) | 品牌/深黑暗棕主题/桌面入口 |
 | 模型体系 | [docs/agents/llm_models.md](docs/agents/llm_models.md) | 用途路由/两个模型的坑 |
 | 扫描件 Agent | [docs/agents/scanned_report_agent.md](docs/agents/scanned_report_agent.md) | PDF→PNG→视觉OCR 解耦设计 |
-| MCP 工具层 | [mcp/README.md](mcp/README.md) | 18 工具/ToolSpec 规范/中文description约定/stdio 服务(默认只读) |
+| MCP 工具层 | [mcp/README.md](mcp/README.md) | 19 工具/ToolSpec 规范/中文description约定/stdio 服务(默认只读) |
 | Agent 对话循环 | [docs/agents/agent_loop.md](docs/agents/agent_loop.md) | LLM 自主决策+工具循环/多轮追问/累计口径知识/沙盒；新入口 `/api/v1/agent/stream` |
 | 内容资产管线 | [docs/agents/content_pipeline.md](docs/agents/content_pipeline.md) | 上市公司画像/公众号文章/pptgen出片；`python -m skills.content` |
 | Beta/Alpha Skill | [docs/agents/chain_beta_skill.md](docs/agents/chain_beta_skill.md) | 产业链种子链/三源映射/环节指数/预期差四象限；Agent 会话入口在 `.agents/skills/beta-skill`、`.agents/skills/alpha-skill` |

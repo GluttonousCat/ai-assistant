@@ -22,7 +22,7 @@
 ```
 ScannedReportSkill (编排层)
   ① 校验: report_id → 有正文则直接分析; 无正文且 is_image_pdf 才走 OCR
-  ② OCR:  tools/finance/pdf_vision.ocr_pdf
+  ② OCR:  tools/pdf.ocr_pdf
           PyMuPDF 渲染 PNG (dpi 130) → qwen3.8-flash 逐页识别
           prompt = SCANNED_OCR_PROMPT (金融研报版式知识: 表格转文本行/数字精确/跳过页眉页脚)
   ③ 回写: content_text = OCR 全文 → 从此与普通文本研报同构
@@ -34,7 +34,7 @@ ScannedReportSkill (编排层)
 
 | 层 | 文件 | 职责 | 变更频率 |
 |----|------|------|---------|
-| 视觉工具 | `tools/finance/pdf_vision.py` | is_image_pdf / ocr_page_png / ocr_pdf，零业务逻辑 | 低（换视觉模型只改 config） |
+| 视觉工具 | `tools/pdf` | is_image_pdf / ocr_page_png / ocr_pdf，零业务逻辑 | 低（换视觉模型只改 config） |
 | 专业 prompt | `skills/scanned_report/prompts.py` | OCR 版式规则 + 分析视角，**专业知识载体** | 高（持续调优，不动代码） |
 | 编排 skill | `skills/scanned_report/skill.py` | 流程串联，④组合 ReportSkill 而非复制其逻辑 | 低 |
 | 常规链路复用 | `skills/report/skill.py _vision_backfill` | 常规提取发现无正文图片 PDF 时调**同一工具**自动回填 | — |
@@ -74,4 +74,4 @@ print(ctx.result["summary"])                  # 专业解读
 |------|------|---------|------|
 | 扫描件研报"正文无内容" | 图片型 PDF 无文本层 | 本 Agent（PDF→PNG→视觉 OCR→回写） | ✅ 本轮 |
 | 首版视觉用 qwen-vl-max 且仅在深度提取时兜底 | 模型路由未统一 | 视觉统一 qwen3.8-flash（见 llm_models.md）；OCR 抽成独立工具层 | ✅ 本轮 |
-| 视觉实现散落两处（extractor 与 skill 重复） | 历史演进 | 统一收敛到 `tools/finance/pdf_vision.py`，两处调用同源 | ✅ 本轮 |
+| 视觉实现散落两处（extractor 与 skill 重复） | 历史演进 | 统一收敛到 `tools/pdf`，两处调用同源 | ✅ 本轮 |

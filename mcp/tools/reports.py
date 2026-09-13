@@ -287,9 +287,10 @@ def extract_document(file_path: str, ocr_if_image: bool = True,
     used_ocr = False
 
     if (not text or len(text.strip()) < 200) and ocr_if_image:
-        from tools.finance.pdf_vision import is_image_pdf, ocr_pdf
+        from tools.pdf import is_image_pdf, ocr_pdf
+        from skills.report.prompts import VISION_OCR_PROMPT
         if path.lower().endswith(".pdf") and is_image_pdf(path):
-            text = ocr_pdf(path) or ""
+            text = ocr_pdf(path, prompt=VISION_OCR_PROMPT) or ""
             used_ocr = True
     if not text or not text.strip():
         raise ToolError(f"未能从 {os.path.basename(path)} 抽取到文本 "
@@ -298,3 +299,43 @@ def extract_document(file_path: str, ocr_if_image: bool = True,
     return {"file": os.path.basename(path), "chars": len(text),
             "used_ocr": used_ocr, "excerpt": text[:n],
             "truncated": len(text) > n}
+
+
+# ============================================================
+# 11. extract_pdf_tables
+# ============================================================
+
+@REGISTRY.tool(
+    name="extract_pdf_tables",
+    domain="report",
+    description=(
+        "提取 **PDF 文件里的线框表格** 为结构化行列 (财务表/股东表/明细表等)。"
+        "走 pdfplumber 解析表格线, 不调用大模型, 速度快、数字精确。"
+        "只处理有边框线的表格; 无框线的视觉排版表格不适用。"
+        "适合: 年报/季报里的财务摘要表、十大股东表、募投项目表。"),
+    params_schema=obj_schema({
+        "file_path": param("PDF 绝对路径或项目相对路径", "string"),
+        "max_pages": param("最多处理前 N 页", "integer", default=20),
+        "max_tables": param("最多返回表格数", "integer", default=15),
+    }, ["file_path"]),
+    examples=["提取 output/cninfo/downloads/688981.SH/2025_sjdbg.pdf 里的表格",
+              "把这个年报 PDF 的财务表抽出来"],
+    notes="返回每张表的页码与行列; 无线框表格时返回空列表 (可改用 extract_document 的 OCR)",
+)
+def extract_pdf_tables(file_path: str, max_pages: int = 20,
+                       max_tables: int = 15) -> Dict[str, Any]:
+    import os
+    path = os.path.abspath(file_path)
+    if not os.path.exists(path):
+        raise ToolError(f"文件不存在: {path}")
+    if not path.lower().endswith(".pdf"):
+        raise ToolError("只支持 PDF 文件")
+
+    from tools.pdf import extract_tables
+    tables = extract_tables(path, max_pages=max_pages)[:max_tables]
+    return {"file": os.path.basename(path),
+            "tables": len(tables),
+            "data": [{"page": t["page"],
+                      "rows": len(t["rows"]),
+                      "preview": t["rows"][:6]} for t in tables],
+            "full": tables}
