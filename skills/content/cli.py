@@ -2,12 +2,12 @@
 """
 内容管线 CLI
 
-    python -m agent.content profile 中际旭创                     # 画像 (纯数据)
-    python -m agent.content article --stock 中际旭创             # 公众号文章 (画像模式)
-    python -m agent.content article --topic 光模块               # 公众号文章 (研报综述模式)
-    python -m agent.content interpret 中芯国际                   # 投研解读 (年报语料增强)
-    python -m agent.content interpret 中芯国际 --ppt             # 解读 + PPT 一条龙
-    python -m agent.content ppt 中际旭创                         # 画像 -> pptgen 出片
+    python -m skills.content profile 中际旭创                     # 画像 (纯数据)
+    python -m skills.content article --stock 中际旭创             # 公众号文章 (画像模式)
+    python -m skills.content article --topic 光模块               # 公众号文章 (研报综述模式)
+    python -m skills.content interpret 中芯国际                   # 投研解读 (年报语料增强)
+    python -m skills.content interpret 中芯国际 --ppt             # 解读 + PPT 一条龙
+    python -m skills.content ppt 中际旭创                         # 画像 -> pptgen 出片
 """
 from __future__ import annotations
 

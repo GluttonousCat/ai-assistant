@@ -14,7 +14,7 @@
 mcp/
   spec.py       ToolSpec 规范 (一个工具长什么样, 见下节)
   registry.py   注册表: @REGISTRY.tool 装饰器 / call 统一入口 / 双协议导出
-  tools/        22 个工具实现 (19 只读 + forge_chain/fetch_annual_report/write_article 3 写类), 按 7 域分组
+  tools/        23 个工具实现 (20 只读 + forge_chain/fetch_annual_report/write_article 3 写类), 按 7 域分组
     _common.py        公共助手 (股票解析/DataFrame 序列化/日K加载)
     entity.py         3 个: 实体与知识
     financial.py      3 个: 财务与行情

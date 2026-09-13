@@ -65,6 +65,43 @@ def _render_charts(profile: Dict) -> Dict[str, str]:
     return out
 
 
+def _annual_block_from_items(ts_code: str,
+                             year: Optional[int] = None) -> str:
+    """年报语料块: annual_items 的 items.json → 成文素材 (确定性零 LLM)。
+
+    语料 = kpi3y(指标说明) + business_review(经营回顾/管理层归因) + risks(风险)
+    的 text 合并; items.json 不存在则现场 build_items (秒级 MD 转换)。
+    """
+    if not ts_code:
+        return "(无语料: 按上方量化画像成文)"
+    import json
+    from pathlib import Path
+    from skills.content.annual_items import MD_ROOT, build_items
+
+    paths = sorted(MD_ROOT.glob(f"{ts_code}/*_items.json"), reverse=True)
+    if year:
+        paths = [p for p in paths if p.name.startswith(f"{year}_")] or paths
+    if not paths:
+        r = build_items(ts_code)
+        if not r.get("ok"):
+            return "(无语料: 按上方量化画像成文)"
+        paths = [Path(r["json"])]
+    d = json.loads(paths[0].read_text(encoding="utf-8"))
+    items = d.get("items", {})
+    label = (f"{d['report_year']} 年度报告" if d.get("category") == "ndbg"
+             else f"{d['report_year']} 半年度报告")
+    parts = []
+    for key, head in (("kpi3y", "主要会计数据与指标说明"),
+                      ("business_review", "经营情况讨论(管理层口径)"),
+                      ("risks", "公司自认风险")):
+        it = items.get(key)
+        if it and it.get("text"):
+            parts.append(f"### {head}\n{it['text'][:2500]}")
+    if not parts:
+        return "(无语料: 按上方量化画像成文)"
+    return f"### {label}要点 (年报披露项提取)\n" + "\n\n".join(parts)
+
+
 def write_stock_article(stock: str, years: int = 5,
                         annual_year: Optional[int] = None,
                         use_annual: bool = True) -> Dict[str, Any]:
@@ -82,31 +119,8 @@ def write_stock_article(stock: str, years: int = 5,
     annual_block = "(无语料: 按上方量化画像成文)"
     if use_annual:
         try:
-            # 优先读画像库 (fin.annual_profile 已沉淀直接用, 零 LLM);
-            # 无则现场提取并入库 (顺手沉淀, 下次秒回)
-            from storage.pg import PgClient
-            ts_code, name_ = profile.get("ts_code", ""), profile.get("name", stock)
-            row = None
-            if ts_code:
-                with PgClient() as pg:
-                    row = pg.fetch_one(
-                        "SELECT report_year, category, digest "
-                        "FROM fin.annual_profile WHERE ts_code=%s "
-                        "AND (%s::int IS NULL OR report_year=%s) "
-                        "ORDER BY report_year DESC LIMIT 1",
-                        (ts_code, annual_year, annual_year))
-            if row and row.get("digest"):
-                label = (f"{row['report_year']} 年度报告"
-                         if row["category"] == "ndbg"
-                         else f"{row['report_year']} 半年度报告")
-                annual_block = (f"### {label}要点 (画像库 fin.annual_profile)"
-                                f"\n{row['digest']}")
-            else:
-                from skills.content.annual_profile import build_annual_profile
-                r = build_annual_profile(stock, year=annual_year)
-                if r.get("ok") and not r.get("skipped"):
-                    annual_block = (f"### {r['label']}要点 (现场提取已入库)"
-                                    f"\n{r['digest']}")
+            annual_block = _annual_block_from_items(
+                profile.get("ts_code", ""), year=annual_year)
         except Exception as e:  # noqa: BLE001 语料单源失败不挡主链路
             logger.warning(f"年报语料获取失败, 降级: {e}")
 

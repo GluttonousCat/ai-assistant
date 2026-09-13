@@ -27,6 +27,28 @@ from core.logger import get_logger
 
 logger = get_logger(__name__)
 
+
+def _locate_report_pdfs(ts_code: str,
+                        year: Optional[int] = None) -> list:
+    """年报+半年报候选 (报告期新→旧, 同期年报优先)。半年报与年报同构
+    (管理层讨论与分析/风险章节), 年报为图片版无文本层时以半年报顶上。"""
+    from storage.pg import PgClient
+    try:
+        with PgClient() as pg:
+            return pg.fetch_all(
+                """
+                SELECT announcement_id, report_year, file_path, category
+                FROM fin.cninfo_announcement
+                WHERE ts_code=%s AND category=ANY('{ndbg,bndbg}')
+                  AND download_status='done' AND file_path IS NOT NULL
+                  AND (%s::int IS NULL OR report_year=%s)
+                ORDER BY report_year DESC, category DESC
+                """, (ts_code, year, year))
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"报告定位查询失败: {e}")
+        return []
+
+
 MD_ROOT = Path("output/cninfo/md")
 
 # 披露项词表 (受控 item_key; 别名按实证扩充, 遇新措辞加一条)
@@ -232,7 +254,6 @@ def extract_items(md: str) -> Dict[str, Dict]:
 
 def build_items(stock: str, year: Optional[int] = None) -> Dict:
     """单股: 定位报告 PDF (年报→半年报降级链) → MD → 披露项 → JSON 落盘。"""
-    from skills.content.annual_report import _locate_report_pdfs
     from skills.fin_query.skill import lookup_ts_code
 
     ts_code = lookup_ts_code(stock.strip())

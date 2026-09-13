@@ -60,7 +60,7 @@ def test_domains_cover_most_tools():
     uncovered = ({s.name for s in __import__("mcp").get_registry().specs()
                   if s.read_only} - covered)
     # 允许不分组: 跨域综合工具 (如 build_company_profile 八板块画像) — 全循环主场
-    assert uncovered <= {"get_schema", "build_company_profile", "extract_pdf_tables"}, uncovered
+    assert uncovered <= {"get_schema", "build_company_profile", "extract_pdf_tables", "read_annual_profile"}, uncovered
 
 
 # ---------- 域 manifest 与 escalate 伪工具 ----------
