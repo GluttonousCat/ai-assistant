@@ -173,3 +173,18 @@ def test_build_corpus_budget_and_used_slices():
     assert all(u["chars"] > 0 for u in used)
     titles = [u["title"] for u in used]
     assert any("重要提示" == t for t in titles)
+
+
+def test_split_subsections_plain_text_heading():
+    """药明实证: 纯文本小节标题 (无 # 前缀) 也应切出, 叙述句不误切"""
+    text = ("### 一、承诺事项履行情况\n承诺均已履行。\n\n"
+            "十四、募集资金使用进展说明\n募投项目投入 60%。\n\n"
+            "十五、其他重大事项\n无。\n\n"
+            "(四) 其他重大合同\n不适用。")
+    subs = split_subsections(text)
+    titles = [t for t, _, _ in subs]
+    assert "募集资金使用进展说明" in titles          # 纯文本 L1 命中
+    assert "其他重大合同" in titles                  # 纯文本 L2 命中
+    # 句读结尾的叙述行不误切
+    subs2 = split_subsections("一段叙述。其中提到项目一、投入很大。\n后续内容。")
+    assert subs2 == []

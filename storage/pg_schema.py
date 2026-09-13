@@ -641,6 +641,24 @@ CREATE TABLE IF NOT EXISTS fin.annual_sec2 (
 );
 """
 
+
+# 年报三~七节 L1 小节块 (第三节全量; 四~七节按画像价值关键词筛选, 见 annual_sections._RULES)
+# sub_order=0 为节首前文 (第六节股东总数所在); 表格随小节解析入 tables
+DDL_ANNUAL_CHUNK = """
+CREATE TABLE IF NOT EXISTS fin.annual_chunk (
+    ts_code         VARCHAR(16) NOT NULL,
+    report_year     INT NOT NULL,
+    category        VARCHAR(8) NOT NULL DEFAULT 'ndbg',
+    section_key     VARCHAR(12) NOT NULL,  -- mdna/governance/matters/shareholders/bonds
+    sub_order       INT NOT NULL,          -- L1 小节原文序号; 0=节首前文
+    title           TEXT,
+    text            TEXT,                  -- L1 全文 (含 L2 子小节)
+    tables          JSONB,                 -- 小节内解析后的表格 [{header, rows}]
+    updated_at      TIMESTAMPTZ DEFAULT now(),
+    PRIMARY KEY (ts_code, report_year, section_key, sub_order)
+);
+"""
+
 FIN_ALL_DDL = [
     DDL_FIN_SCHEMA,
     DDL_INCOME,
@@ -655,6 +673,7 @@ FIN_ALL_DDL = [
     DDL_CNINFO_ORG_MAP,
     DDL_ANNUAL_REPORT_CORE,
     DDL_ANNUAL_SEC2,
+    DDL_ANNUAL_CHUNK,
 ]
 
 # 财务表名常量

@@ -80,9 +80,12 @@ def slice_head(md: str) -> str:
 
 # 小节标题三形态: "一、"(一级) / "（一）"(二级) / "(四)"(二级, 药明实证)
 # 层级必须区分: 澜起"四、风险因素"正文仅54字, 风险内容全在(一)(二)子小节 (实证L1833+)
+# # 前缀可选: 药明后半部分小节标题在 MD 里是纯文本行 (pymupdf4llm 未识别为标题,
+#   实证: '十四、募集资金使用进展说明' 无 # 前缀) — 靠短行守卫防误切:
+#   标题行 ≤50 字且不以句读结尾, 叙述段落(长行/带句号)不会命中
 _SUBSECTION_RE = re.compile(
-    r"^#{2,4}\s*(?P<num>[（(]?[一二三四五六七八九十]+[）)]?[、．.]?)\s*"
-    r"(?P<title>[^\n]*)$", re.M)
+    r"^(?P<hash>#{2,4})?\s*(?P<num>[（(]?[一二三四五六七八九十]+[）)]?[、．.]?)\s*"
+    r"(?P<title>[^\n]{1,50})$", re.M)
 _LEVEL1 = re.compile(r"[一二三四五六七八九十]+、")
 
 
@@ -94,6 +97,11 @@ def split_subsections(section_text: str) -> List[Tuple[str, str, int]]:
     out: List[Tuple[str, str, int]] = []
     matches = list(_SUBSECTION_RE.finditer(section_text))
     for i, m in enumerate(matches):
+        # 无 # 前缀的纯文本标题行: 追加句读守卫 (标题不以句号/分号/冒号结尾)
+        if not m.group("hash"):
+            title_line = m.group(0).strip()
+            if title_line.endswith(("。", "；", "，", "：", ":", "；")):
+                continue
         end = matches[i + 1].start() if i + 1 < len(matches) else len(section_text)
         level = 1 if _LEVEL1.fullmatch(m.group("num")) else 2
         out.append((m.group("title").strip(),
