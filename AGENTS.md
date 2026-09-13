@@ -71,6 +71,12 @@ DB 实时角色校验）、`storage/pg.py`（PgClient 是上下文管理器，�
 关键表：`fin.report_meta`（file_name 原名/title 清洗后/org/target/industry/region/market）、
 `fin.report_forecast`（盈利预测）。market 词表：A股/H股/TW股/日股/韩股/美股/欧洲股/东南亚股/商品/宏观/其他。
 
+另：**年报披露项提取**（skills/content/annual_items.py，纯文件产物不碰 SQL）：
+cninfo 报告 PDF → MD（output/cninfo/md/）→ 标题锚定提取披露项
+（近三年会计数据/非经常损益/经营回顾/风险/前五大/员工/募投/战略/子公司）
+→ `output/cninfo/md/<代码>/<年度>_<类别>_items.json`（每项 title/text/tables 三件，
+标题锚定跨三种排版方言：准则式「第X节」/A+H 主题式/数字编号式）。
+
 ## 4. 模型路由（改模型只动 config.yaml）
 
 `config.yaml llm.models.<用途>`：default/agent/extract/analysis=deepseek-v4-flash-0731，

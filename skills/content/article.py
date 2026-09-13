@@ -82,12 +82,31 @@ def write_stock_article(stock: str, years: int = 5,
     annual_block = "(无语料: 按上方量化画像成文)"
     if use_annual:
         try:
-            from skills.content.annual_report import annual_digest
-            annual = annual_digest(profile.get("ts_code", ""),
-                                   profile.get("name", stock), annual_year)
-            if annual:
-                annual_block = (f"### {annual['label']}要点 (管理层讨论与"
-                                f"风险章节提炼, 中文转述)\n{annual['digest']}")
+            # 优先读画像库 (fin.annual_profile 已沉淀直接用, 零 LLM);
+            # 无则现场提取并入库 (顺手沉淀, 下次秒回)
+            from storage.pg import PgClient
+            ts_code, name_ = profile.get("ts_code", ""), profile.get("name", stock)
+            row = None
+            if ts_code:
+                with PgClient() as pg:
+                    row = pg.fetch_one(
+                        "SELECT report_year, category, digest "
+                        "FROM fin.annual_profile WHERE ts_code=%s "
+                        "AND (%s::int IS NULL OR report_year=%s) "
+                        "ORDER BY report_year DESC LIMIT 1",
+                        (ts_code, annual_year, annual_year))
+            if row and row.get("digest"):
+                label = (f"{row['report_year']} 年度报告"
+                         if row["category"] == "ndbg"
+                         else f"{row['report_year']} 半年度报告")
+                annual_block = (f"### {label}要点 (画像库 fin.annual_profile)"
+                                f"\n{row['digest']}")
+            else:
+                from skills.content.annual_profile import build_annual_profile
+                r = build_annual_profile(stock, year=annual_year)
+                if r.get("ok") and not r.get("skipped"):
+                    annual_block = (f"### {r['label']}要点 (现场提取已入库)"
+                                    f"\n{r['digest']}")
         except Exception as e:  # noqa: BLE001 语料单源失败不挡主链路
             logger.warning(f"年报语料获取失败, 降级: {e}")
 

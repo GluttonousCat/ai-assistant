@@ -603,61 +603,9 @@ CREATE TABLE IF NOT EXISTS fin.cninfo_org_map (
 );
 """
 
-# 年报核心信息 (年报/半年报 PDF → MD → 切片提取入库; 完整画像 = Tushare 财务信息 ⊕ 本表增量)
-# 定性/数字分列: 可信度来源不同 (LLM 提炼 vs 正则照抄原文), 消费端可区别对待
-# 注意: 定义必须保持在 FIN_ALL_DDL 引用之前 (顺序坑, 见 AGENTS.md 坑表)
-DDL_ANNUAL_REPORT_CORE = """
-CREATE TABLE IF NOT EXISTS fin.annual_report_core (
-    ts_code         VARCHAR(16) NOT NULL,
-    report_year     INT NOT NULL,
-    category        VARCHAR(8) NOT NULL DEFAULT 'ndbg',  -- 语料来源: ndbg年报/bndbg半年报(图片版年报降级)
-    qualitative     JSONB,      -- 定性层(LLM提炼): 经营回顾/增长动因/资本开支/战略展望/
-                                --   风险清单/子公司贡献/产销量{value,quote}
-    quantitative    JSONB,      -- 数字层(正则确定性, LLM不经手): 前五大客户供应商占比/员工总数/
-                                --   研发人员数及占比/股东户数/审计意见/前瞻指标自由槽
-    digest          TEXT,       -- 300-500字可读要点(LLM)
-    md_path         TEXT,       -- 年报全文 MD 落盘路径(供追问/问答)
-    announcement_id VARCHAR(64),-- 溯源: cninfo 公告ID
-    model           VARCHAR(48),-- 提取模型(purpose=extract)
-    extracted_at    TIMESTAMP,
-    updated_at      TIMESTAMP DEFAULT now(),
-    PRIMARY KEY (ts_code, report_year)
-);
-"""
-
-# 第二节核心子章节提取: 近三年主要会计数据+指标 / 非经常性损益 (表格+说明文字)
-# 分季度数据不入库 — Tushare fin.income 四报告期累计可推导单季 (2026-09-13 澜起验证一致)
-DDL_ANNUAL_SEC2 = """
-CREATE TABLE IF NOT EXISTS fin.annual_sec2 (
-    ts_code         VARCHAR(16) NOT NULL,
-    report_year     INT NOT NULL,
-    category        VARCHAR(8) NOT NULL DEFAULT 'ndbg',
-    subsection_key  VARCHAR(24) NOT NULL,  -- kpi3y=近三年主要会计数据和财务指标 | nonrecurring=非经常性损益项目和金额
-    title           TEXT,                  -- 原文小节标题 (编号剥离; 命中按关键词不按编号: 澜起六/九 药明七/十)
-    text            TEXT,                  -- 小节全文 (含表格MD原文与指标说明文字)
-    tables          JSONB,                 -- 解析后的表格 [{header:[], rows:[[]]}]
-    updated_at      TIMESTAMPTZ DEFAULT now(),
-    PRIMARY KEY (ts_code, report_year, subsection_key)
-);
-"""
 
 
-# 年报三~七节 L1 小节块 (第三节全量; 四~七节按画像价值关键词筛选, 见 annual_sections._RULES)
-# sub_order=0 为节首前文 (第六节股东总数所在); 表格随小节解析入 tables
-DDL_ANNUAL_CHUNK = """
-CREATE TABLE IF NOT EXISTS fin.annual_chunk (
-    ts_code         VARCHAR(16) NOT NULL,
-    report_year     INT NOT NULL,
-    category        VARCHAR(8) NOT NULL DEFAULT 'ndbg',
-    section_key     VARCHAR(12) NOT NULL,  -- mdna/governance/matters/shareholders/bonds
-    sub_order       INT NOT NULL,          -- L1 小节原文序号; 0=节首前文
-    title           TEXT,
-    text            TEXT,                  -- L1 全文 (含 L2 子小节)
-    tables          JSONB,                 -- 小节内解析后的表格 [{header, rows}]
-    updated_at      TIMESTAMPTZ DEFAULT now(),
-    PRIMARY KEY (ts_code, report_year, section_key, sub_order)
-);
-"""
+
 
 FIN_ALL_DDL = [
     DDL_FIN_SCHEMA,
@@ -671,9 +619,6 @@ FIN_ALL_DDL = [
     DDL_CNINFO_ANNOUNCEMENT,
     DDL_CNINFO_SYNC_STATE,
     DDL_CNINFO_ORG_MAP,
-    DDL_ANNUAL_REPORT_CORE,
-    DDL_ANNUAL_SEC2,
-    DDL_ANNUAL_CHUNK,
 ]
 
 # 财务表名常量
