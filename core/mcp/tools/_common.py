@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
-from mcp.spec import ToolError
+from core.mcp.spec import ToolError
 
 
 def _jsonable(v: Any) -> Any:

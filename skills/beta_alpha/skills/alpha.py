@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 
 from core.logger import get_logger
-from core.llm.client import get_agent_llm
+from core.llm import get_agent_llm
 from skills.base import BaseSkill, SkillContext
 from storage.pg import PgClient
 from skills.beta_alpha.prompts import ALPHA_SUMMARY_PROMPT

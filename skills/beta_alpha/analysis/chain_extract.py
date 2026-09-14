@@ -13,7 +13,7 @@ import threading
 from typing import Dict, List, Optional
 
 from core.logger import get_logger
-from core.llm.client import get_extract_llm
+from core.llm import get_extract_llm
 from storage.pg import PgClient
 from skills.beta_alpha.schema import init_chain_extract_schema
 

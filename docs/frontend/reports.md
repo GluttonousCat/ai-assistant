@@ -168,7 +168,7 @@ POST /api/reports/{id}/analyze/stream   (SSE, 需 JWT)
 深度提取 prompt（REPORT_EXTRACT_PROMPT）同样新增总则：**所有文本字段一律简体中文，
 英文原版必须翻译后输出（代码/数字/单位/专业术语缩写可保留原样）**。
 
-模型调用：deepseek-v4-flash，思考开关与 max_tokens 由 `core/llm/client.py` 按 config 统一注入
+模型调用：deepseek-v4-flash，思考开关与 max_tokens 由 `core/llm.py` 按 config 统一注入
 （当前 `enable_thinking: true` 最强思考 + `max_tokens: 16384`，
 流式 reasoning 块自动跳过只出正文）。
 

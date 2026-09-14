@@ -177,8 +177,8 @@ async def finance_query_stream(request: Dict[str, Any]):
         if intent in ("query", "compare"):
             # 2. Text-to-SQL 链路 (SQL 生成/校验/执行不可流式; 解读流式)
             #    会话上下文: 追问省略主语时沿用上轮股票
-            from core.agent.context_store import (get_session_stocks,
-                                             update_session_from_result)
+            from core.agent.session import (get_session_stocks,
+                                    update_session_from_result)
             skill = FinQuerySkill()
             ctx = SkillContext(user_input=text)
             context_stocks = get_session_stocks(session_id)

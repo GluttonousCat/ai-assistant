@@ -29,7 +29,7 @@ AgentChat.jsx (session_id 每页生成一次, 全程携带)
             loop (≤8 轮): deepseek function-calling × 17 只读工具
             ├─ 同轮多调用并行执行 (gather)
             └─ 执行层白名单: 只跑本次 manifest 列出的工具
-    → agent/history_store (内存会话历史, 30min TTL)
+    → agent/session (内存会话历史+股票槽位, 30min TTL)
     → mcp.bridge.openai_tools() (只读 17 工具) / mcp REGISTRY.call
 ```
 
@@ -70,11 +70,11 @@ AgentChat.jsx (session_id 每页生成一次, 全程携带)
 | 文件 | 职责 |
 |------|------|
 | `core/agent/loop.py` | Agent 主循环：系统提示词（口径知识/数据纪律/多轮规则）、沙盒参数、事件流 |
-| `agent/history_store.py` | 会话历史（内存，完整轮配对注入，6 轮/6000 字符双限截断） |
-| `core/llm/client.py` | 新增 `invoke_with_tools`（function-calling，返回完整 message） |
+| `agent/session.py` | 会话（对话历史完整轮配对注入，6 轮/6000 字符双限截断 + 股票槽位继承） |
+| `core/llm.py` | 新增 `invoke_with_tools`（function-calling，返回完整 message） |
 | `api/finance.py` | 新端点 `POST /api/v1/agent/stream`（旧 `/query/stream` 保留作回退） |
 | `web/src/AgentChat.jsx` | 切换到 agentStream + session_id + 🤖 徽章 + 工具步骤元信息 |
-| `mcp/server.py` | stdio MCP 服务默认只读模式（`ALPHA_MCP_READ_ONLY=1`） |
+| `core/mcp/server.py` | stdio MCP 服务默认只读模式（`ALPHA_MCP_READ_ONLY=1`） |
 
 ## 二、需求与设计决策
 
@@ -98,7 +98,7 @@ AgentChat.jsx (session_id 每页生成一次, 全程携带)
 | **「什么是市盈率」被快车道劫持去硬跑 SQL**（评测首跑即抓到） | 「市盈率」是 L1 核心词（0.9 置信），纯关键词无法区分常识问答与数据查询 | 门槛②：快车道必须含**股票实体**（无实体的常识/库外标的问题交 Agent 循环） |
 | **「最新市盈率和估值分位一起看看」被快车道截胡只答一半** | 复合意图含快车道词（市盈率），直连管道只查了行情宽表，估值分位丢失 | 门槛③：**深水区词防护**（分析/怎么看/分位/一起/研报…命中即走 Agent 循环）；并新增复合意图评测用例防回归 |
 | 模型在回答末尾输出「[本轮工具调用] ✓ search_reports(…) …」清单给用户 | 工具摘要原来拼在**注入历史的 assistant 正文**里，deepseek 把它当成回答格式的一部分模仿输出了（还会自行加戏写"只命中1篇无关研报"） | ① 摘要移出正文，改为末尾一条 **system 角色后台记录**（明示"严禁输出/复述/模仿"）；② system prompt 表达规则加"绝不向用户输出工具调用记录/日志"双保险 |
-| 追问轮回答"没有上下文"（测试期） | 测试脚本两次 `python -m` 是两个进程，内存态历史丢失；线上长驻 FastAPI 无此问题 | 测试改单进程双轮；如未来多进程部署需把 history_store 落 DB/Redis |
+| 追问轮回答"没有上下文"（测试期） | 测试脚本两次 `python -m` 是两个进程，内存态历史丢失；线上长驻 FastAPI 无此问题 | 测试改单进程双轮；如未来多进程部署需把 session 落 DB/Redis |
 | 历史注入出现孤儿 assistant 消息（user,user,assistant,user） | `_turn_to_messages` 对 assistant 轮又附了一条 user 消息；倒序逐轮取会拆散 user/assistant 对 | 重写为**完整轮配对**（user+其 assistant），取最近 N 轮，字符双限截断 |
 | 底层扫描器 print 排名会污染 SSE/stdio 流 | range_trading 用 print 输出 | api 端点与 mcp server 均以 `redirect_stdout(stderr)` 包裹工具执行 |
 | `wait_for(to_thread)` 超时后线程仍在跑 | Python 线程不可杀 | 已知限制：超时即向 LLM 返回错误并继续对话，后台线程自行跑完不阻塞 |
@@ -120,7 +120,7 @@ AgentChat.jsx (session_id 每页生成一次, 全程携带)
 ## 五、后续规划
 
 - 最终回答改真 token 流（当前决策轮非流式+分块下发；需在 stream 模式累积 tool_call delta）
-- history_store 落 PG/Redis（多进程/重启持久化）
+- session 落 PG/Redis（多进程/重启持久化）
 - 对话内文档上传（extract_document 已就绪，差前端上传通道）
 - 旧 `/query/stream` 意图管道观察一段后下线
 - 评测集扩容（当前 19 用例 22 轮基线），把失败用例修复纳入常规迭代

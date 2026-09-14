@@ -8,11 +8,11 @@
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
-from mcp.registry import REGISTRY
-from mcp.spec import ToolError, obj_schema, param
-from mcp.tools._common import _jsonable, resolve_one
+from core.mcp.registry import REGISTRY
+from core.mcp.spec import ToolError, obj_schema, param
+from core.mcp.tools._common import _jsonable, resolve_one
 
 
 # ============================================================

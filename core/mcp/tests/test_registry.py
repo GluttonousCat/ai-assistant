@@ -2,19 +2,19 @@
 """mcp/ 单元测试: 注册表完整性与信封契约 (不依赖 DB, 秒级)
 
 运行: .venv\\Scripts\\python.exe -m pytest mcp/tests -q
-数据相关的端到端验证用 scripts/smoke_mcp_tools.py (需要 PG)。
+数据相关的端到端验证用 jobs/smoke_mcp_tools.py (需要 PG)。
 """
 from __future__ import annotations
 
 import pytest
 
-from mcp import get_registry
-from mcp.spec import ToolError
+from core.mcp import get_registry
+from core.mcp.spec import ToolError
 
 REGISTRY = get_registry()
 
 
-def test_18_tools_registered():
+def test_22_tools_registered():
     specs = REGISTRY.specs()
     assert len(specs) == 22      # 19 只读 + 3 写类 (forge_chain/fetch_annual_report/write_article)
     names = [s.name for s in specs]
@@ -83,7 +83,7 @@ def test_manifests_consistent():
     openai_manifest = REGISTRY.openai_manifest()
     assert len(mcp_manifest) == len(REGISTRY.specs())
     assert len(openai_manifest) == len(REGISTRY.specs())
-    # 只读过滤: 排除 forge_chain 后 17 个
+    # 只读过滤: 19 个只读 (3 写类被排除)
     assert len(REGISTRY.openai_manifest(include_write=False)) == 19
     for entry in mcp_manifest:
         assert set(entry) == {"name", "description", "inputSchema"}

@@ -9,9 +9,9 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from mcp.registry import REGISTRY
-from mcp.spec import ToolError, obj_schema, param
-from mcp.tools._common import df_payload, resolve_one, resolve_stocks
+from core.mcp.registry import REGISTRY
+from core.mcp.spec import ToolError, obj_schema, param
+from core.mcp.tools._common import df_payload, resolve_one
 
 
 # 指标名 -> sql_builder 的 (field, prefix) 映射直接复用 FinQuerySkill 的别名表

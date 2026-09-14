@@ -2,7 +2,7 @@
 """
 Stdio MCP 端到端握手冒烟 (模拟外部 MCP 客户端: dsh / Claude Desktop / Cursor)
 
-子进程拉起 `python -m mcp.server`, 按 MCP 规范走完整线级握手:
+子进程拉起 `python -m core.mcp.server`, 按 MCP 规范走完整线级握手:
   initialize -> notifications/initialized -> tools/list -> tools/call
 校验: 协议版本与服务名回显 / 只读清单不含写类工具 / 真实调用返回 ok 信封。
 与 mcp/tests/test_server.py (进程内测 handle()) 互补, 验证的是真实 stdio 传输层
@@ -66,7 +66,7 @@ def main() -> int:
 
     env = {**os.environ, "PYTHONIOENCODING": "utf-8", "ALPHA_MCP_READ_ONLY": "1"}
     proc = subprocess.Popen(
-        [sys.executable, "-m", "mcp.server"], cwd=str(ROOT),
+        [sys.executable, "-m", "core.mcp.server"], cwd=str(ROOT),
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         env=env, text=True, encoding="utf-8")
     print(f"[smoke] spawn: {sys.executable} -m mcp.server (cwd={ROOT})")

@@ -13,7 +13,7 @@ from __future__ import annotations
 import time
 from typing import Any, Callable, Dict, List, Optional
 
-from mcp.spec import ToolError, ToolSpec
+from core.mcp.spec import ToolError, ToolSpec
 
 
 class MCPToolRegistry:
@@ -30,12 +30,14 @@ class MCPToolRegistry:
     def tool(self, name: str, domain: str, description: str,
              params_schema: Dict[str, Any], examples: Optional[List[str]] = None,
              read_only: bool = True, notes: str = "") -> Callable:
-        """装饰器形式注册"""
         def deco(fn: Callable) -> Callable:
-            self.register(ToolSpec(
-                name=name, domain=domain, description=description,
-                params_schema=params_schema, handler=fn,
-                examples=examples or [], read_only=read_only, notes=notes))
+            self.register(
+                ToolSpec(
+                    name=name, domain=domain, description=description,
+                    params_schema=params_schema, handler=fn,
+                    examples=examples or [], read_only=read_only, notes=notes
+                )
+            )
             return fn
         return deco
 
@@ -64,7 +66,9 @@ class MCPToolRegistry:
 
     # ---------- 执行 ----------
 
-    def call(self, name: str, arguments: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def call(
+            self, name: str, arguments: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
         """统一调用入口。所有异常都转成中文错误信封, 不向上抛。"""
         spec = self._tools.get(name)
         if spec is None:
@@ -95,5 +99,4 @@ class MCPToolRegistry:
                     "error": f"工具内部错误 ({type(e).__name__}): {e}"}
 
 
-# 全局单例: mcp/tools/ 各域模块 import 时向它注册
 REGISTRY = MCPToolRegistry()

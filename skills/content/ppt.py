@@ -44,7 +44,7 @@ def _pptgen_env() -> Dict[str, str]:
 
 def make_task_book(stock: str, years: int = 5) -> Dict[str, Any]:
     """画像 -> pptgen 任务书 markdown (落盘)。LLM 只做策划, 数据来自画像。"""
-    from core.llm.client import get_agent_llm
+    from core.llm import get_agent_llm
     profile = build_company_profile(stock, years)
     digest = profile_digest(profile)
     task = get_agent_llm().invoke(

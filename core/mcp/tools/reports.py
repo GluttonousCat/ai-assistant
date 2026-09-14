@@ -1,19 +1,21 @@
 # -*- encoding: utf-8 -*-
 """
-研报域工具 (4个):
-- search_reports    研报检索 (关键词/标的/行业/商品/评级)
-- read_report       读研报 (元数据+正文节选; 带 question 时对单篇做问答)
-- get_forecasts     券商盈利预测 + 分歧度统计
-- extract_document  本地文档解析 (PDF/DOCX/TXT; 扫描件走视觉OCR)
+研报域工具 (6个):
+- search_reports       研报检索 (关键词/标的/行业/商品/评级)
+- read_report          读研报 (元数据+正文节选; 带 question 时对单篇做问答)
+- get_forecasts        券商盈利预测 + 分歧度统计
+- fetch_annual_report  巨潮定期报告拉取 (写类: 入库+下载 PDF)
+- extract_document     本地文档解析 (PDF/DOCX/TXT; 扫描件走视觉OCR)
+- extract_pdf_tables   PDF 线框表格提取 (pdfplumber, 不调模型)
 """
 from __future__ import annotations
 
 import json
 from typing import Any, Dict, List, Optional
 
-from mcp.registry import REGISTRY
-from mcp.spec import ToolError, obj_schema, param
-from mcp.tools._common import _jsonable, resolve_one
+from core.mcp.registry import REGISTRY
+from core.mcp.spec import ToolError, obj_schema, param
+from core.mcp.tools._common import _jsonable, resolve_one
 
 
 def _brief(row) -> Dict[str, Any]:
@@ -230,7 +232,7 @@ def fetch_annual_report(stock: str, year: int, category: str = "ndbg") -> Dict[s
     with PgClient() as pg:
         ts_code = None
         try:
-            from mcp.tools._common import resolve_one
+            from core.mcp.tools._common import resolve_one
             ts_code = resolve_one(stock)["ts_code"]
         except ToolError:
             pass
@@ -289,7 +291,7 @@ def extract_document(file_path: str, ocr_if_image: bool = True,
     if (not text or len(text.strip()) < 200) and ocr_if_image:
         from tools.pdf import is_image_pdf, ocr_pdf
         from skills.report.prompts import VISION_OCR_PROMPT
-        from core.llm.client import get_vision_llm
+        from core.llm import get_vision_llm
         if path.lower().endswith(".pdf") and is_image_pdf(path):
             text = ocr_pdf(path, prompt=VISION_OCR_PROMPT,
                            vision_llm=get_vision_llm()) or ""

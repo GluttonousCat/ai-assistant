@@ -250,7 +250,7 @@ class FinQuerySkill(BaseSkill):
     def llm(self):
         """懒加载 LLM 客户端"""
         if self._llm is None and self.config.openai_api_key:
-            from core.llm.client import LLMClient
+            from core.llm import LLMClient
             self._llm = LLMClient()
         return self._llm
 

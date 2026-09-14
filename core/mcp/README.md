@@ -24,7 +24,7 @@ mcp/
     risk.py           2 个: 风控 (全新逻辑, 无既有底座)
   server.py     stdio MCP 服务 (零依赖手写 JSON-RPC)
   bridge.py     OpenAI function-calling 桥 (内部 Agent Loop 用)
-../../scripts/smoke_mcp_tools.py   全量冒烟 (fast/heavy 两档)
+../../jobs/smoke_mcp_tools.py      全量冒烟 (fast/heavy 两档)
 ```
 
 ## 二、工具清单 (18 只读 + 3 写类)
@@ -150,6 +150,7 @@ protocolVersion `2024-11-05`, 零第三方依赖 (手写 JSON-RPC, UTF-8)。
 | 2026-09-07 | detect_financial_risk 抽查: 中际旭创命中「经营现金流仅为净利润 13%」medium | 符合预期 |
 | 2026-09-07 | heavy 档 (全市场扫描 + forge): regime 0.5s / range 578s / trend 365s / setup 172s / forge 509s (含 2 次 LLM 超时重试后成功) / extract 不存在文件→正确报 ToolError | 全部 PASS |
 | 2026-09-07 | pytest mcp/tests (注册表完整性/信封契约/schema 规范) | 24 passed |
+| 2026-09-13 | stdio 错误通道对齐 MCP 规范: 未知工具/arguments 非对象回 JSON-RPC error -32602 (原误走 isError), 非对象消息回 -32600; 新增 test_server.py 协议单测 | pytest mcp/tests 全过 + stdio 端到端复验 PASS |
 
 已知限制 (审核时留意):
 1. **`mcp` 包名与官方 MCP SDK 同名**: 若日后 `pip install mcp`, 从项目根运行会 import 到本目录。

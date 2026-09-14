@@ -1,27 +1,36 @@
 # -*- encoding: utf-8 -*-
 """
-Agent 会话历史存储 (进程内存, 与 context_store 同生命周期策略)
+Agent 会话 (Session) — 同一会话的完整上下文, 进程内存
 
-设计:
-- 每轮存 (user 文本 / assistant 回答 / 本轮工具调用摘要), 不存原始工具 JSON
-  (原始结果太大, 摘要足够支撑追问: "环比下降对吗" 需要知道上轮查了谁+什么指标)
-- 注入 LLM 时按 (轮数, 字符数) 双限截断, 只保留最近几轮
-- TTL 30 分钟惰性清理 (个人平台单进程, 不落库; 重启即失, 与旧 context_store 一致)
+会话 = 两类上下文, 生命周期一致 (TTL 30 分钟惰性清理, 重启即失):
+- 对话历史 (history): user/assistant 轮 + 工具调用摘要, 注入 LLM 用
+  (轮数/字符双限截断; 原始工具 JSON 不存——省 token, 全量轨迹在
+  core/agent/trajectory.py 落盘)
+- 股票槽位 (slots): 最近 3 只股票, 支持"它呢/环比呢"省略主语的追问
+  (快车道与 Text-to-SQL 均消费)
+
+设计: 个人平台单进程, 不落库; 多轮注入保持 user/assistant 严格配对。
 """
 from __future__ import annotations
 
 import threading
 import time
 from collections import deque
-from typing import Any, Deque, Dict, List, Optional
+from typing import Any, Deque, Dict, List, Optional, Tuple
 
 from core.logger import get_logger
 
 logger = get_logger(__name__)
 
-_TTL_SECONDS = 30 * 60
-_MAX_TURNS = 12          # 单会话最多保留轮数 (内存保护)
-_INJECT_TURNS = 6        # 注入 LLM 的最近轮数
+TTL_SECONDS = 30 * 60
+
+
+# ============================================================
+# 对话历史 (history)
+# ============================================================
+
+_MAX_TURNS = 12
+_INJECT_TURNS = 6
 _INJECT_MAX_CHARS = 6000
 
 _LOCK = threading.Lock()
@@ -29,9 +38,9 @@ _STORE: Dict[str, Deque[Dict[str, Any]]] = {}
 
 
 def _cleanup_locked(now: float) -> None:
-    """惰性清理过期会话 (持锁调用)"""
+    """惰性清理过期会话"""
     expired = [sid for sid, turns in _STORE.items()
-               if not turns or now - turns[-1]["ts"] > _TTL_SECONDS]
+               if not turns or now - turns[-1]["ts"] > TTL_SECONDS]
     for sid in expired:
         del _STORE[sid]
 
@@ -70,7 +79,7 @@ def _turn_to_messages(turn: Dict[str, Any]) -> List[Dict[str, str]]:
     """单轮 -> LLM messages。
 
     工具摘要**不进 assistant 正文** (曾因拼进正文被模型模仿, 在回答末尾
-    自行生成"[本轮工具调用]"清单输出给用户) — 改由 _tool_record_message
+    自行生成"[本轮工具调用]"清单输出给用户) — 改由 get_messages
     以 system 角色统一注入。
     """
     if turn["role"] != "assistant":
@@ -143,3 +152,68 @@ def reset(session_id: Optional[str]) -> None:
         return
     with _LOCK:
         _STORE.pop(session_id, None)
+
+
+# ============================================================
+# 股票槽位 (slots) — 省略主语追问的短期记忆
+# ============================================================
+
+_SLOT_LOCK = threading.Lock()
+_SLOTS: Dict[str, Dict] = {}
+
+
+def get_session_stocks(session_id: Optional[str]) -> List[Tuple[str, str]]:
+    """取该会话最近一轮的股票 [(ts_code, name), ...]"""
+    if not session_id:
+        return []
+    with _SLOT_LOCK:
+        entry = _SLOTS.get(session_id)
+        if not entry:
+            return []
+        if time.time() - entry["updated_at"] > TTL_SECONDS:
+            _SLOTS.pop(session_id, None)
+            return []
+        return list(entry["stocks"])
+
+
+def set_session_stocks(session_id: Optional[str],
+                       stocks: List[Tuple[str, str]]) -> None:
+    """写入该会话的股票槽位 (空列表也写入, 表示本轮无股票 -> 追问链断开)"""
+    if not session_id:
+        return
+    with _SLOT_LOCK:
+        # 惰性清理过期会话
+        now = time.time()
+        for k in [k for k, v in _SLOTS.items() if now - v["updated_at"] > TTL_SECONDS]:
+            _SLOTS.pop(k, None)
+        _SLOTS[session_id] = {
+            "stocks": [(c, n) for c, n in stocks][:3],
+            "updated_at": now,
+        }
+
+
+def update_session_from_result(session_id: Optional[str], user_input: str,
+                               data_rows) -> None:
+    """从本轮查询结果提取股票写回会话上下文.
+    本轮提取不到股票 (继承场景) 则保留原上下文不覆盖。"""
+    if not session_id:
+        return
+    stocks: List[Tuple[str, str]] = []
+    try:
+        from tools.finance.stock_kb import get_stock_kb
+        kb = get_stock_kb()
+        # 优先: 结果行里的 ts_code (财务 SQL 有该列)
+        for row in (data_rows or [])[:5]:
+            if isinstance(row, dict) and row.get("ts_code"):
+                code = row["ts_code"]
+                if code not in [c for c, _ in stocks]:
+                    stocks.append((code, kb.get_name(code) or code))
+        # 兜底: 从用户输入词典匹配 (行情 SQL 无 ts_code 列)
+        if not stocks:
+            m = kb.match_stock(user_input)
+            if m:
+                stocks = [(m[0], kb.get_name(m[0]) or m[1])]
+    except Exception:
+        return
+    if stocks:
+        set_session_stocks(session_id, stocks[:3])

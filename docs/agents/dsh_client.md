@@ -1,7 +1,7 @@
 # dsh (DeepSeek Harness) 作为 MCP 客户端接入
 
 > 更新:2026-09-14 · 一次性验证记录, 非依赖项 — 本项目**不引入 dsh 框架**,
-> 仅把平台的 21 工具 MCP server (`python -m mcp.server`) 当作外部 harness
+> 仅把平台的 22 工具 MCP server (`python -m core.mcp.server`) 当作外部 harness
 > 的数据后端试用/评测。
 
 ## 一、系统设计(为什么这样接)
@@ -12,7 +12,7 @@ dsh 这类 MCP 客户端 harness 直接连我们的 stdio MCP server, 复用平�
 只读数据能力(A 股财务/行情/研报/产业链/量化扫描)。
 
 ```
-dsh (TS, 插件化 harness)  ──stdio JSON-RPC──>  python -m mcp.server (21 工具)
+dsh (TS, 插件化 harness)  ──stdio JSON-RPC──>  python -m core.mcp.server (22 工具)
                                                     └─> skills/tools/storage (PG/SQLite)
 ```
 
@@ -49,7 +49,7 @@ tools/list → tools/call, 校验:
 3. 真实调用 `resolve_stock` 返回 `ok=true` 信封
 4. stdout 纯净性:非 JSON-RPC 行直接报错(server 已把模块 print 重定向 stderr)
 
-实测通过(本机 PG 可用时);进程内协议行为另见 `mcp/tests/test_server.py`。
+实测通过(本机 PG 可用时);进程内协议行为另见 `core/mcp/tests/test_server.py`。
 
 ## 四、边界与后续
 

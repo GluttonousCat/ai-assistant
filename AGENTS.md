@@ -19,7 +19,7 @@
 
 ```
 core/        引擎层 + 基础设施 (主流 ToB Agent 同构, 如 Dify core/agent):
-             agent/     loop(自主决策工具循环)/subagent(六域子代理)/intent/history_store/context_store
+             agent/     loop(自主决策工具循环)/subagent(六域子代理)/intent/session(历史+股票槽位)/trajectory
              llm(模型路由工厂)/config(.env+yaml)/logger(按顶层包分桶)/security(JWT+bcrypt)/
              lifespan/net/helpers·paths
              (旧 LangGraph 图 core/workflow + api/ws.py 已于 2026-09-14 移除, 引擎统一为 core/agent)
@@ -30,8 +30,8 @@ skills/      领域技能 (每技能一目录, 专业知识放 prompt):
 services/    用例编排层 (api 与引擎/技能之间): streaming(chain/alpha SSE)
 jobs/        任务层一体: scheduler(Tushare 21:00) / zsxq_scheduler(爬虫 07:00/23:00) /
              管线入口(daily_fetch_zxsq, sync_zxsq_to_pg, merge_report_duplicates, smoke)
-mcp/         MCP工具协议层 (21工具ToolSpec, stdio server; 外部客户端 python -m mcp.server,
-             与 core/agent/loop 函数桥共用一份定义; 保持顶层=对外边界, 勿挪动)
+core/mcp/   MCP工具协议层 (22工具ToolSpec, stdio server; 外部客户端 python -m core.mcp.server,
+             与 core/agent/loop 函数桥共用一份定义; 2026-09-14 由顶层 mcp/ 归入 core/)
 tools/       pdf(通用PDF工具: 文本/渲染/OCR/表格) / zsxq爬虫 / market行情同步 /
              cninfo巨潮定期报告 / finance(SQL guard, KB, 研报文件提取器)
 storage/     pg.py(连接池) / sqlite(爬虫) / pg_schema.py(全部DDL,改表先看这)
@@ -85,7 +85,7 @@ sections=三~七节按 L1 小节全量（mdna 全量/治理·事项关键词/股
 `config.yaml llm.models.<用途>`：default/agent/extract/analysis=deepseek-v4-flash-0731，
 vision=qwen3.8-flash（deepseek 不收图片）。**思考开关由 `llm.enable_thinking` 全局控制
 （当前 true=最强思考；vision 用途已覆盖关闭）；`llm.max_tokens` 必须给足（16384，思考与
-正文共用预算）——两者由 `llm/client.py` 统一注入，业务代码禁止传 `enable_thinking`**。
+正文共用预算）——两者由 `core/llm.py` 统一注入，业务代码禁止传 `enable_thinking`**。
 代码用 `get_agent_llm()/get_extract_llm()/get_vision_llm()` 工厂，禁止硬编码模型名。详见
 [docs/agents/llm_models.md](docs/agents/llm_models.md)。
 
@@ -122,7 +122,7 @@ vision=qwen3.8-flash（deepseek 不收图片）。**思考开关由 `llm.enable_
    独立连接执行，绝不放在业务事务里
 2. **加 API**：想清楚挂在哪个 router；除登录/注册外自动被鉴权中间件覆盖；管理类加
    `require_admin`；重逻辑 `asyncio.to_thread`
-3. **加 LLM 调用**：用 `llm/client.py` 工厂（purpose 路由），思考/max_tokens 由 client
+3. **加 LLM 调用**：用 `core/llm.py` 工厂（purpose 路由），思考/max_tokens 由 client
    统一注入（业务层不传）；JSON 输出的 prompt 用 `{{}}` 转义；解析用宽容提取（剥 ```json 块）；
    面向用户的输出在 prompt 里显式要求中文
 4. **加前端页**：`web/src/` 下新组件 + `Platform.jsx` NAV 注册（注意 adminOnly/superOnly）；
@@ -145,7 +145,7 @@ vision=qwen3.8-flash（deepseek 不收图片）。**思考开关由 `llm.enable_
 | 前端框架 | [docs/frontend/framework_theme.md](docs/frontend/framework_theme.md) | 品牌/深黑暗棕主题/桌面入口 |
 | 模型体系 | [docs/agents/llm_models.md](docs/agents/llm_models.md) | 用途路由/两个模型的坑 |
 | 扫描件 Agent | [docs/agents/scanned_report_agent.md](docs/agents/scanned_report_agent.md) | PDF→PNG→视觉OCR 解耦设计 |
-| MCP 工具层 | [mcp/README.md](mcp/README.md) | 19 工具/ToolSpec 规范/中文description约定/stdio 服务(默认只读) |
+| MCP 工具层 | [core/mcp/README.md](core/mcp/README.md) | 22 工具(19 只读)/ToolSpec 规范/中文description约定/stdio 服务(默认只读) |
 | Agent 对话循环 | [docs/agents/agent_loop.md](docs/agents/agent_loop.md) | LLM 自主决策+工具循环/多轮追问/累计口径知识/沙盒；新入口 `/api/v1/agent/stream`；沙盒参数与六域定义在 config.yaml `agent:` 段，全量轨迹落 logs/trajectories/ |
 | dsh 客户端接入 | [docs/agents/dsh_client.md](docs/agents/dsh_client.md) | 外部 harness(dsh/Claude Desktop)连 MCP server；stdio 握手冒烟 jobs/smoke_mcp_stdio.py |
 | 内容资产管线 | [docs/agents/content_pipeline.md](docs/agents/content_pipeline.md) | 上市公司画像/公众号文章/pptgen出片；`python -m skills.content` |

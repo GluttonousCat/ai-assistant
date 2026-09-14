@@ -13,7 +13,7 @@ import json
 from typing import Any, Dict, Optional
 
 from core.logger import get_logger
-from core.llm.client import get_agent_llm
+from core.llm import get_agent_llm
 from skills.base import BaseSkill, SkillContext
 from skills.beta_alpha.analysis import chain_analysis as ca
 from skills.beta_alpha.prompts import (

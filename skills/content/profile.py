@@ -52,7 +52,7 @@ def _fmt_args(args: Dict[str, Any], stock: str, years: int) -> Dict[str, Any]:
 
 def build_company_profile(stock: str, years: int = 5) -> Dict[str, Any]:
     """组装上市公司画像。返回 {stock, generated_at, sections, ok_sections, failed_sections}"""
-    from mcp import get_registry
+    from core.mcp import get_registry
     registry = get_registry()
     stock = stock.strip()
     sections: Dict[str, Any] = {}

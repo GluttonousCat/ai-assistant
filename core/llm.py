@@ -36,9 +36,7 @@ from core.config import get_config
 MessageList = List[Dict[str, Any]]
 
 
-
 class LLMClient:
-    """OpenAI 兼容的 LLM 客户端 (支持按用途路由模型)"""
 
     def __init__(
         self,

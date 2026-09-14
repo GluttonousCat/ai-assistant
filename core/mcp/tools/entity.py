@@ -1,17 +1,17 @@
 # -*- encoding: utf-8 -*-
 """
 实体/知识域工具 (3个):
-- resolve_stock       股票实体解析 (名称/代码/别名 -> ts_code + 行业档案)
-- get_schema          数据字典 (可查哪些表哪些字段)
-- trading_calendar    A股交易日历 (最近交易日/T+N/区间/期末)
+- resolve_stock       股票实体解析
+- get_schema          数据字典
+- trading_calendar    A股交易日历
 """
 from __future__ import annotations
 
 from typing import Any, Dict
 
-from mcp.registry import REGISTRY
-from mcp.spec import ToolError, obj_schema, param
-from mcp.tools._common import resolve_stocks, stock_profile
+from core.mcp.registry import REGISTRY
+from core.mcp.spec import ToolError, obj_schema, param
+from core.mcp.tools._common import resolve_stocks, stock_profile
 
 
 # ============================================================

@@ -42,7 +42,7 @@ def test_route_never_locks_capability():
 # ---------- 域定义完整性 ----------
 
 def test_domain_defs_well_formed():
-    from mcp import get_registry
+    from core.mcp import get_registry
     registry = get_registry()
     registered = {s.name for s in registry.specs()}
     for key, d in DOMAIN_DEFS.items():
@@ -56,8 +56,9 @@ def test_domain_defs_well_formed():
 
 def test_domains_cover_most_tools():
     """6 域工具并集应覆盖 17 个只读工具的绝大多数 (未覆盖的应是合理的)"""
+    from core.mcp import get_registry
     covered = {t for d in DOMAIN_DEFS.values() for t in d["tools"]}
-    uncovered = ({s.name for s in __import__("mcp").get_registry().specs()
+    uncovered = ({s.name for s in get_registry().specs()
                   if s.read_only} - covered)
     # 允许不分组: 跨域综合工具 (如 build_company_profile 八板块画像) — 全循环主场
     assert uncovered <= {"get_schema", "build_company_profile", "extract_pdf_tables", "read_annual_profile"}, uncovered
@@ -70,7 +71,7 @@ def test_domain_manifest_includes_escalate():
     names = [t["function"]["name"] for t in tools]
     assert names == DOMAIN_DEFS["report"]["tools"] + [ESCALATE_TOOL]
     # escalate 不进全局注册表 (它只是循环内的伪工具)
-    from mcp import get_registry
+    from core.mcp import get_registry
     assert get_registry().get(ESCALATE_TOOL) is None
 
 

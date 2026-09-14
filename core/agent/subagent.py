@@ -169,7 +169,7 @@ DOMAIN_DEFS: Dict[str, Dict[str, Any]] = _load_domain_defs()
 
 def domain_manifest(domain: str, with_escalate: bool = True) -> List[Dict[str, Any]]:
     """域工具 OpenAI manifest (含 escalate 伪工具; 不查 REGISTRY 状态, 纯过滤)"""
-    from mcp import get_registry
+    from core.mcp import get_registry
     registry = get_registry()
     names = DOMAIN_DEFS[domain]["tools"]
     tools = [s.to_openai() for s in registry.specs() if s.name in names]

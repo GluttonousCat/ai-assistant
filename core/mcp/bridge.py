@@ -1,27 +1,13 @@
 # -*- encoding: utf-8 -*-
 """
-OpenAI function-calling 桥: 内部 Agent Loop (deepseek, OpenAI 兼容接口) 直接消费
-
-用法 (Agent Loop 内):
-    from core.llm.client import get_agent_llm
-    from mcp.bridge import openai_tools, run_tool_call
-
-    tools = openai_tools()
-    resp = llm.chat(messages, tools=tools, tool_choice="auto")   # LLMClient 扩展点
-    for tc in resp.tool_calls:
-        env = run_tool_call(tc)          # -> {"ok","tool","data"|"error"}
-        messages.append({"role": "tool", "tool_call_id": tc.id,
-                         "content": json.dumps(env, ensure_ascii=False)})
-
-同一份 ToolSpec 同时服务 MCP 协议 (server.py) 与内部 function calling,
-两边能力永不分叉。
+OpenAI function-calling bridge:
 """
 from __future__ import annotations
 
 import json
 from typing import Any, Dict, List
 
-from mcp.tools import REGISTRY
+from core.mcp.tools import REGISTRY
 
 
 def openai_tools(include_write: bool = False) -> List[Dict[str, Any]]:

@@ -91,7 +91,7 @@ class LayeredIntentClassifier:
     def llm(self) -> Optional[Any]:
         """懒加载 LLM"""
         if self._llm is None and self._enable_llm:
-            from core.llm.client import LLMClient
+            from core.llm import LLMClient
             self._llm = LLMClient()
         return self._llm
 

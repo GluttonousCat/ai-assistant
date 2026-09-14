@@ -6,7 +6,7 @@ E2E (真实 LLM) 见 docs/agents/agent_loop.md 验证记录。
 """
 from __future__ import annotations
 
-from core.agent import history_store
+from core.agent import session as history_store
 from core.agent.loop import (DEFAULT_TOOL_TIMEOUT, MAX_ROUNDS, REPEAT_LIMIT,
                         TOOL_TIMEOUTS, _extract_table, build_system_prompt)
 
@@ -36,7 +36,7 @@ def test_alias_digest_non_empty():
 def test_nl2sql_config_registered():
     """nl2sql 用途必须在 config 注册且关思考 (时延关键: 思考版实测 4~27s)"""
     from core.config import get_config
-    from core.llm.client import get_nl2sql_llm
+    from core.llm import get_nl2sql_llm
     cfg = get_config()
     assert cfg.llm_model_for("nl2sql"), "config.yaml llm.models.nl2sql 未配置"
     assert cfg.get("llm.models.nl2sql.enable_thinking") is False
@@ -135,7 +135,7 @@ def test_sandbox_config():
 
 def test_tool_manifest_read_only():
     """对话循环只能拿到只读工具 (forge_chain 不可见)"""
-    from mcp.bridge import openai_tools
+    from core.mcp.bridge import openai_tools
     tools = openai_tools(include_write=False)
     names = {t["function"]["name"] for t in tools}
     assert "forge_chain" not in names

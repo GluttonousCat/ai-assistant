@@ -6,7 +6,7 @@ DSH "全程可追溯" 思想的低成本落地: 每轮对话 (run_agent_stream �
 落一个文件 logs/trajectories/<session>_<时间戳>.jsonl —
 首行 turn_start (用户输入), 其后逐事件 tee SSE 流 (stage/tool_call/data/delta/
 error), 事后可 replay 会话 / 归因 (evals 分析"模型为何误选工具"), 不再只有摘要
-(history_store 为省 token 只存摘要, 原始工具 JSON 此前直接丢弃)。
+(session 为省 token 只存摘要, 原始工具 JSON 此前直接丢弃)。
 
 - 零侵入: run_agent_stream 出口包装 sse formatter, 业务代码无感
 - 开关/保留: config.yaml agent.trajectory.enabled / retention_days (0=不清理)

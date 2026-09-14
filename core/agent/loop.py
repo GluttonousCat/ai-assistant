@@ -28,7 +28,7 @@ from typing import Any, AsyncIterator, Callable, Dict, List, Optional
 
 from core.logger import get_logger
 from core.config import get_config
-from core.agent import history_store, trajectory
+from core.agent import session, trajectory
 
 logger = get_logger(__name__)
 
@@ -123,7 +123,7 @@ def _fmt_tool_args(args: Dict[str, Any]) -> str:
 
 async def _run_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     """沙盒执行"""
-    from mcp import get_registry
+    from core.mcp import get_registry
     registry = get_registry()
     timeout = TOOL_TIMEOUTS.get(name, DEFAULT_TOOL_TIMEOUT)
     try:
@@ -220,8 +220,8 @@ def _llm_nl2sql(text: str, context_stocks=None) -> Optional[str]:
     时序跨度失真 — LLM 生成对时间/指标/复合条件更稳, 规则引擎仅作兜底。
     """
     import re
-    from core.llm.client import get_nl2sql_llm
-    from mcp.tools._common import resolve_stocks
+    from core.llm import get_nl2sql_llm
+    from core.mcp.tools._common import resolve_stocks
     from tools.finance.sql_guard import validate_sql
 
     # 实体解析在规则层完成 (毫秒级), LLM 只负责拼 SQL — 实体零幻觉
@@ -282,12 +282,12 @@ async def _fast_query_stream(text: str, session_id: Optional[str],
     简报仍为零 LLM 规则摘要, 深度解读由追问触发 Agent 循环。
     与 Agent 循环同事件协议; 结果写入会话历史, 追问可无缝衔接。
     """
-    from core.agent.context_store import get_session_stocks, update_session_from_result
+    from core.agent.session import get_session_stocks, update_session_from_result
     from skills.fin_query.skill import FinQuerySkill, _result_brief
     from tools.finance.sql_guard import validate_sql, force_limit
 
     yield sse("stage", {"stage": "intent", "message": "意图识别: query (快车道)"})
-    history_store.append_user(session_id, text)
+    session.append_user(session_id, text)
     skill = FinQuerySkill()
     context_stocks = get_session_stocks(session_id)
 
@@ -336,7 +336,7 @@ async def _fast_query_stream(text: str, session_id: Optional[str],
                   + "\n\n(数据已图示。要趋势解读、原因分析或对比, 继续追问即可)")
     yield sse("delta", {"text": answer})
 
-    history_store.append_assistant(
+    session.append_assistant(
         session_id, answer,
         [{"name": "query_financials", "args": {"直连": text[:40]},
           "ok": True, "elapsed_ms": int(elapsed * 1000), "rows": len(df)}])
@@ -508,17 +508,17 @@ async def run_agent_stream(text: str, session_id: Optional[str],
             yield chunk
         return
 
-    from core.llm.client import get_agent_llm
-    from mcp.bridge import openai_tools
+    from core.llm import get_agent_llm
+    from core.mcp.bridge import openai_tools
     from core.agent.subagent import DOMAIN_DEFS, domain_manifest, route_domain
 
     llm = get_agent_llm()
     full_tools = openai_tools(include_write=False)   # 沙盒: 只读 17 个
     messages: List[Dict[str, Any]] = [{"role": "system",
                                        "content": build_system_prompt()}]
-    messages.extend(history_store.get_messages(session_id))
+    messages.extend(session.get_messages(session_id))
     messages.append({"role": "user", "content": text})
-    history_store.append_user(session_id, text)
+    session.append_user(session_id, text)
 
     holder: Dict[str, Any] = {}
     domain = route_domain(text) if use_subagent else None
@@ -553,7 +553,7 @@ async def run_agent_stream(text: str, session_id: Optional[str],
             final_text = ("抱歉, 本轮未能生成有效回答 (模型输出为空)。"
                           "请换一种问法或稍后重试。")
 
-        history_store.append_assistant(session_id, final_text, tool_events)
+        session.append_assistant(session_id, final_text, tool_events)
 
         # 最终回答分块推送 (打字机效果; 决策轮为非流式, 此处按块下发)
         for i in range(0, len(final_text), 80):
@@ -562,7 +562,7 @@ async def run_agent_stream(text: str, session_id: Optional[str],
 
     except Exception as e:  # noqa: BLE001 顶层兜底, 保证 error 事件一定下发
         logger.error(f"Agent 循环异常: {e}", exc_info=True)
-        history_store.append_assistant(
+        session.append_assistant(
             session_id, f"[异常] {e}", holder.get("tool_events") or [])
         yield sse_tee("error", {"message": f"Agent 执行失败: {e}"})
 

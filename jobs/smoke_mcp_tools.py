@@ -3,8 +3,8 @@
 MCP 工具全量冒烟测试
 
 用法:
-    .venv\\Scripts\\python.exe scripts/smoke_mcp_tools.py            # 快速档 (默认)
-    .venv\\Scripts\\python.exe scripts/smoke_mcp_tools.py --heavy   # 含全市场扫描/forge
+    .venv\\Scripts\\python.exe jobs/smoke_mcp_tools.py            # 快速档 (默认)
+    .venv\\Scripts\\python.exe jobs/smoke_mcp_tools.py --heavy   # 含全市场扫描/forge
 
 每个工具给一组代表性参数, 校验: 注册存在 / 调用不抛 / 信封结构 ok / data 非空。
 """
@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import time  # noqa: E402
 
-from mcp.tools import REGISTRY  # noqa: E402
+from core.mcp.tools import REGISTRY  # noqa: E402
 
 # (工具名, 参数) -- 快速档: 秒级~十秒级
 FAST_CASES = [

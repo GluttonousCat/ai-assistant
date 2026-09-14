@@ -72,7 +72,7 @@ class ScannedReportSkill(BaseSkill):
                 return context
 
             # ①② 视觉 OCR (专业版式 prompt; 视觉客户端由本层注入, tools/pdf 不感知 LLM)
-            from core.llm.client import get_vision_llm
+            from core.llm import get_vision_llm
             from skills.scanned_report.prompts import SCANNED_OCR_PROMPT
             context.log(f"#{report_id} 开始视觉识别 (最多 {self.MAX_OCR_PAGES} 页)…")
             text = ocr_pdf(path, max_pages=self.MAX_OCR_PAGES,
@@ -115,7 +115,7 @@ class ScannedReportSkill(BaseSkill):
             return context
 
         # 综合解读 (agent 模型)
-        from core.llm.client import get_agent_llm
+        from core.llm import get_agent_llm
         from skills.scanned_report.prompts import SCANNED_ANALYSIS_PROMPT
         with PgClient() as pg:
             row = pg.fetch_one(
