@@ -254,14 +254,14 @@ async def finance_query_stream(request: Dict[str, Any]):
                 # 已生成的完整解读直接一次性发出 (analyze 内部聚合多篇, 不做逐 token 流)
                 yield _sse("delta", {"text": result.get("summary", "")})
         elif intent == "chain":
-            # 产业链Beta链路 (编排下沉在 beta_alpha.streaming, 此处薄包装)
-            from skills.beta_alpha.streaming import stream_chain
+            # 产业链Beta链路 (编排下沉在 services.streaming, 此处薄包装)
+            from services.streaming import stream_chain
             async for chunk in stream_chain(text, _sse):
                 yield chunk
 
         elif intent == "alpha":
             # 个股预期差链路 (同上)
-            from skills.beta_alpha.streaming import stream_alpha
+            from services.streaming import stream_alpha
             async for chunk in stream_alpha(text, _sse):
                 yield chunk
 
