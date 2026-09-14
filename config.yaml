@@ -37,14 +37,6 @@ llm:
   temperature: 0.7
   timeout: 60
 
-# 知识星球爬虫默认参数
-zsxq:
-  crawl_interval_min: 2.0     # 爬取最小间隔(秒)
-  crawl_interval_max: 5.0     # 爬取最大间隔(秒)
-  long_delay_interval: 15     # 每N页触发一次长休眠
-  download_min_delay: 60      # 文件下载最小间隔(秒)
-  download_max_delay: 120     # 文件下载最大间隔(秒)
-
 # Tushare 数据抓取参数
 tushare:
   rate_limit_sleep: 0.5       # 每次抓取间隔(秒)
@@ -56,13 +48,109 @@ schedule:
   sync_minute: 0
   enabled: true               # false 则关闭调度器
 
-# 知识星球研报抓取调度 (每天两轮: 爬话题+文件 -> 同步PG -> LLM提取)
+# 知识星球反检测间隔参数 (FileDownloader / ZSXQCrawler 启动时读取, 修改后重启服务生效)
+zsxq:
+  crawl_interval_min: 1.5        # 话题爬取最小间隔(秒)
+  crawl_interval_max: 2.5        # 话题爬取最大间隔(秒)
+  download_min_delay: 60         # 文件下载最小间隔(秒)
+  download_max_delay: 120        # 文件下载最大间隔(秒)
+  download_long_sleep_min: 60    # 每个文件下载后的长休眠最小(秒) — 逐篇流水的节奏来源
+  download_long_sleep_max: 120   # 每个文件下载后的长休眠最大(秒)
+
+# 知识星球研报抓取调度 (每天两轮: 爬话题+文件 -> 同步PG -> LLM提取; hour 取值 0-23, 0=午夜)
 zsxq_schedule:
   enabled: true
-  run_hours: [7, 23]          # 07:00 覆盖前一天晚间内容(开机自启后自动补跑), 23:00 覆盖当天
+  run_hours: [0, 12]
 
 # 日志
 logging:
   level: INFO
   dir: logs
   backup_count: 30
+
+# Agent 对话循环 (core/agent) — DSH "组合进配置" 范式: 改这些不再动代码 (重启生效)
+agent:
+  sandbox:                      # 沙盒参数 (loop.py 默认值与此一致)
+    max_rounds: 8               # LLM 决策轮数上限
+    max_result_chars: 4000      # 工具结果注入 LLM 的字符上限
+    repeat_limit: 3             # 相同 (工具,参数) 最多调用次数
+    max_same_tool_calls: 4      # 同名工具 (任意参数) 最多调用次数
+    default_tool_timeout: 120   # 工具超时默认 (秒)
+    tool_timeouts:              # 个别工具超时覆盖 (秒)
+      run_quant_scan: 900       # 全市场扫描分钟级
+      extract_document: 600     # 扫描件 OCR
+      read_report: 180          # 带 question 时内部走 LLM
+      analyze_chain: 300
+  trajectory:                   # 每轮对话全量事件落 logs/trajectories/*.jsonl (可 replay/归因)
+    enabled: true
+    retention_days: 30          # 0=不清理
+  domains:                      # 域子Agent 定义 (subagent.py 内置同款兜底)
+    financial:
+      label: 财务数据
+      tools: [query_financials, query_main_business, valuation_percentile]
+      keywords: [营收, 营业收入, 净利润, 毛利率, 净利率, roe, 净资产收益率, 市盈率,
+                 市净率, 股价, 收盘价, 市值, 换手率, 资产负债率, 流动比率, 速动比率,
+                 每股收益, 营业利润, 经营现金流, 总资产, 商誉, eps, 成交额,
+                 靠什么赚钱, 收入结构, 主营构成, 估值贵不贵, 估值分位, 估值水位, 估值]
+      prompt: |-
+        你是财务数据子Agent, 只配备 3 个数据工具。
+        时间表述 (最近三年/2024年报) 与指标别名交给工具处理;
+        查当期数值/时序/对比/行业排名用 query_financials,
+        收入结构用 query_main_business, 历史估值水位用 valuation_percentile。
+        需要研报观点/盈利预测/产业链/量化/排雷等域外能力时,
+        调用 escalate_to_full_agent 说明。
+    report:
+      label: 研报观点
+      tools: [search_reports, read_report, get_forecasts, extract_document]
+      keywords: [研报, 解读, 评级, 目标价, 盈利预测, 观点, 黄金, 原油, 大宗商品,
+                 贵金属, 分析师, 券商, 上调, 下调, 分歧]
+      prompt: |-
+        你是研报观点子Agent。先 search_reports 检索清单 (关键词或标的),
+        需要某篇细节/单篇问答用 read_report;
+        未来期间盈利预测与分歧度用 get_forecasts (历史兑现校验是域外工具, 需要就升级)。
+        综合多篇观点时标注机构与日期; 平台无覆盖时如实说明, 不臆造观点。
+        用户给的本地文件才用 extract_document。
+        需要财务数值/产业链/量化等域外能力时调用 escalate_to_full_agent。
+    chain:
+      label: 产业链与预期差
+      tools: [list_chains, analyze_chain, analyze_alpha]
+      keywords: [产业链, 链条, 环节, 上游, 下游, 受益环节, 板块挖掘, 受益标的,
+                 预期差, 分歧度, 拐点]
+      prompt: |-
+        你是产业链与预期差子Agent。链名拿不准先 list_chains;
+        环节→标的映射与环节指数用 analyze_chain — **整链问题只调一次**
+        (不带 node 参数即返回全部环节, 严禁按环节逐个调用);
+        只有聚焦单环节细节时才带 node 参数补查。
+        个股四象限综合 (预测分歧x财务动量x估值分位x研报观点) 用 analyze_alpha。
+        只要单一维度 (仅估值分位/仅盈利预测) 属域外工具, 需要就升级。
+        需要行情/研报细节/排雷等域外能力时调用 escalate_to_full_agent。
+    quant:
+      label: 量化形态
+      tools: [compute_indicators, run_quant_scan]
+      keywords: [形态, 区间状态, 震荡区间, 趋势状态, adx, poc, wyckoff, 弹簧,
+                 技术指标, 全市场扫描, 蓄势盾]
+      prompt: |-
+        你是量化形态子Agent。单标的当前形态/区间状态用 run_quant_scan 的 regime
+        (秒级); 要 ADX/POC/Wyckoff 指标数值用 compute_indicators;
+        全市场扫描 (range/trend/setup) 分钟级, 用户明确要才用。
+        需要财务/研报/产业链等域外能力时调用 escalate_to_full_agent。
+    risk:
+      label: 风控校验
+      tools: [detect_financial_risk, verify_forecasts]
+      keywords: [财务风险, 异常检测, 排雷, 财务造假, 风险排查, 财务健康, 预测兑现,
+                 预测准不准, 兑现率, 研报可信, 兑现]
+      prompt: |-
+        你是风控校验子Agent。财务排雷用 detect_financial_risk
+        (规则信号仅供筛查, 非审计结论, 回答时带此免责说明);
+        券商历史预测与实际值对照用 verify_forecasts
+        (只校验人民币口径+已出年报期间)。
+        需要财务明细/研报/估值等域外能力时调用 escalate_to_full_agent。
+    entity:
+      label: 实体与日历
+      tools: [resolve_stock, get_schema, trading_calendar]
+      keywords: [是什么公司, 哪个公司, 属于哪个行业, 什么行业, 行业归属, 股票代码,
+                 交易日, 交易日历, 上一交易日, 有什么数据, 数据字典]
+      prompt: |-
+        你是实体与数据知识子Agent, 处理公司身份/行业归属/交易日历/
+        平台数据范围类问题。直接用本域工具作答, 简洁准确。
+        涉及行情/财务/研报等分析类问题时调用 escalate_to_full_agent 转交。
