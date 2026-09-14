@@ -28,7 +28,7 @@ from typing import Any, AsyncIterator, Callable, Dict, List, Optional
 
 from core.logger import get_logger
 from core.config import get_config
-from core.agent import session, trajectory
+from harness import session, trajectory
 
 logger = get_logger(__name__)
 
@@ -123,7 +123,7 @@ def _fmt_tool_args(args: Dict[str, Any]) -> str:
 
 async def _run_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     """沙盒执行"""
-    from core.mcp import get_registry
+    from harness.mcp import get_registry
     registry = get_registry()
     timeout = TOOL_TIMEOUTS.get(name, DEFAULT_TOOL_TIMEOUT)
     try:
@@ -168,7 +168,7 @@ def _fast_path_intent(text: str) -> Optional[str]:
     try:
         if any(w in text for w in _DEEP_WORDS):
             return None
-        from core.agent.intent import get_intent_classifier
+        from harness.intent import get_intent_classifier
         clf = get_intent_classifier()
         r = clf._rule_classify(text)          # L1 only, 毫秒级
         if r.intent not in ("query", "compare") or r.confidence < FAST_PATH_CONFIDENCE:
@@ -220,8 +220,8 @@ def _llm_nl2sql(text: str, context_stocks=None) -> Optional[str]:
     时序跨度失真 — LLM 生成对时间/指标/复合条件更稳, 规则引擎仅作兜底。
     """
     import re
-    from core.llm import get_nl2sql_llm
-    from core.mcp.tools._common import resolve_stocks
+    from harness.llm import get_nl2sql_llm
+    from harness.mcp.tools._common import resolve_stocks
     from tools.finance.sql_guard import validate_sql
 
     # 实体解析在规则层完成 (毫秒级), LLM 只负责拼 SQL — 实体零幻觉
@@ -282,7 +282,7 @@ async def _fast_query_stream(text: str, session_id: Optional[str],
     简报仍为零 LLM 规则摘要, 深度解读由追问触发 Agent 循环。
     与 Agent 循环同事件协议; 结果写入会话历史, 追问可无缝衔接。
     """
-    from core.agent.session import get_session_stocks, update_session_from_result
+    from harness.session import get_session_stocks, update_session_from_result
     from skills.fin_query.skill import FinQuerySkill, _result_brief
     from tools.finance.sql_guard import validate_sql, force_limit
 
@@ -356,7 +356,7 @@ async def _decision_loop(llm, tools, messages: List[Dict[str, Any]],
     沙盒: 只执行本次 manifest 里列出的工具 (模型偶尔会幻觉调用清单外
     但全局注册表里存在的工具名 — 曾实测发生, 必须在执行层拦截并引导走 escalate)。
     """
-    from core.agent.subagent import ESCALATE_TOOL
+    from harness.subagent import ESCALATE_TOOL
     allowed = {t["function"]["name"] for t in tools}
     call_counts: Dict[str, int] = {}          # (工具, 参数) 精确防重复
     name_counts: Dict[str, int] = {}          # 同名工具次数 (防按环节逐个刷)
@@ -508,9 +508,9 @@ async def run_agent_stream(text: str, session_id: Optional[str],
             yield chunk
         return
 
-    from core.llm import get_agent_llm
-    from core.mcp.bridge import openai_tools
-    from core.agent.subagent import DOMAIN_DEFS, domain_manifest, route_domain
+    from harness.llm import get_agent_llm
+    from harness.mcp.bridge import openai_tools
+    from harness.subagent import DOMAIN_DEFS, domain_manifest, route_domain
 
     llm = get_agent_llm()
     full_tools = openai_tools(include_write=False)   # 沙盒: 只读 17 个

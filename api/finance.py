@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
-from core.agent.intent import get_intent_classifier
+from harness.intent import get_intent_classifier
 from skills.base import SkillContext
 from skills.fin_query.skill import FinQuerySkill
 from skills.report.skill import ReportSkill
@@ -177,7 +177,7 @@ async def finance_query_stream(request: Dict[str, Any]):
         if intent in ("query", "compare"):
             # 2. Text-to-SQL 链路 (SQL 生成/校验/执行不可流式; 解读流式)
             #    会话上下文: 追问省略主语时沿用上轮股票
-            from core.agent.session import (get_session_stocks,
+            from harness.session import (get_session_stocks,
                                     update_session_from_result)
             skill = FinQuerySkill()
             ctx = SkillContext(user_input=text)
@@ -306,7 +306,7 @@ async def agent_stream_endpoint(request: Dict[str, Any]):
     session_id = request.get("session_id")
 
     async def gen():
-        from core.agent.loop import run_agent_stream
+        from harness.loop import run_agent_stream
         # 底层模块 (扫描器) 可能 print; SSE 下 stdout 必须只有事件流
         import contextlib
         import sys

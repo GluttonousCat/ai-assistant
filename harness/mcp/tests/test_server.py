@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 
-from core.mcp import server
+from harness.mcp import server
 
 
 def _resp(s) -> dict:

@@ -11,7 +11,7 @@ ScannedReportSkill - 扫描件研报分析 Agent
 
 【解耦设计】
     - 视觉能力在 tools/pdf (通用 PDF 工具层); 视觉模型客户端由本 skill 注入
-      (ocr_pdf/ocr_page_png 的 vision_llm 参数), tools 层不感知 core.llm
+      (ocr_pdf/ocr_page_png 的 vision_llm 参数), tools 层不感知 harness.llm
     - 本 skill 只做编排; 深度提取委托 ReportSkill (组合)
     - 专业知识全部在 prompts.py — 调优 prompt 不动代码
     - 常规链路 (ReportSkill) 发现无正文图片 PDF 时也调用同一工具自动回填
@@ -72,7 +72,7 @@ class ScannedReportSkill(BaseSkill):
                 return context
 
             # ①② 视觉 OCR (专业版式 prompt; 视觉客户端由本层注入, tools/pdf 不感知 LLM)
-            from core.llm import get_vision_llm
+            from harness.llm import get_vision_llm
             from skills.scanned_report.prompts import SCANNED_OCR_PROMPT
             context.log(f"#{report_id} 开始视觉识别 (最多 {self.MAX_OCR_PAGES} 页)…")
             text = ocr_pdf(path, max_pages=self.MAX_OCR_PAGES,
@@ -115,7 +115,7 @@ class ScannedReportSkill(BaseSkill):
             return context
 
         # 综合解读 (agent 模型)
-        from core.llm import get_agent_llm
+        from harness.llm import get_agent_llm
         from skills.scanned_report.prompts import SCANNED_ANALYSIS_PROMPT
         with PgClient() as pg:
             row = pg.fetch_one(

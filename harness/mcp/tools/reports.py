@@ -13,9 +13,9 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
 
-from core.mcp.registry import REGISTRY
-from core.mcp.spec import ToolError, obj_schema, param
-from core.mcp.tools._common import _jsonable, resolve_one
+from harness.mcp.registry import REGISTRY
+from harness.mcp.spec import ToolError, obj_schema, param
+from harness.mcp.tools._common import _jsonable, resolve_one
 
 
 def _brief(row) -> Dict[str, Any]:
@@ -232,7 +232,7 @@ def fetch_annual_report(stock: str, year: int, category: str = "ndbg") -> Dict[s
     with PgClient() as pg:
         ts_code = None
         try:
-            from core.mcp.tools._common import resolve_one
+            from harness.mcp.tools._common import resolve_one
             ts_code = resolve_one(stock)["ts_code"]
         except ToolError:
             pass
@@ -291,7 +291,7 @@ def extract_document(file_path: str, ocr_if_image: bool = True,
     if (not text or len(text.strip()) < 200) and ocr_if_image:
         from tools.pdf import is_image_pdf, ocr_pdf
         from skills.report.prompts import VISION_OCR_PROMPT
-        from core.llm import get_vision_llm
+        from harness.llm import get_vision_llm
         if path.lower().endswith(".pdf") and is_image_pdf(path):
             text = ocr_pdf(path, prompt=VISION_OCR_PROMPT,
                            vision_llm=get_vision_llm()) or ""

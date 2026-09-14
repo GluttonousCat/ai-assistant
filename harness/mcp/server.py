@@ -12,7 +12,7 @@ from typing import Any, Dict, Optional
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_INFO = {"name": "alpha-finance-radar-mcp", "version": "1.0.0"}
 
-from core.mcp.tools import REGISTRY
+from harness.mcp.tools import REGISTRY
 
 # 沙盒: 默认只读模式 (仅暴露 read_only=True 工具, 写类如 forge_chain 不可见也不可调)
 # 对外开放时保持默认; 需要放开生成类工具时设 ALPHA_MCP_READ_ONLY=0

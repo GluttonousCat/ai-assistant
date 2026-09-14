@@ -12,7 +12,7 @@
 用户输入 ──> AgentChat.jsx (send)
               │  fetch POST /api/v1/agent/stream (ReadableStream 逐块解析, session_id 全程携带)
               ▼
-          api/finance.py agent_stream_endpoint → core/agent/loop.py run_agent_stream
+          api/finance.py agent_stream_endpoint → harness/loop.py run_agent_stream
               │
               ├─ ① 快车道: 高置信简单 query/compare → LLM 直生成 SQL(规则兜底) → 图表+简报
               ├─ ② 域子Agent: L1 规则路由六域(财务/研报/产业链/量化/风控/实体), 域内 2~4 工具
@@ -42,8 +42,8 @@
 | `web/src/ResultChart.jsx` | 结果可视化：`buildChartSpec` 形态识别 + 折线图(lightweight-charts)/柱状图(SVG)；共享展示工具（COL_LABELS/parseNum/compactNum/fmtDateCol） |
 | `web/src/platformApi.js agentStream()` | SSE 客户端：fetch + ReadableStream 手动解析 `event:`/`data:` 行 |
 | `api/finance.py /agent/stream` | SSE 服务端（决策轮非流式；最终回答按块下发） |
-| `core/agent/loop.py` | Agent 主循环：快车道 → 域子Agent → 全工具循环 + 沙盒（详见 docs/agents/agent_loop.md） |
-| `core/agent/intent.py` | 分层意图识别（核心词规则 + LLM 兜底；快车道/子Agent 路由复用其 L1） |
+| `harness/loop.py` | Agent 主循环：快车道 → 域子Agent → 全工具循环 + 沙盒（详见 docs/agents/agent_loop.md） |
+| `harness/intent.py` | 分层意图识别（核心词规则 + LLM 兜底；快车道/子Agent 路由复用其 L1） |
 
 ### 1.4 轻量 Markdown 渲染
 

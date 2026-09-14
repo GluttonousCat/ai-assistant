@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List
 
-from core.mcp.tools import REGISTRY
+from harness.mcp.tools import REGISTRY
 
 
 def openai_tools(include_write: bool = False) -> List[Dict[str, Any]]:

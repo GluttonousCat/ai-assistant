@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import time  # noqa: E402
 
-from core.mcp.tools import REGISTRY  # noqa: E402
+from harness.mcp.tools import REGISTRY  # noqa: E402
 
 # (工具名, 参数) -- 快速档: 秒级~十秒级
 FAST_CASES = [

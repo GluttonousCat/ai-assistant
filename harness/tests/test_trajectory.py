@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from core.agent import trajectory
+from harness import trajectory
 
 
 def test_open_turn_writes_events(tmp_path, monkeypatch):

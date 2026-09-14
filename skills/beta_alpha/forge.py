@@ -188,7 +188,7 @@ def forge_chain(theme: str, llm=None,
     主题 -> 种子链 (草稿 -> 结构校验 -> 命中率 -> 弱则修正一轮)。
     返回 {chain, report, rounds, errors}; chain 可能为 None (生成失败)。
     """
-    from core.llm import get_agent_llm
+    from harness.llm import get_agent_llm
     llm = llm or get_agent_llm()
 
     def _stage(msg):

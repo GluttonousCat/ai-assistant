@@ -5,7 +5,7 @@ Agent 会话 (Session) — 同一会话的完整上下文, 进程内存
 会话 = 两类上下文, 生命周期一致 (TTL 30 分钟惰性清理, 重启即失):
 - 对话历史 (history): user/assistant 轮 + 工具调用摘要, 注入 LLM 用
   (轮数/字符双限截断; 原始工具 JSON 不存——省 token, 全量轨迹在
-  core/agent/trajectory.py 落盘)
+  harness/trajectory.py 落盘)
 - 股票槽位 (slots): 最近 3 只股票, 支持"它呢/环比呢"省略主语的追问
   (快车道与 Text-to-SQL 均消费)
 

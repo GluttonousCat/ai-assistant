@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import pytest
 
-from core.mcp import get_registry
-from core.mcp.spec import ToolError
+from harness.mcp import get_registry
+from harness.mcp.spec import ToolError
 
 REGISTRY = get_registry()
 

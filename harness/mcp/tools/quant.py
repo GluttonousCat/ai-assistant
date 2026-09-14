@@ -10,9 +10,9 @@ from typing import Any, Dict, List
 
 import pandas as pd
 
-from core.mcp.registry import REGISTRY
-from core.mcp.spec import ToolError, obj_schema, param
-from core.mcp.tools._common import _jsonable, df_payload, load_daily_bars, resolve_one
+from harness.mcp.registry import REGISTRY
+from harness.mcp.spec import ToolError, obj_schema, param
+from harness.mcp.tools._common import _jsonable, df_payload, load_daily_bars, resolve_one
 
 
 # ============================================================

@@ -9,9 +9,9 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from core.mcp.registry import REGISTRY
-from core.mcp.spec import ToolError, obj_schema, param
-from core.mcp.tools._common import resolve_stocks, stock_profile
+from harness.mcp.registry import REGISTRY
+from harness.mcp.spec import ToolError, obj_schema, param
+from harness.mcp.tools._common import resolve_stocks, stock_profile
 
 
 # ============================================================

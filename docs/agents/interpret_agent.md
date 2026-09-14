@@ -30,7 +30,7 @@
 ```
 
 **为什么是编排型而非自由工具循环**：内容生产要求稳定可复现（同一股票重跑结构
-一致、数字单源），自由循环引入不确定性且难以断言评测。对话 Agent（core/agent/loop.py）
+一致、数字单源），自由循环引入不确定性且难以断言评测。对话 Agent（harness/loop.py）
 负责"问"，解读 Agent 负责"产"——两者通过 MCP 工具衔接。
 
 ### 1.3 三入口
@@ -57,6 +57,22 @@ fin.cninfo_announcement (category=ndbg, download_status=done, 文件在盘)
 - 版权边界：年报是公司公开披露文件，摘录转述无版权问题（区别于券商研报），
   但 prompt 仍要求"提炼转述，不整段搬运"
 - 图片型 PDF（无文本层）：fitz 提取为空 → 降级跳过（OCR 走 tools/pdf 的 ocr_pdf 属后续可选）
+
+### 1.5 年报核心画像入库（2026-09-11 增补，现场提炼→数据资产）
+
+```
+fin.cninfo_announcement (年报→半年报候选链, 有文本层优先)
+  → tools/pdf.to_markdown (pymupdf4llm: 标题层级+表格→MD表格, 全文落盘 output/cninfo/md/)
+  → 章节切片 (经营讨论12k/风险6k/利润分配4k, 语料≤20k)
+  → extract LLM 一次性 JSON 结构化提取 (数字照抄原文口径)
+  → fin.annual_profile (PK: ts_code+report_year; profile JSONB 八字段组
+    + digest 要点 + md_path + announcement_id/model 溯源)
+```
+
+- 消费端：interpret 语料块**先查库**（有则零 LLM 直用，无则现场提取并顺手入库）；
+  对话 Agent 走 MCP `read_annual_profile`（零 LLM 秒回）
+- 幂等 upsert，`--force` 重提；批量 `--index 000016.SH` 后台跑
+- 字段边界（用户决策）：全维画像八组；员工/集中度等切片未覆盖时如实 null 不编造
 
 ## 二、需求优化
 

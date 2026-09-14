@@ -128,7 +128,7 @@ def write_stock_article(stock: str, years: int = 5,
 
     年报语料 (cninfo PDF 提炼) 全程降级: 无 PDF/无文本层/提炼失败均不阻塞成文。
     """
-    from core.llm import get_agent_llm
+    from harness.llm import get_agent_llm
     profile = build_company_profile(stock, years)
     digest = profile_digest(profile)
     if not profile.get("ok_sections"):
@@ -162,8 +162,8 @@ def write_stock_article(stock: str, years: int = 5,
 def write_topic_article(topic: str, days: int = 90, limit: int = 8) -> Dict[str, Any]:
     """研报主题综述: 检索 -> 取观点 -> 成文。合规: 观点转述+标注机构, 不搬运原文"""
     import json
-    from core.llm import get_agent_llm
-    from core.mcp import get_registry
+    from harness.llm import get_agent_llm
+    from harness.mcp import get_registry
     registry = get_registry()
 
     env = registry.call("search_reports", {"keyword": topic, "days": days,

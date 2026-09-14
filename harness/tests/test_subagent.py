@@ -2,7 +2,7 @@
 """sub-agent 分域路由单元测试 (不调 LLM/不连 DB)"""
 from __future__ import annotations
 
-from core.agent.subagent import (DOMAIN_DEFS, ESCALATE_TOOL, domain_manifest,
+from harness.subagent import (DOMAIN_DEFS, ESCALATE_TOOL, domain_manifest,
                             escalate_tool_manifest, route_domain)
 
 
@@ -42,7 +42,7 @@ def test_route_never_locks_capability():
 # ---------- 域定义完整性 ----------
 
 def test_domain_defs_well_formed():
-    from core.mcp import get_registry
+    from harness.mcp import get_registry
     registry = get_registry()
     registered = {s.name for s in registry.specs()}
     for key, d in DOMAIN_DEFS.items():
@@ -56,7 +56,7 @@ def test_domain_defs_well_formed():
 
 def test_domains_cover_most_tools():
     """6 域工具并集应覆盖 17 个只读工具的绝大多数 (未覆盖的应是合理的)"""
-    from core.mcp import get_registry
+    from harness.mcp import get_registry
     covered = {t for d in DOMAIN_DEFS.values() for t in d["tools"]}
     uncovered = ({s.name for s in get_registry().specs()
                   if s.read_only} - covered)
@@ -71,7 +71,7 @@ def test_domain_manifest_includes_escalate():
     names = [t["function"]["name"] for t in tools]
     assert names == DOMAIN_DEFS["report"]["tools"] + [ESCALATE_TOOL]
     # escalate 不进全局注册表 (它只是循环内的伪工具)
-    from core.mcp import get_registry
+    from harness.mcp import get_registry
     assert get_registry().get(ESCALATE_TOOL) is None
 
 

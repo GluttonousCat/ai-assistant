@@ -9,21 +9,21 @@ mcp/ — MCP 工具层: 平台 22 个投研能力的标准化工具化 (19 只�
 - bridge.py   OpenAI function-calling 桥 (内部 Agent Loop / deepseek 用)
 
 用法:
-    from core.mcp.tools import REGISTRY
+    from harness.mcp.tools import REGISTRY
     REGISTRY.call("query_financials", {"mode": "single",
                                        "stocks": ["贵州茅台"], "metrics": ["营收"]})
 """
-from core.mcp.registry import REGISTRY
-from core.mcp.spec import ToolError, ToolSpec
+from harness.mcp.registry import REGISTRY
+from harness.mcp.spec import ToolError, ToolSpec
 
 
 def get_registry():
     """拿到已注册全部工具的注册表 (幂等)。
 
-    注意: 工具注册发生在 import core.mcp.tools 时。
-    单独 from core.mcp.registry import REGISTRY 拿到的是空表 (仅定义处使用)。
+    注意: 工具注册发生在 import harness.mcp.tools 时。
+    单独 from harness.mcp.registry import REGISTRY 拿到的是空表 (仅定义处使用)。
     """
-    import core.mcp.tools  # noqa: F401 导入即注册
+    import harness.mcp.tools  # noqa: F401 导入即注册
     return REGISTRY
 
 

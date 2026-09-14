@@ -140,7 +140,7 @@ class ReportSkill(BaseSkill):
     def _llm():
         if not get_config().openai_api_key:
             return None
-        from core.llm import get_agent_llm
+        from harness.llm import get_agent_llm
         return get_agent_llm()
 
     @staticmethod
@@ -148,7 +148,7 @@ class ReportSkill(BaseSkill):
         """结构化提取用 extract 模型"""
         if not get_config().openai_api_key:
             return None
-        from core.llm import get_extract_llm
+        from harness.llm import get_extract_llm
         return get_extract_llm()
 
     @staticmethod
@@ -176,7 +176,7 @@ class ReportSkill(BaseSkill):
 
         def _job():
             from tools.pdf import ocr_pdf
-            from core.llm import get_vision_llm
+            from harness.llm import get_vision_llm
             from skills.report.prompts import VISION_OCR_PROMPT
             try:
                 with _OCR_SEMAPHORE:  # 并发限流: 同时最多 4 册 OCR

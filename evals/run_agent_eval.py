@@ -68,7 +68,7 @@ def main() -> int:
     except Exception:
         pass
 
-    from core.agent.loop import run_agent
+    from harness.loop import run_agent
 
     filters = [f.strip().lower() for f in args.only.split(",") if f.strip()]
     cases = [c for c in AGENT_CASES
@@ -79,7 +79,7 @@ def main() -> int:
 
     # None=跟随 config (评测线上真实路径); False=强制关快车道
     fast_lane = None if not args.no_fast_lane else False
-    from core.agent.loop import FAST_LANE_ENABLED
+    from harness.loop import FAST_LANE_ENABLED
     print(f"== Agent eval: {len(cases)} cases, "
           f"fast_lane={'off(forced)' if args.no_fast_lane else f'config(={FAST_LANE_ENABLED})'} ==")
 

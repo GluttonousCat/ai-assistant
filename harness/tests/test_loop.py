@@ -6,8 +6,8 @@ E2E (真实 LLM) 见 docs/agents/agent_loop.md 验证记录。
 """
 from __future__ import annotations
 
-from core.agent import session as history_store
-from core.agent.loop import (DEFAULT_TOOL_TIMEOUT, MAX_ROUNDS, REPEAT_LIMIT,
+from harness import session as history_store
+from harness.loop import (DEFAULT_TOOL_TIMEOUT, MAX_ROUNDS, REPEAT_LIMIT,
                         TOOL_TIMEOUTS, _extract_table, build_system_prompt)
 
 
@@ -15,7 +15,7 @@ from core.agent.loop import (DEFAULT_TOOL_TIMEOUT, MAX_ROUNDS, REPEAT_LIMIT,
 
 def test_extract_sql_tolerant_shapes():
     """LLM 输出的 SQL 提取: 围栏/裸语句/带解释/垃圾输入"""
-    from core.agent.loop import _extract_sql
+    from harness.loop import _extract_sql
     assert _extract_sql("SELECT 1") == "SELECT 1"
     assert _extract_sql("```sql\nSELECT 2\n```") == "SELECT 2"
     assert _extract_sql("```\nWITH t AS (SELECT 1) SELECT * FROM t\n```") \
@@ -28,7 +28,7 @@ def test_extract_sql_tolerant_shapes():
 
 
 def test_alias_digest_non_empty():
-    from core.agent.loop import _alias_digest
+    from harness.loop import _alias_digest
     d = _alias_digest()
     assert "营收" in d and "净利润" in d
 
@@ -36,7 +36,7 @@ def test_alias_digest_non_empty():
 def test_nl2sql_config_registered():
     """nl2sql 用途必须在 config 注册且关思考 (时延关键: 思考版实测 4~27s)"""
     from core.config import get_config
-    from core.llm import get_nl2sql_llm
+    from harness.llm import get_nl2sql_llm
     cfg = get_config()
     assert cfg.llm_model_for("nl2sql"), "config.yaml llm.models.nl2sql 未配置"
     assert cfg.get("llm.models.nl2sql.enable_thinking") is False
@@ -44,7 +44,7 @@ def test_nl2sql_config_registered():
 
 
 def test_fast_lane_timeout_const():
-    from core.agent.loop import NL2SQL_TIMEOUT
+    from harness.loop import NL2SQL_TIMEOUT
     assert 10 <= NL2SQL_TIMEOUT <= 60
 
 
@@ -135,7 +135,7 @@ def test_sandbox_config():
 
 def test_tool_manifest_read_only():
     """对话循环只能拿到只读工具 (forge_chain 不可见)"""
-    from core.mcp.bridge import openai_tools
+    from harness.mcp.bridge import openai_tools
     tools = openai_tools(include_write=False)
     names = {t["function"]["name"] for t in tools}
     assert "forge_chain" not in names
@@ -156,7 +156,7 @@ def test_extract_table_shapes():
 # ---------- 快车道 NL2SQL ----------
 
 def test_extract_sql_shapes():
-    from core.agent.loop import _extract_sql
+    from harness.loop import _extract_sql
     assert _extract_sql("SELECT 1").strip() == "SELECT 1"
     assert _extract_sql("```sql\nSELECT a FROM t WHERE x=1;\n```"
                          ).strip() == "SELECT a FROM t WHERE x=1"
@@ -170,7 +170,7 @@ def test_extract_sql_shapes():
 def test_fast_lane_llm_fallback_to_rules():
     """LLM 生成失败/返回 None 时回退规则引擎 (需 DB, 无 LLM)"""
     import asyncio
-    from core.agent import loop as loop_mod
+    from harness import loop as loop_mod
 
     orig = loop_mod._llm_nl2sql
     loop_mod._llm_nl2sql = lambda *a, **k: None    # 模拟 LLM 失败
@@ -197,7 +197,7 @@ def test_fast_lane_llm_fallback_to_rules():
 # ---------- 快车道判定 ----------
 
 def test_fast_path_intent_hit_and_miss():
-    from core.agent.loop import _fast_path_intent
+    from harness.loop import _fast_path_intent
     # 简单查询/对比 (核心词高置信 + 有股票实体) -> 快车道
     assert _fast_path_intent("查询贵州茅台的营收") == "query"
     assert _fast_path_intent("茅台和五粮液谁的毛利率高") == "compare"
@@ -223,7 +223,7 @@ def test_execute_batch_parallel_and_ordered():
     """同轮多个工具调用应并行 (总耗时≈max 而非求和) 且结果保序"""
     import asyncio
     import time
-    from core.agent import loop as loop_mod
+    from harness import loop as loop_mod
 
     async def fake_run_tool(name, args):
         await asyncio.sleep(0.3)

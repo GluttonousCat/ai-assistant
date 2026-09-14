@@ -34,7 +34,7 @@ ScannedReportSkill (编排层)
 
 | 层 | 文件 | 职责 | 变更频率 |
 |----|------|------|---------|
-| 视觉工具 | `tools/pdf` | is_image_pdf / ocr_page_png / ocr_pdf，零业务逻辑、不 import core.llm（视觉客户端 `vision_llm` 由调用方注入） | 低（换视觉模型只改 config） |
+| 视觉工具 | `tools/pdf` | is_image_pdf / ocr_page_png / ocr_pdf，零业务逻辑、不 import harness.llm（视觉客户端 `vision_llm` 由调用方注入） | 低（换视觉模型只改 config） |
 | 专业 prompt | `skills/scanned_report/prompts.py` | OCR 版式规则 + 分析视角，**专业知识载体** | 高（持续调优，不动代码） |
 | 编排 skill | `skills/scanned_report/skill.py` | 流程串联，④组合 ReportSkill 而非复制其逻辑 | 低 |
 | 常规链路复用 | `skills/report/skill.py _vision_backfill` | 常规提取发现无正文图片 PDF 时调**同一工具**自动回填 | — |

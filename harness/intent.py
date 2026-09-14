@@ -11,7 +11,7 @@
 - L2: 模型自身输出的 confidence (0-1)
 
 用法:
-    from core.agent.intent import LayeredIntentClassifier
+    from harness.intent import LayeredIntentClassifier
     clf = LayeredIntentClassifier()
     intent, conf, slots = clf.classify("看看贵州茅台近三年的毛利率")
 """
@@ -91,7 +91,7 @@ class LayeredIntentClassifier:
     def llm(self) -> Optional[Any]:
         """懒加载 LLM"""
         if self._llm is None and self._enable_llm:
-            from core.llm import LLMClient
+            from harness.llm import LLMClient
             self._llm = LLMClient()
         return self._llm
 
