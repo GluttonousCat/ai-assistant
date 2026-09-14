@@ -13,7 +13,6 @@ from fastapi.staticfiles import StaticFiles
 from core.lifespan import lifespan
 from api.middleware import AuthMiddleware
 from api import router
-from api.ws import ws_router
 from api.finance import fin_router
 from api.range_api import range_router
 from api.auth_api import auth_router
@@ -37,7 +36,6 @@ app.add_middleware(
 )
 
 app.include_router(router)
-app.include_router(ws_router)
 app.include_router(fin_router)
 app.include_router(range_router)
 app.include_router(auth_router)

@@ -1,8 +1,7 @@
 # -*- encoding: utf-8 -*-
 """
 财务分析 API
-- POST /api/v1/query         自然语言财务查询 (Text-to-SQL, 一次性返回)
-- POST /api/v1/query/stream  同上, SSE 流式返回 (阶段进展 + 结果解读逐块输出)
+- POST /api/v1/query/stream  自然语言财务查询 SSE (意图路由 + Text-to-SQL, 旧链路)
 - POST /api/v1/agent/stream  Agent 对话入口 (LLM 自主决策 + MCP 工具循环, 多轮追问)
 - GET  /api/v1/schema        数据字典
 - GET  /api/v1/chains                    产业链列表 (beta_alpha)
@@ -17,7 +16,6 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
-from core.workflow.fin_graph import invoke_financial_agent
 from core.agent.intent import get_intent_classifier
 from skills.base import SkillContext
 from skills.fin_query.skill import FinQuerySkill
@@ -140,38 +138,6 @@ async def save_chain_endpoint(request: Dict[str, Any]):
     if not ok:
         raise HTTPException(status_code=400, detail="; ".join(errors))
     return {"saved": True, "chain_id": _P(path).stem, "path": path}
-
-
-@fin_router.post("/query")
-async def finance_query(request: Dict[str, Any]):
-    """自然语言查询财务/行情数据 (session_id 提供时支持跨轮追问继承股票)"""
-    text = (request.get("text") or "").strip()
-    if not text:
-        raise HTTPException(status_code=400, detail="text 不能为空")
-    session_id = request.get("session_id")
-
-    try:
-        result = invoke_financial_agent(text, session_id=session_id)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Agent 执行失败: {e}")
-
-    intent = (result.parsed_intent or {}).get("type", "unknown")
-
-    payload: Dict[str, Any] = {
-        "intent": intent,
-        "response": result.response,
-        "log": result.execution_log[-20:],
-    }
-
-    # 查询类附带结构化结果
-    if result.fin_result:
-        payload.update({
-            "data": result.fin_result.get("data", []),
-            "columns": result.fin_result.get("columns", []),
-            "sql": result.fin_result.get("sql"),
-            "rows": result.fin_result.get("rows", 0),
-        })
-    return payload
 
 
 # ============================================================

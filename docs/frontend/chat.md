@@ -1,7 +1,8 @@
 # 问答（Agent Chat）设计文档
 
 > Alpha Finance Radar 平台 · 智能问答子系统
-> 更新：2026-09-02
+> 更新：2026-09-14（对话主链路已切换 Agent 循环；旧意图路由引擎 core/workflow 与
+> `POST /api/v1/query`、WebSocket 爬虫骨架 api/ws.py 已移除）
 
 ## 一、系统设计
 
@@ -9,26 +10,27 @@
 
 ```
 用户输入 ──> AgentChat.jsx (send)
-              │  fetch POST /api/v1/query/stream (ReadableStream 逐块解析)
+              │  fetch POST /api/v1/agent/stream (ReadableStream 逐块解析, session_id 全程携带)
               ▼
-          api/finance.py finance_query_stream (FastAPI StreamingResponse, text/event-stream)
+          api/finance.py agent_stream_endpoint → core/agent/loop.py run_agent_stream
               │
-              ├─ ① 意图识别 (agent/intent.py 分层分类器: 规则L1 → LLM L2)
-              │     query/compare → Text-to-SQL 链路
-              │     report        → 研报解读链路
-              │     其他          → 引导文案
-              ├─ ② query 链: SQL生成(规则引擎优先,LLM兜底) → sql_guard 校验 → 执行
-              │     → 结果解读用 LLM stream 逐块推送
-              └─ ③ report 链: ReportSkill(标的分析/问答) → 完整解读一次性推送
+              ├─ ① 快车道: 高置信简单 query/compare → LLM 直生成 SQL(规则兜底) → 图表+简报
+              ├─ ② 域子Agent: L1 规则路由六域(财务/研报/产业链/量化/风控/实体), 域内 2~4 工具
+              │     + escalate_to_full_agent 升级伪工具
+              └─ ③ 全工具循环: 17 只读工具 LLM 自主决策 (快车道/子Agent 未命中或升级续跑)
 ```
+
+（旧链路 `POST /api/v1/query/stream`——意图路由+固定 Text-to-SQL 管道——仍保留可用，
+但前端已不调用；详见 docs/agents/agent_loop.md）
 
 ### 1.2 SSE 事件协议
 
 | event | data | 说明 |
 |-------|------|------|
-| `stage` | `{stage, message}` | 阶段进展（意图识别/SQL生成/执行中/生成解读…），UI 显示进度气泡 |
-| `data`  | `{intent, data, columns, sql, rows}` | 结构化查询结果（表格一次性下发） |
-| `delta` | `{text}` | 解读文本块（多次，打字机效果） |
+| `stage` | `{stage, message}` | 阶段进展（意图识别/工具调用/升级接管…），UI 显示进度气泡 |
+| `tool_call` | `{tool, args, ok, elapsed_ms, rows}` | 工具结果元信息（Agent 循环新增） |
+| `data`  | `{intent, tool, data, columns, sql, rows}` | 结构化查询结果（表格一次性下发） |
+| `delta` | `{text}` | 最终回答文本块（多次，打字机效果） |
 | `done`  | `{}` | 结束 |
 | `error` | `{message}` | 失败 |
 
@@ -38,10 +40,10 @@
 |------|------|
 | `web/src/AgentChat.jsx` | 对话 UI：消息流、类型徽章、阶段气泡、结果呈现路由（图表/表格）、示例问题 |
 | `web/src/ResultChart.jsx` | 结果可视化：`buildChartSpec` 形态识别 + 折线图(lightweight-charts)/柱状图(SVG)；共享展示工具（COL_LABELS/parseNum/compactNum/fmtDateCol） |
-| `web/src/platformApi.js chatStream()` | SSE 客户端：fetch + ReadableStream 手动解析 `event:`/`data:` 行 |
-| `api/finance.py /query/stream` | SSE 服务端（查询链路仅最后解读可流式；研报链聚合解读一次性发） |
-| `agent/fin_graph.py` | LangGraph 主图：parse_intent → 路由 → execute_query/report → respond |
-| `agent/intent.py` | 分层意图识别（核心词规则 + LLM 兜底） |
+| `web/src/platformApi.js agentStream()` | SSE 客户端：fetch + ReadableStream 手动解析 `event:`/`data:` 行 |
+| `api/finance.py /agent/stream` | SSE 服务端（决策轮非流式；最终回答按块下发） |
+| `core/agent/loop.py` | Agent 主循环：快车道 → 域子Agent → 全工具循环 + 沙盒（详见 docs/agents/agent_loop.md） |
+| `core/agent/intent.py` | 分层意图识别（核心词规则 + LLM 兜底；快车道/子Agent 路由复用其 L1） |
 
 ### 1.4 轻量 Markdown 渲染
 
@@ -139,5 +141,7 @@
 ## 四、后续规划
 
 - 研报链路的 delta 也改为逐 token 流（当前 ReportSkill 内部聚合多篇研报后一次性产出）
-- 对话上下文多轮记忆（当前每次提问独立）
-- WebSocket 通道（`api/ws.py` 已有骨架）与 SSE 并存或合并
+- ~~WebSocket 通道（`api/ws.py` 已有骨架）与 SSE 并存或合并~~（2026-09-14：ws.py 骨架随
+  core/workflow 旧引擎一并移除，流式统一走 SSE）
+- 历史问题表所记均为旧链路（/query/stream 时代）问题，Agent 循环沿用同一 SSE 协议与
+  前端渲染，图表/滚动相关结论继续有效

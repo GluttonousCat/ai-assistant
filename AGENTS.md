@@ -18,11 +18,11 @@
 ## 2. 目录与分层契约（关键 30 秒）
 
 ```
-core/        引擎层 + 基础设施 (主流 ToB Agent 同构, 如 Dify core/agent + core/workflow):
+core/        引擎层 + 基础设施 (主流 ToB Agent 同构, 如 Dify core/agent):
              agent/     loop(自主决策工具循环)/subagent(六域子代理)/intent/history_store/context_store
-             workflow/  fin_graph(意图路由图)/graph+nodes(爬虫图)/state
              llm(模型路由工厂)/config(.env+yaml)/logger(按顶层包分桶)/security(JWT+bcrypt)/
              lifespan/net/helpers·paths
+             (旧 LangGraph 图 core/workflow + api/ws.py 已于 2026-09-14 移除, 引擎统一为 core/agent)
 skills/      领域技能 (每技能一目录, 专业知识放 prompt):
              fin_query(Text-to-SQL) / report(研报) / scanned_report(OCR) /
              beta_alpha(产业链Beta+个股Alpha: chains种子链/analysis/tests) /
@@ -35,7 +35,7 @@ mcp/         MCP工具协议层 (21工具ToolSpec, stdio server; 外部客户端
 tools/       pdf(通用PDF工具: 文本/渲染/OCR/表格) / zsxq爬虫 / market行情同步 /
              cninfo巨潮定期报告 / finance(SQL guard, KB, 研报文件提取器)
 storage/     pg.py(连接池) / sqlite(爬虫) / pg_schema.py(全部DDL,改表先看这)
-api/         路由+鉴权中间件(JWT) / ws / finance(SSE流式) / reports / auth
+api/         路由+鉴权中间件(JWT) / finance(SSE流式) / reports / auth
 web/src/     Login / Platform(侧边栏壳+角色门控) / AgentChat(SSE) / ChainView(产业链页)
              Reports / UserAdmin; Markdownish 共享渲染器
 range_trading/  量化子系统(特征/regime状态机/扫描/回测, 自带tests)
@@ -44,9 +44,9 @@ range_trading/  量化子系统(特征/regime状态机/扫描/回测, 自带test
 **分层契约**：`api → services → core(引擎)+skills(领域) → tools → storage`，
 mcp 是与 core 平行的工具协议出口，只允许上层调下层：
 
-- **api**：HTTP/WS 入口，鉴权（middleware 白名单外全 JWT）、参数校验；重逻辑不写在这
+- **api**：HTTP 入口，鉴权（middleware 白名单外全 JWT）、参数校验；重逻辑不写在这
 - **services**：用例编排（SSE 流式把引擎与技能串成完整链路）
-- **core/agent + core/workflow**：引擎——LLM 决策循环、意图路由；不直接摸 storage
+- **core/agent**：引擎——LLM 决策循环、意图路由；不直接摸 storage
 - **skills**：领域方法论，编排 tools + LLM prompt
 - **tools**：原子能力，无业务状态；新视觉/提取能力进 tools/pdf（PDF 文本/渲染/OCR/表格）
 - **storage**：唯一碰 PG/SQLite 的层；DDL 全部集中在 `pg_schema.py`/各模块 ensure 函数

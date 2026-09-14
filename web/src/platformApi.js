@@ -104,9 +104,6 @@ export const platformApi = {
   setUserRole: (userId, role) =>
     request('POST', `/api/auth/users/${userId}/role`, { role }),
 
-  // Agent 对话 (财务查询 + 研报解读): 一次性返回
-  chat: (text) => request('POST', '/api/v1/query', { text }),
-
   // Agent 对话流式版 (SSE): onEvent({type, ...}) 依次收到
   //   {type:'stage', message} {type:'data', data...} {type:'delta', text} {type:'done'} {type:'error', message}
   chatStream: async (text, onEvent) => {
