@@ -27,24 +27,28 @@ import time
 from typing import Any, AsyncIterator, Callable, Dict, List, Optional
 
 from core.logger import get_logger
-from core.agent import history_store
+from core.config import get_config
+from core.agent import history_store, trajectory
 
 logger = get_logger(__name__)
 
 SseFormatter = Callable[[str, object], str]
 
-# ---------- 沙盒参数 ----------
-MAX_ROUNDS = 8                       # LLM 决策轮数上限
-MAX_RESULT_CHARS = 4000              # 工具结果注入 LLM 的字符上限
-REPEAT_LIMIT = 3                     # 相同 (工具,参数) 最多调用次数
-MAX_SAME_TOOL_CALLS = 4              # 同名工具 (任意参数) 最多调用次数, 防按环节逐个刷
-TOOL_TIMEOUTS: Dict[str, int] = {    # 秒; 未列出的默认 120
+# ---------- 沙盒参数 (默认值; config.yaml agent.sandbox 可覆盖, 重启生效) ----------
+_sb = get_config()
+MAX_ROUNDS = int(_sb.get("agent.sandbox.max_rounds", 8))
+MAX_RESULT_CHARS = int(_sb.get("agent.sandbox.max_result_chars", 4000))
+REPEAT_LIMIT = int(_sb.get("agent.sandbox.repeat_limit", 3))          # 相同 (工具,参数) 最多调用次数
+MAX_SAME_TOOL_CALLS = int(_sb.get("agent.sandbox.max_same_tool_calls", 4))   # 同名工具上限, 防按环节逐个刷
+TOOL_TIMEOUTS: Dict[str, int] = {    # 秒; 未列出的默认 DEFAULT_TOOL_TIMEOUT
     "run_quant_scan": 900,           # 全市场扫描分钟级
     "extract_document": 600,         # 扫描件 OCR
     "read_report": 180,              # 带 question 时内部走 LLM
     "analyze_chain": 300,
+    # config 覆盖项最后合并 (单键覆盖默认)
+    **{k: int(v) for k, v in (_sb.get("agent.sandbox.tool_timeouts") or {}).items()},
 }
-DEFAULT_TOOL_TIMEOUT = 120
+DEFAULT_TOOL_TIMEOUT = int(_sb.get("agent.sandbox.default_tool_timeout", 120))
 
 
 # ---------- 系统提示词 (专业 Know-How 都在这里) ----------
@@ -487,9 +491,16 @@ async def run_agent_stream(text: str, session_id: Optional[str],
     路径: 快车道(高置信简单查询, 零 LLM) → 域子Agent(L1 规则单域命中, 域内
     2~4 工具 + escalate 升级伪工具) → 全工具循环(未命中/复合/升级续跑)。
     fast_lane=False / use_subagent=False 供评测隔离。
+    全部事件经 trajectory tee 落盘 logs/trajectories/ (可 replay/归因)。
     """
+    tee = trajectory.open_turn(session_id, text)
+
+    def sse_tee(event: str, data: Any) -> str:
+        tee(event, data)
+        return sse(event, data)
+
     if fast_lane and _fast_path_intent(text):
-        async for chunk in _fast_query_stream(text, session_id, sse):
+        async for chunk in _fast_query_stream(text, session_id, sse_tee):
             yield chunk
         return
 
@@ -512,24 +523,24 @@ async def run_agent_stream(text: str, session_id: Optional[str],
         if domain:
             d = DOMAIN_DEFS[domain]
             dtools = domain_manifest(domain)
-            yield sse("stage", {"stage": "agent",
-                                "message": f"意图路由: {d['label']}子Agent "
-                                           f"({len(dtools) - 1} 个域内工具)"})
+            yield sse_tee("stage", {"stage": "agent",
+                                    "message": f"意图路由: {d['label']}子Agent "
+                                               f"({len(dtools) - 1} 个域内工具)"})
             messages.append({"role": "system", "content": d["prompt"]})
-            async for ev in _decision_loop(llm, dtools, messages, sse, holder):
+            async for ev in _decision_loop(llm, dtools, messages, sse_tee, holder):
                 yield ev
             if holder.get("escalated"):
-                yield sse("stage", {"stage": "agent",
-                                    "message": "升级: 全工具 Agent 接管…"})
+                yield sse_tee("stage", {"stage": "agent",
+                                        "message": "升级: 全工具 Agent 接管…"})
                 messages.append({"role": "system", "content":
                                  "域子Agent已申请升级, 全部只读工具现已开放, "
                                  "请基于已有结果继续完成任务并给出最终中文回答。"})
                 async for ev in _decision_loop(llm, full_tools, messages,
-                                               sse, holder):
+                                               sse_tee, holder):
                     yield ev
         else:
-            yield sse("stage", {"stage": "agent", "message": "Agent 接管, 分析问题…"})
-            async for ev in _decision_loop(llm, full_tools, messages, sse, holder):
+            yield sse_tee("stage", {"stage": "agent", "message": "Agent 接管, 分析问题…"})
+            async for ev in _decision_loop(llm, full_tools, messages, sse_tee, holder):
                 yield ev
 
         final_text = holder.get("final_text") or ""
@@ -542,14 +553,14 @@ async def run_agent_stream(text: str, session_id: Optional[str],
 
         # 最终回答分块推送 (打字机效果; 决策轮为非流式, 此处按块下发)
         for i in range(0, len(final_text), 80):
-            yield sse("delta", {"text": final_text[i:i + 80]})
+            yield sse_tee("delta", {"text": final_text[i:i + 80]})
             await asyncio.sleep(0.02)
 
     except Exception as e:  # noqa: BLE001 顶层兜底, 保证 error 事件一定下发
         logger.error(f"Agent 循环异常: {e}", exc_info=True)
         history_store.append_assistant(
             session_id, f"[异常] {e}", holder.get("tool_events") or [])
-        yield sse("error", {"message": f"Agent 执行失败: {e}"})
+        yield sse_tee("error", {"message": f"Agent 执行失败: {e}"})
 
 
 # ---------- 一次性调用 (非流式, 调试/测试用) ----------

@@ -12,12 +12,15 @@
 - 每个子 Agent 附带域专家提示词 (追加 system, 全局口径知识保留)
 - 升级链路: 域清单里放一个 escalate_to_full_agent 伪工具,
   子 Agent 发现需要域外能力时调用 -> 同一 messages 换全工具清单续跑, 上下文不丢
+
+域定义事实源 (DSH "组合进配置" 的落地): config.yaml `agent.domains`,
+改工具清单/关键词/prompt 只动配置不动代码 (重启生效);
+config 缺失或整段非法时回落下方内置默认 (fresh clone 可跑);
+单域结构不完整仅跳过该域并告警 — 宁漏勿误: 漏路由只是少优化, 误路由才是事故。
 """
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
-
-from mcp.spec import ToolSpec
 
 ESCALATE_TOOL = "escalate_to_full_agent"
 
@@ -45,10 +48,11 @@ def escalate_tool_manifest() -> Dict[str, Any]:
 
 
 # ============================================================
-# 域定义: 标签 / 工具清单 / 域专家提示词 / L1 路由核心词
+# 域定义内置默认 (config.yaml agent.domains 缺失时的兜底)
+# 结构: 标签 / 工具清单 / 域专家提示词 / L1 路由核心词
 # ============================================================
 
-DOMAIN_DEFS: Dict[str, Dict[str, Any]] = {
+_DEFAULT_DOMAINS: Dict[str, Dict[str, Any]] = {
     "financial": {
         "label": "财务数据",
         "tools": ["query_financials", "query_main_business", "valuation_percentile"],
@@ -130,6 +134,37 @@ DOMAIN_DEFS: Dict[str, Dict[str, Any]] = {
             "涉及行情/财务/研报等分析类问题时调用 escalate_to_full_agent 转交。"),
     },
 }
+
+
+def _load_domain_defs() -> Dict[str, Dict[str, Any]]:
+    """读 config.yaml agent.domains; 缺失/整段非法回落内置默认, 单域非法跳过"""
+    from core.config import get_config
+    from core.logger import get_logger
+    logger = get_logger(__name__)
+
+    raw = get_config().get("agent.domains")
+    if not isinstance(raw, dict) or not raw:
+        return {k: dict(v) for k, v in _DEFAULT_DOMAINS.items()}
+
+    defs: Dict[str, Dict[str, Any]] = {}
+    for key, d in raw.items():
+        ok = (isinstance(d, dict)
+              and isinstance(d.get("label"), str) and d["label"]
+              and isinstance(d.get("prompt"), str) and d["prompt"]
+              and isinstance(d.get("tools"), list) and 1 <= len(d["tools"]) <= 8
+              and isinstance(d.get("keywords"), list) and d["keywords"])
+        if not ok:
+            logger.warning(f"agent.domains.{key} 结构不完整 "
+                           f"(需 label/prompt/tools/keywords), 该域已跳过")
+            continue
+        defs[key] = d
+    if not defs:
+        logger.warning("agent.domains 无任何合法域, 回落内置域定义")
+        return {k: dict(v) for k, v in _DEFAULT_DOMAINS.items()}
+    return defs
+
+
+DOMAIN_DEFS: Dict[str, Dict[str, Any]] = _load_domain_defs()
 
 
 def domain_manifest(domain: str, with_escalate: bool = True) -> List[Dict[str, Any]]:
