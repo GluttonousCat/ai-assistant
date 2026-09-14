@@ -36,6 +36,7 @@ SseFormatter = Callable[[str, object], str]
 
 # ---------- 沙盒参数 (默认值; config.yaml agent.sandbox 可覆盖, 重启生效) ----------
 _sb = get_config()
+FAST_LANE_ENABLED = bool(_sb.get("agent.fast_lane.enabled", True))   # 快车道总开关 (config)
 MAX_ROUNDS = int(_sb.get("agent.sandbox.max_rounds", 8))
 MAX_RESULT_CHARS = int(_sb.get("agent.sandbox.max_result_chars", 4000))
 REPEAT_LIMIT = int(_sb.get("agent.sandbox.repeat_limit", 3))          # 相同 (工具,参数) 最多调用次数
@@ -55,7 +56,7 @@ DEFAULT_TOOL_TIMEOUT = int(_sb.get("agent.sandbox.default_tool_timeout", 120))
 def build_system_prompt() -> str:
     from datetime import date
     return f"""你是 Alpha Finance Radar 平台的投研助手 (今天是 {date.today().isoformat()})。
-平台有 A 股行情/财务三表/估值/主营构成/知识星球研报/产业链/量化扫描 全套数据, 你通过工具取数后回答。
+平台有 A 股行情/财务三表/估值/主营构成/知识星球研报/产业链/量价扫描 全套数据, 你通过工具取数后回答。
 
 【数据纪律 — 最高优先级】
 1. 平台内的任何数字 (行情/财务/研报/预测) 必须来自工具返回, 严禁凭记忆报数; 没查到就明说没数据
@@ -98,7 +99,7 @@ def build_system_prompt() -> str:
 
 
 def _extract_table(data: Any) -> Optional[Dict[str, Any]]:
-    """从工具结果中提取表格 (query_financials 顶层; chain/alpha 在 table 键)"""
+    """从工具结果中提取表格"""
     if not isinstance(data, dict):
         return None
     for holder in (data, data.get("table")):
@@ -121,7 +122,7 @@ def _fmt_tool_args(args: Dict[str, Any]) -> str:
 
 
 async def _run_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
-    """沙盒执行: 线程 + 超时; 超时后线程仍在后台跑完 (Python 线程不可杀), 但不再阻塞"""
+    """沙盒执行"""
     from mcp import get_registry
     registry = get_registry()
     timeout = TOOL_TIMEOUTS.get(name, DEFAULT_TOOL_TIMEOUT)
@@ -484,15 +485,18 @@ async def _decision_loop(llm, tools, messages: List[Dict[str, Any]],
 
 async def run_agent_stream(text: str, session_id: Optional[str],
                            sse: SseFormatter,
-                           fast_lane: bool = True,
+                           fast_lane: Optional[bool] = None,
                            use_subagent: bool = True) -> AsyncIterator[str]:
     """Agent 主循环 (async generator, 产出 SSE 帧; 不发 done, 由 api 层统一收尾)
 
     路径: 快车道(高置信简单查询, 零 LLM) → 域子Agent(L1 规则单域命中, 域内
     2~4 工具 + escalate 升级伪工具) → 全工具循环(未命中/复合/升级续跑)。
-    fast_lane=False / use_subagent=False 供评测隔离。
+    fast_lane 缺省跟随 config.yaml agent.fast_lane.enabled; 显式传参优先
+    (评测隔离: True 强制开 / False 强制关)。
     全部事件经 trajectory tee 落盘 logs/trajectories/ (可 replay/归因)。
     """
+    if fast_lane is None:
+        fast_lane = FAST_LANE_ENABLED
     tee = trajectory.open_turn(session_id, text)
 
     def sse_tee(event: str, data: Any) -> str:
@@ -565,8 +569,8 @@ async def run_agent_stream(text: str, session_id: Optional[str],
 
 # ---------- 一次性调用 (非流式, 调试/测试用) ----------
 def run_agent(text: str, session_id: Optional[str] = None,
-              fast_lane: bool = True) -> Dict[str, Any]:
-    """同步入口: 收集全部事件, 返回 {answer, tool_events}"""
+              fast_lane: Optional[bool] = None) -> Dict[str, Any]:
+    """同步入口: 收集全部事件, 返回 {answer, tool_events} (fast_lane 缺省跟随 config)"""
     events: List[Dict[str, Any]] = []
 
     def _collect(event: str, data: Any) -> str:

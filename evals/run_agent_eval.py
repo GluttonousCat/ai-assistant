@@ -6,7 +6,7 @@ Agent 对话评测器 (v1)
 工具选择 / 回答关键词 / 无工具泄漏, 输出 JSON 报告 + 控制台摘要。
 
 用法 (项目根目录):
-    .venv\\Scripts\\python.exe evals\\run_agent_eval.py                  # 全量 (快车道开=线上路径)
+    .venv\\Scripts\\python.exe evals\\run_agent_eval.py                  # 全量 (快车道跟随 config = 线上路径)
     .venv\\Scripts\\python.exe evals\\run_agent_eval.py --no-fast-lane  # 强制全走 Agent 循环
     .venv\\Scripts\\python.exe evals\\run_agent_eval.py --only multiturn,query  # 按类型过滤
 
@@ -57,7 +57,7 @@ def check_turn(turn: dict, tools: list, answer: str) -> tuple:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--no-fast-lane", action="store_true",
-                        help="强制全走 Agent 循环 (默认快车道开 = 线上路径)")
+                        help="强制全走 Agent 循环 (默认跟随 config.yaml agent.fast_lane)")
     parser.add_argument("--only", default="",
                         help="按 case id / type 子串过滤, 逗号分隔")
     parser.add_argument("--limit", type=int, default=0, help="最多跑 N 个用例")
@@ -77,8 +77,11 @@ def main() -> int:
     if args.limit:
         cases = cases[:args.limit]
 
-    fast_lane = not args.no_fast_lane
-    print(f"== Agent eval: {len(cases)} cases, fast_lane={fast_lane} ==")
+    # None=跟随 config (评测线上真实路径); False=强制关快车道
+    fast_lane = None if not args.no_fast_lane else False
+    from core.agent.loop import FAST_LANE_ENABLED
+    print(f"== Agent eval: {len(cases)} cases, "
+          f"fast_lane={'off(forced)' if args.no_fast_lane else f'config(={FAST_LANE_ENABLED})'} ==")
 
     results, n_turns, n_pass_turns, n_pass_cases = [], 0, 0, 0
     for c in cases:
@@ -119,7 +122,8 @@ def main() -> int:
     out = Path("evals/results") / f"agent_eval_{ts}.json"
     out.parent.mkdir(exist_ok=True)
     out.write_text(json.dumps({
-        "ts": ts, "fast_lane": fast_lane,
+        "ts": ts, "fast_lane": ("off(forced)" if args.no_fast_lane
+                                else f"config(={FAST_LANE_ENABLED})"),
         "summary": {"cases": len(cases), "cases_pass": n_pass_cases,
                     "turns": n_turns, "turns_pass": n_pass_turns,
                     "turn_pass_rate": round(n_pass_turns / n_turns * 100, 1)

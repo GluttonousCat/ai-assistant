@@ -70,6 +70,9 @@ logging:
 
 # Agent 对话循环 (core/agent) — DSH "组合进配置" 范式: 改这些不再动代码 (重启生效)
 agent:
+  fast_lane:
+    enabled: false             # 快车道(高置信简单查询直连 SQL)总开关 — 当前关闭:
+                               # 先做面再做点, 优先把全工具 Agent 链路做全; 恢复改 true
   sandbox:                      # 沙盒参数 (loop.py 默认值与此一致)
     max_rounds: 8               # LLM 决策轮数上限
     max_result_chars: 4000      # 工具结果注入 LLM 的字符上限
