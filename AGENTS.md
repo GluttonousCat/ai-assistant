@@ -30,7 +30,6 @@ skills/      领域技能 (每技能一目录, 专业知识放 prompt):
              fin_query(Text-to-SQL) / report(研报) / scanned_report(OCR) /
              beta_alpha(产业链Beta+个股Alpha: chains种子链/analysis/tests) /
              content(内容资产管线: 画像/公众号文章/PPT/年报解读)
-services/    用例编排层 (api 与引擎/技能之间): streaming(chain/alpha SSE)
 jobs/        任务层一体: scheduler(Tushare 21:00) / zsxq_scheduler(爬虫 07:00/23:00) /
              管线入口(daily_fetch_zxsq, sync_zxsq_to_pg, merge_report_duplicates, smoke)
 tools/       pdf(通用PDF工具: 文本/渲染/OCR/表格) / zsxq爬虫 / market行情同步 /
@@ -42,11 +41,10 @@ web/src/     Login / Platform(侧边栏壳+角色门控) / AgentChat(SSE) / Chai
 range_trading/  量化子系统(特征/regime状态机/扫描/回测, 自带tests)
 ```
 
-**分层契约**：`api → services → harness(引擎)+skills(领域) → tools → storage`，
+**分层契约**：`api → harness(引擎)+skills(领域) → tools → storage`，
 core 是全层共用的基础设施，harness.mcp 是对外的工具协议出口，只允许上层调下层：
 
 - **api**：HTTP 入口，鉴权（middleware 白名单外全 JWT）、参数校验；重逻辑不写在这
-- **services**：用例编排（SSE 流式把引擎与技能串成完整链路）
 - **harness**：引擎——LLM 决策循环、意图路由、工具协议(mcp)；不直接摸 storage
 - **skills**：领域方法论，编排 tools + LLM prompt
 - **tools**：原子能力，无业务状态；新视觉/提取能力进 tools/pdf（PDF 文本/渲染/OCR/表格）

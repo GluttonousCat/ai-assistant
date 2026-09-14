@@ -104,12 +104,6 @@ export const platformApi = {
   setUserRole: (userId, role) =>
     request('POST', `/api/auth/users/${userId}/role`, { role }),
 
-  // Agent 对话流式版 (SSE): onEvent({type, ...}) 依次收到
-  //   {type:'stage', message} {type:'data', data...} {type:'delta', text} {type:'done'} {type:'error', message}
-  chatStream: async (text, onEvent) => {
-    await sseStream('/api/v1/query/stream', { text }, onEvent).promise
-  },
-
   // Agent 对话新入口 (LLM 自主决策 + 工具循环): 随意问 + 多轮追问。
   // session_id 由页面生成并全程携带, 服务端据此注入会话历史 (追问省略主语可解析)
   agentStream: async (text, sessionId, onEvent) => {
@@ -120,8 +114,6 @@ export const platformApi = {
   chains: () => request('GET', '/api/v1/chains'),
   chainAnalysis: (chainId, node) =>
     request('GET', `/api/v1/chains/${chainId}/analysis${node ? `?node=${encodeURIComponent(node)}` : ''}`),
-  // 同 chatStream 但返回 {promise, abort} (页面级中断用)
-  chatStreamRaw: (text, onEvent) => sseStream('/api/v1/query/stream', { text }, onEvent),
   // 种子链锻造: SSE (stage data{yaml,report,chain_id} done); 返回 {promise, abort}
   forgeChainRaw: (theme, onEvent) => sseStream('/api/v1/chains/forge/stream', { theme }, onEvent),
   // 保存种子链 (服务端结构校验)

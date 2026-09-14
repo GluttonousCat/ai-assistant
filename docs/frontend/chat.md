@@ -20,8 +20,8 @@
               └─ ③ 全工具循环: 17 只读工具 LLM 自主决策 (快车道/子Agent 未命中或升级续跑)
 ```
 
-（旧链路 `POST /api/v1/query/stream`——意图路由+固定 Text-to-SQL 管道——仍保留可用，
-但前端已不调用；详见 docs/agents/agent_loop.md）
+（旧链路 `POST /api/v1/query/stream` 与编排层 services/ 已于 2026-09-14 移除，
+对话统一走 harness 单引擎）
 
 ### 1.2 SSE 事件协议
 
