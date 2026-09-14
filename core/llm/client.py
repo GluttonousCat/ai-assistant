@@ -35,9 +35,6 @@ from core.config import get_config
 
 MessageList = List[Dict[str, Any]]
 
-# 已注册的用途 (config llm.models 之外的用途回落 default)
-KNOWN_PURPOSES = {"default", "agent", "extract", "analysis", "vision", "nl2sql",
-                  "embedding"}
 
 
 class LLMClient:
@@ -130,11 +127,6 @@ class LLMClient:
             content = chunk.choices[0].delta.content if chunk.choices else None
             if content:
                 yield content
-
-
-def get_llm(**kwargs) -> LLMClient:
-    """便捷工厂"""
-    return LLMClient(**kwargs)
 
 
 def get_agent_llm(**kwargs) -> LLMClient:

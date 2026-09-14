@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from core.config import get_config
 from core.logger import get_logger
@@ -74,15 +74,6 @@ class IntentResult:
     confidence: float
     source: str  # 'rule' / 'llm' / 'fallback'
     slots: Dict[str, Any] = field(default_factory=dict)  # 槽位 (实体)
-
-    def to_state_dict(self) -> Dict[str, Any]:
-        """转为 AgentState.parsed_intent 可存结构"""
-        return {
-            "type": self.intent,
-            "confidence": self.confidence,
-            "source": self.source,
-            "slots": self.slots,
-        }
 
 
 class LayeredIntentClassifier:
@@ -280,9 +271,3 @@ def get_intent_classifier() -> LayeredIntentClassifier:
     if _classifier is None:
         _classifier = LayeredIntentClassifier()
     return _classifier
-
-
-def classify_intent(user_input: str) -> Tuple[str, float, Dict[str, Any]]:
-    """便捷分类: 返回 (intent, confidence, slots)"""
-    result = get_intent_classifier().classify(user_input)
-    return result.intent, result.confidence, result.slots

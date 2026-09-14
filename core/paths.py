@@ -22,7 +22,7 @@ class PathManager:
             return
         self._initialized = True
 
-        # 项目根目录（向上查找包含config.toml的目录）
+        # 项目根目录（向上查找包含config.yaml的目录）
         self.root_dir = self._find_project_root()
 
         # 输出目录
@@ -67,16 +67,3 @@ class PathManager:
         download_dir = os.path.join(group_dir, "downloads")
         os.makedirs(download_dir, exist_ok=True)
         return download_dir
-
-    def get_cache_dir(self, group_id: str) -> str:
-        """获取缓存目录"""
-        group_dir = self.get_group_dir(group_id)
-        cache_dir = os.path.join(group_dir, "cache")
-        os.makedirs(cache_dir, exist_ok=True)
-        return cache_dir
-
-
-# 便捷函数
-def get_path_manager() -> PathManager:
-    """获取路径管理器实例"""
-    return PathManager()

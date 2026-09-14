@@ -3,7 +3,7 @@
 通用工具函数
 """
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 
 def clean_cookie(cookie: str) -> str:
@@ -31,18 +31,6 @@ def clean_cookie(cookie: str) -> str:
     cookie = '; '.join(part.strip() for part in cookie.split(';'))
 
     return cookie
-
-
-def timestamp_to_iso(timestamp_ms: int) -> str:
-    """毫秒时间戳转ISO格式"""
-    dt = datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone(timedelta(hours=8)))
-    return dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + '+0800'
-
-
-def iso_to_timestamp(iso_time: str) -> int:
-    """ISO格式转毫秒时间戳"""
-    dt = datetime.fromisoformat(iso_time.replace('+0800', '+08:00'))
-    return int(dt.timestamp() * 1000)
 
 
 def decrement_time(iso_time: str, milliseconds: int = 1) -> str:

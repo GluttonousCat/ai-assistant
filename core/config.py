@@ -2,7 +2,7 @@
 """
 统一配置管理
 - config.yaml: 非敏感配置
-- .env:        敏感密钥 (OPENAI_API_KEY / TUSHARE_TOKEN / MYSQL_* ...)
+- .env:        敏感密钥 (OPENAI_API_KEY / TUSHARE_TOKEN / PG_* / ZSXQ_* ...)
 优先级: 环境变量 > config.yaml
 """
 from __future__ import annotations
@@ -124,19 +124,6 @@ class Config:
         return self.env("TUSHARE_TOKEN", "")
 
     @property
-    def mysql_config(self) -> Dict[str, Any]:
-        return {
-            "host": self.env("MYSQL_HOST", "127.0.0.1"),
-            "port": int(self.env("MYSQL_PORT", 3306)),
-            "user": self.env("MYSQL_USER", "root"),
-            "password": self.env("MYSQL_PASSWORD", ""),
-        }
-
-    @property
-    def mysql_database(self) -> str:
-        return self.env("MYSQL_DATABASE", "stock")
-
-    @property
     def pg_config(self) -> Dict[str, Any]:
         """PostgreSQL 连接配置"""
         return {
@@ -154,18 +141,6 @@ class Config:
         return (
             f"postgresql+psycopg2://{cfg['user']}:{cfg['password']}"
             f"@{cfg['host']}:{cfg['port']}/{cfg['database']}"
-        )
-
-    @property
-    def mysql_url(self) -> str:
-        """SQLAlchemy 连接串"""
-        pwd = self.mysql_config["password"]
-        # 转义 @ 等特殊字符
-        pwd_escaped = pwd.replace("@", "%40")
-        return (
-            f"mysql+pymysql://{self.mysql_config['user']}:{pwd_escaped}"
-            f"@{self.mysql_config['host']}:{self.mysql_config['port']}"
-            f"/{self.mysql_database}"
         )
 
     @property

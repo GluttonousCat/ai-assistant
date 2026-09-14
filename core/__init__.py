@@ -6,6 +6,6 @@
 - lifespan: FastAPI 生命周期
 """
 from core.config import get_config, Config
-from core.logger import get_logger, LogManager
+from core.logger import get_logger
 
-__all__ = ["get_config", "Config", "get_logger", "LogManager"]
+__all__ = ["get_config", "Config", "get_logger"]

@@ -106,7 +106,3 @@ def get_logger(name: str = "app") -> logging.Logger:
         pkg = getattr(sys.modules.get("__main__"), "__package__", "") or ""
         name = pkg or "cli"          # %(name)s 也打真实包名, 不再显示 __main__
     return _LogManager.setup(name)
-
-
-# 兼容旧引用 (LogManager 曾被 core/__init__ 导出)
-LogManager = _LogManager

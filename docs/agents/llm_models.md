@@ -49,7 +49,7 @@ llm:
 
 | 用途 | 场景 | 工厂函数 |
 |------|------|---------|
-| `default` | 兜底，未指定用途的一切 | `get_llm()` |
+| `default` | 兜底，未指定用途的一切 | `LLMClient()` 直构 |
 | `agent` | 意图识别 L2、SQL 生成/解读、研报综合解读、扫描件解读 | `get_agent_llm()` |
 | `extract` | 研报长文本结构化 JSON 提取 | `get_extract_llm()` |
 | `analysis` | 文件名→机构/标的/行业/地区（LLM Analysis） | 直接读 `llm.models.analysis.model` |

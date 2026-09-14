@@ -1,6 +1,6 @@
 """
 LLM 层
 """
-from core.llm.client import LLMClient, get_llm
+from core.llm.client import LLMClient
 
-__all__ = ["LLMClient", "get_llm"]
+__all__ = ["LLMClient"]
