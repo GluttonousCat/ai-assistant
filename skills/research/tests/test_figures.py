@@ -16,11 +16,16 @@ matplotlib.use("Agg")
 
 from skills.research.compose.figures import (  # noqa: E402
     FigureOut,
+    _annual_series,
+    _best,
     _classify,
+    _mainbiz_items,
     _series_key,
+    _valuation_rows,
     build_figures,
 )
 from skills.research.contracts import Chapter, Draft, Fact  # noqa: E402
+import pytest  # noqa: E402
 
 _TS = "600519.SH"
 _NAME_RE = re.compile(r"^ch\d{2}_[a-z0-9_]+\.png$")
@@ -97,11 +102,18 @@ def test_classify_priority_and_boundary():
     assert _classify("valuation.pe_ttm") == "pe"
     assert _classify("mdna.基酒产量", "2024年茅台酒基酒产量5.72万吨") == "volume"
     assert _classify("mainbiz.茅台酒") == "mainbiz"
+    # 真实 T02 命名: 增长率事实必须被 yoy 陷阱拦截, 不得混入水平值类别
+    assert _classify("tushare.or_yoy") == "yoy"
+    assert _classify("tushare.np_yoy") == "yoy"
+    assert _classify("tushare.gross_margin") == "gross"
+    assert _classify("tushare.net_margin") == "netmargin"
+    assert _classify("tushare.ocf") == "ocf"
 
 
 # ---------- test_build: 茅台形态全量 ----------
 
 def test_maotai_full_fixture_five_figs(tmp_path):
+    from PIL import Image
     figs = build_figures(Draft(ts_code=_TS, name="贵州茅台"),
                          maotai_facts(), tmp_path)
     # ≥5 张图, 覆盖 ch02/ch04/ch05/ch10 (guide 章节输出要求)
@@ -113,6 +125,8 @@ def test_maotai_full_fixture_five_figs(tmp_path):
         assert int(f.path.name[2:4]) == f.chapter_no     # 文件名前缀=章号
         assert f.path.exists() and f.path.stat().st_size > 5000
         assert f.hint.startswith("章末插入")              # T08 组装提示
+        with Image.open(f.path) as img:                  # 公众号规范宽度统一 1080px
+            assert img.size[0] == 1080, (f.path.name, img.size)
     # 四类图各就各位
     names = {f.path.name for f in figs}
     assert {"ch02_mainbiz.png", "ch04_growth.png", "ch04_margins.png",
@@ -170,3 +184,77 @@ def test_empty_and_unrecognized_facts(tmp_path):
         _f("T:tushare.revenue.2025A", "无 value", "s", "2025A", None, ""),
     ]
     assert build_figures(Draft(ts_code="X", name="X"), odd, tmp_path) == []
+
+
+# ---------- test_real_shape: 对齐 T02 真实分片命名 (600519.SH 实跑形态) ----------
+
+def _real_mainbiz(seq, item, amount, share, gm):
+    return _f(f"T:profile.mainbiz.2026H1.{seq}",
+              f"2026中报(2026-06-30) {item} (主营构成·产品维度), 收入 {amount:.2f} 亿元, "
+              f"占营业收入 {share:.2f}%, 该业务毛利率 {gm:.2f}%",
+              "画像·主营构成 (Tushare)", "2026H1", amount, "亿元")
+
+
+def test_real_yoy_not_mistaken_for_levels():
+    """or_yoy/np_yoy (%) 与 n_income (亿元) 同点数时, profit 序列必须取水平值"""
+    facts = [_f("T:tushare.revenue.2024A", "2024年营业收入1708.99亿元", "s", "2024A", 1708.99, "亿元"),
+             _f("T:tushare.revenue.2025A", "2025年营业收入1688.38亿元", "s", "2025A", 1688.38, "亿元"),
+             _f("T:tushare.n_income.2024A", "2024年归母净利润862.28亿元", "s", "2024A", 862.28, "亿元"),
+             _f("T:tushare.n_income.2025A", "2025年归母净利润845.00亿元", "s", "2025A", 845.0, "亿元"),
+             _f("T:tushare.or_yoy.2024A", "2024年营业收入同比增长 15.66%", "s", "2024A", 15.66, "%"),
+             _f("T:tushare.or_yoy.2025A", "2025年营业收入同比增长 -1.20%", "s", "2025A", -1.20, "%"),
+             _f("T:tushare.np_yoy.2024A", "2024年归母净利润同比增长 15.38%", "s", "2024A", 15.38, "%"),
+             _f("T:tushare.np_yoy.2025A", "2025年归母净利润同比增长 -2.00%", "s", "2025A", -2.0, "%")]
+    series = _annual_series(facts)
+    assert _best(series, "profit").key == "tushare.n_income"
+    assert _best(series, "revenue").key == "tushare.revenue"
+    assert "yoy" not in {s.cat for s in series.values() if s.cat in
+                         ("profit", "revenue")}
+
+
+def test_real_mainbiz_amount_and_share(tmp_path):
+    """真实形态: eid 用序号、品名/占比/毛利率在 content, value 是金额 (亿元)"""
+    facts = [
+        _real_mainbiz(1, "茅台酒", 777.2444, 73.87, 92.28),
+        _real_mainbiz(2, "其他酒系列", 129.3419, 12.29, 73.59),
+        _real_mainbiz(4, "其他业务", 16.1945, 1.54, 96.48),
+    ]
+    items = _mainbiz_items(facts)
+    by_name = {n: (s, gm) for n, s, gm, _ in items}
+    assert by_name["茅台酒"][0] == pytest.approx(73.87, abs=0.01)  # 占比直取
+    assert by_name["茅台酒"][1] == pytest.approx(92.28, abs=0.01)  # 毛利率提取
+    assert items[0][0] == "茅台酒"                                  # 品名从 content 提取
+    figs = build_figures(Draft(ts_code=_TS, name="贵州茅台"), facts, tmp_path)
+    assert [f.path.name for f in figs] == ["ch02_mainbiz.png"]
+
+
+def test_real_mainbiz_amount_only_normalization(tmp_path):
+    """content 无占比字样 → 金额按组合计归一为占比"""
+    facts = [
+        _f("T:mainbiz.茅台酒.2025A", "2025年茅台酒收入777.24亿元", "s", "2025A", 777.24, "亿元"),
+        _f("T:mainbiz.系列酒.2025A", "2025年系列酒收入129.34亿元", "s", "2025A", 129.34, "亿元"),
+    ]
+    items = _mainbiz_items(facts)
+    shares = {n: s for n, s, _, _ in items}
+    assert shares["茅台酒"] == pytest.approx(85.7, abs=0.2)
+    assert sum(shares.values()) == pytest.approx(100.0, abs=0.5)
+
+
+def test_real_valuation_single_fact_parsed(tmp_path):
+    """真实形态: 估值每指标 1 条事实, 区间/分位嵌在 content → 解析模式出区间带"""
+    facts = [
+        _f("T:profile.valuation.pe_ttm.2026-09-25",
+           "市盈率PE(TTM) 为 18.99 倍, 处于近 3 年 4.1% 分位 (区间 17.66~33.11, 样本 699 个交易日)",
+           "画像·估值水位 (Tushare)", "2026-09-25", 18.99, "倍"),
+        _f("T:profile.valuation.pb.2026-09-25",
+           "市净率PB 为 6.15 倍, 处于近 3 年 7.9% 分位 (区间 5.39~11.35, 样本 699 个交易日)",
+           "画像·估值水位 (Tushare)", "2026-09-25", 6.15, "倍"),
+    ]
+    rows = _valuation_rows(facts)
+    pe = next(r for r in rows if r.label == "PE(TTM)")
+    assert (pe.low, pe.high, pe.latest) == (17.66, 33.11, 18.99)
+    assert pe.pct == pytest.approx(4.1, abs=0.05)
+    assert pe.span == "近3年"
+    figs = build_figures(Draft(ts_code=_TS, name="贵州茅台"), facts, tmp_path)
+    assert [f.path.name for f in figs] == ["ch10_valuation.png"]
+    assert figs[0].path.stat().st_size > 5000

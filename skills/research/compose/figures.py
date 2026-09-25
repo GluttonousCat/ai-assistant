@@ -31,8 +31,8 @@ import matplotlib
 matplotlib.use("Agg")  # 纯批量出图模块, 先于任何 pyplot 导入固定后端 (离线可跑)
 
 from core.logger import get_logger
-from skills.content.charts import (_ACCENT, _ACCENT2, _DIM, _FG, _GRID, _NEG,
-                                   _POS, _finish, _new_fig, _style_ax)
+from skills.content.charts import (_ACCENT, _ACCENT2, _BG, _DIM, _FG, _GRID,
+                                   _NEG, _POS, _finish, _new_fig, _style_ax)
 from skills.research.contracts import Draft, Fact
 
 logger = get_logger(__name__)
@@ -53,10 +53,12 @@ class FigureOut(NamedTuple):
 # ============================================================
 
 # 分类规则: (类别, 指标键正则[小写匹配], 内容关键词) — 顺序即优先级, 特异在前
-# (netmargin 先于 profit, 防 netprofit_margin 被 "netprofit" 误吞; pe/pb 用词边界防 capex)
+# (yoy 陷阱最先: 增长率事实(%)绝不能当水平值(亿元)混进 profit/revenue 出图;
+#  netmargin 先于 profit, 防 netprofit_margin 被 "netprofit" 误吞; pe/pb 用词边界防 capex)
 _RULES: List[Tuple[str, List[str], List[str]]] = [
-    ("netmargin", [r"netprofit_?margin", r"净利率"], ["净利率"]),
-    ("gross", [r"grossprofit", r"毛利率"], ["毛利率"]),
+    ("yoy", [r"_?yoy$", r"_?yoy\.", r"同比"], ["同比增长", "同比"]),
+    ("netmargin", [r"netprofit_?margin", r"net_?margin", r"净利率"], ["净利率"]),
+    ("gross", [r"grossprofit", r"gross_?margin", r"毛利率"], ["毛利率"]),
     ("roe", [r"(?<![a-z0-9])roe(?![a-z0-9])"], ["ROE", "净资产收益率"]),
     ("pe", [r"(?<![a-z0-9])pe(?:_ttm)?(?![a-z0-9])", r"市盈率"], ["市盈率", "PE"]),
     ("pb", [r"(?<![a-z0-9])pb(?![a-z0-9])", r"市净率"], ["市净率", "PB"]),
@@ -195,6 +197,35 @@ def _legend_fg(leg) -> None:
         t.set_color(_FG)
 
 
+_BG_RGB = tuple(int(_BG[i:i + 2], 16) for i in (1, 3, 5))   # "#241f1c" -> (36,31,28)
+
+
+def _finish1080(fig, path: Path, title: str, note: str = "") -> Path:
+    """_finish(tight 裁剪) 后宽度不定 (可能不足也可能超宽) → 统一到公众号规范宽 1080px:
+    不足则背景色衬垫居中; 超宽 (标注画出画布) 则等比缩小。"""
+    p = _finish(fig, path, title, note=note)
+    try:
+        from PIL import Image
+        with Image.open(p) as img:
+            img.load()
+            w, h = img.size
+            if w == _CANVAS_W or h == 0:
+                return p
+            if w > _CANVAS_W:
+                out = img.resize((_CANVAS_W, round(h * _CANVAS_W / w)),
+                                 Image.LANCZOS)
+            else:
+                out = Image.new("RGB", (_CANVAS_W, h), _BG_RGB)
+                out.paste(img, ((_CANVAS_W - w) // 2, 0))
+        out.save(p)
+    except ImportError:                 # 无 Pillow 时保持 tight 原宽 (仅尺寸不齐, 不阻塞)
+        logger.warning("Pillow 缺失, 跳过 1080px 宽度统一")
+    return p
+
+
+_CANVAS_W = int(FIG_WIDTH * 100)        # 1080
+
+
 def _title(name: str, text: str) -> str:
     return f"{name} · {text}" if name else text
 
@@ -269,7 +300,7 @@ def _annual_pair(out_dir: Path, fname: str, chapter_no: int, hint: str, title: s
     _legend_fg(leg)
     ax.set_title(title, color=_FG, fontsize=14, pad=14, loc="left")
     path = out_dir / fname
-    _finish(fig, path, title, note=note)
+    _finish1080(fig, path, title, note=note)
     return FigureOut(path, chapter_no, hint)
 
 
@@ -296,7 +327,7 @@ def _annual_single(out_dir: Path, fname: str, chapter_no: int, hint: str, title:
     _ylim_headroom(ax, vs)
     ax.set_title(title, color=_FG, fontsize=14, pad=14, loc="left")
     path = out_dir / fname
-    _finish(fig, path, title, note=note)
+    _finish1080(fig, path, title, note=note)
     return FigureOut(path, chapter_no, hint)
 
 
@@ -356,7 +387,7 @@ def _fig_margins(series, name, out_dir, allowed):
     ax.set_title(_title(name, "盈利质量: 毛利率 / 净利率 / ROE (年度, %)"),
                  color=_FG, fontsize=14, pad=14, loc="left")
     path = out_dir / "ch04_margins.png"
-    _finish(fig, path, "盈利质量", note=_note(used, "财务指标口径"))
+    _finish1080(fig, path, "盈利质量", note=_note(used, "财务指标口径"))
     return FigureOut(path, 4, "章末插入 · 盈利质量指标趋势 (毛利率/净利率/ROE)")
 
 
@@ -432,8 +463,16 @@ def _fig_rd(series, name, out_dir, allowed):
 
 # ---------- 收入构成 (占比条形, ch02) ----------
 
+_MB_NAME_RE = re.compile(r"\)\s*([^()（）]+?)\s*[（(]主营构成")   # "2026中报(…) 茅台酒 (主营构成…"
+_MB_SHARE_RE = re.compile(r"占[^\d%]{0,8}([\d.]+)\s*%")          # "占营业收入 73.87%"
+_MB_GM_RE = re.compile(r"毛利率\s*([\d.]+)\s*%")
+
+
 def _item_name(f: Fact) -> str:
-    """构成项名: 优先 eid 中 mainbiz 段之后的部分, 兜底从 content 掐头"""
+    """构成项名: content 里 '…) 品名 (主营构成' 模式优先, 兜底 eid mainbiz 段/content 掐头"""
+    m = _MB_NAME_RE.search(f.content or "")
+    if m and m.group(1).strip():
+        return m.group(1).strip()[:12]
     parts = _series_key(f).split(".")
     for i, p in enumerate(parts):
         if "mainbiz" in p.lower() or "主营" in p or "收入构成" in p:
@@ -446,8 +485,11 @@ def _item_name(f: Fact) -> str:
     return (seg or f.eid[-12:])[:12]
 
 
-def _mainbiz_items(facts: List[Fact]) -> List[Tuple[str, float, Fact]]:
-    """mainbiz 类事实按期间分组, 取条目最多的期间 -> [(项名, 占比%, Fact)] 降序"""
+def _mainbiz_items(facts: List[Fact]) -> List[Tuple[str, float, Optional[float], Fact]]:
+    """mainbiz 类事实按期间分组, 取条目最多的期间
+    -> [(项名, 占比%, 毛利率%|None, Fact)] 按占比降序。
+    占比三级来源: content 直取「占营业收入 X%」→ 金额按组合计归一 (亿元金额事实)
+    → 小数占比 ×100。"""
     by_period: Dict[str, List[Fact]] = {}
     for f in facts:
         if f.value is None:
@@ -456,10 +498,32 @@ def _mainbiz_items(facts: List[Fact]) -> List[Tuple[str, float, Fact]]:
             by_period.setdefault(f.period or "", []).append(f)
     if not by_period:
         return []
-    period, group = max(by_period.items(), key=lambda kv: (len(kv[1]), kv[0]))
-    items = [(_item_name(f), float(f.value), f) for f in group]
-    if items and max(v for _, v, _ in items) <= 1.5:   # 小数占比归一成 %
-        items = [(n, v * 100, f) for n, v, f in items]
+    _period, group = max(by_period.items(), key=lambda kv: (len(kv[1]), kv[0]))
+
+    def share_of(f: Fact) -> Optional[float]:
+        m = _MB_SHARE_RE.search(f.content or "")
+        if m:
+            v = float(m.group(1))
+            if 0 < v <= 100:
+                return v
+        return None
+
+    shares = [share_of(f) for f in group]
+    if all(s is not None for s in shares) and 80 <= sum(shares) <= 120:
+        pass                                   # 占比直取, 全齐且量纲合理
+    elif group[0].unit and any(k in group[0].unit for k in ("亿", "万", "元")):
+        total = sum(abs(float(f.value)) for f in group)          # 金额 → 归一
+        shares = ([float(f.value) / total * 100 for f in group] if total > 0
+                  else shares)
+    shares = [s if s is not None else float(f.value) for s, f in zip(shares, group)]
+    if shares and max(shares) <= 1.5:           # 小数占比兜底
+        shares = [s * 100 for s in shares]
+
+    items = []
+    for f, s in zip(group, shares):
+        gm = _MB_GM_RE.search(f.content or "")
+        items.append((_item_name(f), float(s),
+                      float(gm.group(1)) if gm else None, f))
     items.sort(key=lambda t: -t[1])
     return items
 
@@ -472,14 +536,17 @@ def _fig_mainbiz(facts, name, out_dir, allowed):
         return None
     items = items[:6]
     rows = sorted(items, key=lambda t: t[1])           # barh: 最大在顶部
-    names = [n for n, _, _ in rows]
-    shares = [v for _, v, _ in rows]
-    used = [f for _, _, f in rows]
+    names = [n for n, _, _, _ in rows]
+    shares = [v for _, v, _, _ in rows]
+    used = [f for _, _, _, f in rows]
     fig, ax = _new_fig(FIG_WIDTH, 1.1 + 0.75 * len(rows))
     bars = ax.barh(names, shares, color=_ACCENT, height=0.62, edgecolor="none")
-    for b, s in zip(bars, shares):
+    for b, s, (_, _, gm, _) in zip(bars, shares, rows):
+        label = f"{s:.1f}%"
+        if gm is not None:
+            label += f"  (毛利率 {gm:.1f}%)"
         ax.text(b.get_width() + max(shares) * 0.015,
-                b.get_y() + b.get_height() / 2, f"{s:.1f}%",
+                b.get_y() + b.get_height() / 2, label,
                 va="center", fontsize=10.5, color=_FG)
     _style_ax(ax)
     ax.grid(axis="x", color=_GRID, linewidth=0.6, alpha=0.6)
@@ -489,7 +556,7 @@ def _fig_mainbiz(facts, name, out_dir, allowed):
     ax.set_title(_title(name, f"收入构成: 主营业务收入占比 ({period})"),
                  color=_FG, fontsize=14, pad=14, loc="left")
     path = out_dir / "ch02_mainbiz.png"
-    _finish(fig, path, "收入构成", note=_note(used, "占主营收入比重"))
+    _finish1080(fig, path, "收入构成", note=_note(used, "占主营收入比重"))
     return FigureOut(path, 2, "章末插入 · 收入构成占比 (佐证业务拆解)")
 
 
@@ -498,13 +565,24 @@ def _fig_mainbiz(facts, name, out_dir, allowed):
 @dataclass
 class _ValRow:
     label: str
-    vals: List[float]          # 升序样本
+    low: float
+    high: float
+    median: float
     latest: float
-    latest_fact: Fact
-    sample: List[Fact]         # 时间升序
+    pct: float                 # 分位 %
+    span: str                  # 样本区间描述
+    used: List[Fact]
+
+
+_VAL_PCT_RE = re.compile(r"([\d.]+)\s*%\s*分位")
+_VAL_RANGE_RE = re.compile(r"区间\s*([\d.]+)\s*~\s*([\d.]+)")
+_VAL_SPAN_RE = re.compile(r"(近\s*\d+\s*年)")
 
 
 def _valuation_rows(facts: List[Fact]) -> List[_ValRow]:
+    """每指标一行, 两种来源:
+    ① 分布模式: ≥3 个不同期间的估值事实 → min/median/max/最新分位全算;
+    ② 解析模式: 单条事实 content 自带「区间 X~Y … N% 分位」(T02 画像估值板块)。"""
     rows = []
     for cat, label in (("pe", "PE(TTM)"), ("pb", "PB")):
         group = [f for f in facts if f.value is not None
@@ -513,13 +591,29 @@ def _valuation_rows(facts: List[Fact]) -> List[_ValRow]:
         for f in sorted(group, key=lambda x: -x.confidence):
             if f.period:
                 pts.setdefault(f.period, f)
-        if len(pts) < 3:
+        if len(pts) >= 3:                              # ① 分布模式
+            sample = [pts[k] for k in sorted(pts)]
+            vals = sorted(float(f.value) for f in sample)
+            latest = float(sample[-1].value)
+            rows.append(_ValRow(
+                label=label, low=vals[0], high=vals[-1],
+                median=vals[len(vals) // 2], latest=latest,
+                pct=sum(1 for v in vals if v <= latest) / len(vals) * 100,
+                span=f"{sample[0].period}~{sample[-1].period}", used=sample))
             continue
-        sample = [pts[k] for k in sorted(pts)]
-        vals = sorted(float(f.value) for f in sample)
-        rows.append(_ValRow(label=label, vals=vals,
-                            latest=float(sample[-1].value),
-                            latest_fact=sample[-1], sample=sample))
+        for f in sorted(group, key=lambda x: -x.confidence):    # ② 解析模式
+            mr, mp = _VAL_RANGE_RE.search(f.content or ""), _VAL_PCT_RE.search(f.content or "")
+            if not (mr and mp):
+                continue
+            low, high = float(mr.group(1)), float(mr.group(2))
+            ms = _VAL_SPAN_RE.search(f.content or "")
+            rows.append(_ValRow(
+                label=label, low=low, high=high,
+                median=(low + high) / 2, latest=float(f.value),
+                pct=float(mp.group(1)),
+                span=ms.group(1).replace(" ", "") if ms else "样本区间",
+                used=[f]))
+            break
     return rows
 
 
@@ -533,34 +627,32 @@ def _fig_valuation(facts, name, out_dir, allowed):
     used = []
     for i, r in enumerate(rows):
         y = len(rows) - 1 - i
-        ax.hlines(y, r.vals[0], r.vals[-1], color=_GRID, linewidth=10)
-        med = r.vals[len(r.vals) // 2]
-        for p in (r.vals[0], med, r.vals[-1]):
+        ax.hlines(y, r.low, r.high, color=_GRID, linewidth=10)
+        for p in (r.low, r.median, r.high):
             ax.plot(p, y, "o", color=_DIM, markersize=5)
         ax.plot(r.latest, y, "D", color=_POS, markersize=11, zorder=5)
-        pct = sum(1 for v in r.vals if v <= r.latest) / len(r.vals) * 100
-        ax.annotate(f"{r.label} {r.latest:.1f} ({pct:.0f}% 分位)",
+        ax.annotate(f"{r.label} {r.latest:.1f} ({r.pct:.0f}% 分位)",
                     (r.latest, y), textcoords="offset points", xytext=(0, 16),
                     ha="center", fontsize=11.5, color=_FG)
-        ax.annotate(f"低 {r.vals[0]:.1f}", (r.vals[0], y), xytext=(0, -14),
+        ax.annotate(f"低 {r.low:.1f}", (r.low, y), xytext=(0, -14),
                     textcoords="offset points", fontsize=9, color=_DIM)
-        ax.annotate(f"高 {r.vals[-1]:.1f}", (r.vals[-1], y), xytext=(0, -14),
+        ax.annotate(f"高 {r.high:.1f}", (r.high, y), xytext=(0, -14),
                     textcoords="offset points", fontsize=9, color=_DIM,
                     ha="right")
-        used += r.sample
+        used += r.used
     ax.set_ylim(-0.7, len(rows) - 0.2)
     ax.set_yticks([])
     _style_ax(ax)
     ax.grid(visible=False)
     ax.set_title(_title(name, "估值水位: 当前值处于样本区间的位置 (◆)"),
                  color=_FG, fontsize=14, pad=26, loc="left")
-    span = f"{rows[0].sample[0].period}~{rows[0].sample[-1].period}"
+    span = rows[0].span
     # 脚注放独立底边带, 与 x 轴刻度错层 (证据 eid 列表较长, 避免与刻度数字叠压)
     fig.subplots_adjust(bottom=0.30)
     fig.text(0.99, 0.04, _note(used, f"样本区间 {span}"),
              ha="right", va="bottom", fontsize=8.5, color=_DIM)
     path = out_dir / "ch10_valuation.png"
-    _finish(fig, path, "估值水位", note="")
+    _finish1080(fig, path, "估值水位", note="")
     return FigureOut(path, 10, "章末插入 · 估值水位 (PE/PB 区间位置)")
 
 
