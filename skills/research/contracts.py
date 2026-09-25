@@ -267,7 +267,7 @@ def validate_draft(draft: Draft, facts: List[Fact], views: List[View]) -> List[s
 
 
 def pack_stats(facts: List[Fact], views: List[View]) -> Dict[str, Any]:
-    """证据包统计: 按来源前缀 (T=tushare/A=annual/R=reports) 与期间分布 — 供 T09 评分卡与调试。"""
+    """证据包统计: 按来源前缀 (T=tushare/A=annual/R=reports)/期间/观点机构分布 — 供 T09 评分卡与调试。"""
     def kind_of(ref: str) -> str:
         if ref.startswith("T:"):
             return "tushare"
@@ -287,15 +287,19 @@ def pack_stats(facts: List[Fact], views: List[View]) -> Dict[str, Any]:
         bump(facts_by_period, f.period or "unknown")
     views_by_kind: Dict[str, int] = {}
     views_by_period: Dict[str, int] = {}
+    views_by_org: Dict[str, int] = {}
     for v in views:
         bump(views_by_kind, kind_of(v.vid))
         bump(views_by_period, v.period or "unknown")
+        bump(views_by_org, v.org or "unknown")
     return {
         "fact_count": len(facts),
         "view_count": len(views),
         "numeric_fact_count": sum(1 for f in facts if f.value is not None),
         "facts_by_kind": facts_by_kind,
         "views_by_kind": views_by_kind,
+        # 机构覆盖分布 (观点多样性供评分卡): 计数降序、同数按名称升序
+        "views_by_org": dict(sorted(views_by_org.items(), key=lambda kv: (-kv[1], kv[0]))),
         "facts_by_period": dict(sorted(facts_by_period.items())),
         "views_by_period": dict(sorted(views_by_period.items())),
     }

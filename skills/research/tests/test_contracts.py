@@ -375,6 +375,8 @@ def test_pack_stats():
     assert stats["numeric_fact_count"] == 5        # 定性两条: pe_band / profile
     assert stats["facts_by_kind"] == {"tushare": 5, "annual": 2}
     assert stats["views_by_kind"] == {"reports": 3}
+    # 机构分布: 计数降序 (国泰君安 2 条在前)
+    assert stats["views_by_org"] == {"国泰君安": 2, "中信证券": 1}
     # 期间分布: 2025A x3 (tushare 营收 + annual 两条), 其余各 1
     assert stats["facts_by_period"]["2025A"] == 3
     assert stats["facts_by_period"]["2025-12-31"] == 1
@@ -383,9 +385,24 @@ def test_pack_stats():
     assert list(stats["facts_by_period"]) == sorted(stats["facts_by_period"])
 
 
+def test_pack_stats_views_by_org_ordering():
+    # 同数按机构名升序 (中 U+4E2D < 国 U+56FD); 空 org 归 unknown
+    views = [
+        _view(vid="R:2001.1", org="国泰君安"),
+        _view(vid="R:2002.1", org="中信证券"),
+        _view(vid="R:2003.1", org="中信证券"),
+        _view(vid="R:2004.1", org="国泰君安"),
+        _view(vid="R:2005.1", org=""),
+    ]
+    stats = pack_stats([], views)
+    assert list(stats["views_by_org"]) == ["中信证券", "国泰君安", "unknown"]
+    assert stats["views_by_org"] == {"中信证券": 2, "国泰君安": 2, "unknown": 1}
+
+
 def test_pack_stats_empty_and_unknown_prefix():
     stats = pack_stats([], [])
     assert stats["fact_count"] == 0 and stats["facts_by_kind"] == {}
+    assert stats["views_by_org"] == {}
     stats2 = pack_stats([_fact(eid="X:bad.prefix", period="")], [])
     assert stats2["facts_by_kind"] == {"other": 1}
     assert stats2["facts_by_period"] == {"unknown": 1}
