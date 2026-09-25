@@ -341,6 +341,51 @@ def _fetch_extra_series(registry: Any, stock: str,
     return series
 
 
+# 行情快照指标 (query_financials 行情分支仅返回最近30天宽列, 不支持年度取点;
+# 禁直写 SQL 约束下多年估值/市值时序不可达, 以最新交易日的现值口径补充)
+_MARK_SNAP = [
+    {"slug": "val_mv", "cn": "总市值", "unit": "亿元", "bare": "total_mv",
+     "wan": True, "src": "stock.daily_basic.total_mv"},
+    {"slug": "val_circ_mv", "cn": "流通市值", "unit": "亿元", "bare": "circ_mv",
+     "wan": True, "src": "stock.daily_basic.circ_mv"},
+    {"slug": "val_close", "cn": "收盘价", "unit": "元", "bare": "close",
+     "wan": False, "src": "stock.daily.close"},
+]
+
+
+def _facts_market_snapshot(registry: Any, stock: str) -> List[Fact]:
+    """最新交易日的市值/收盘价现值 (估值水位由画像 valuation 板块覆盖)"""
+    env = registry.call("query_financials", {
+        "mode": "single", "stocks": [stock], "metrics": ["总市值"]})
+    if not env.get("ok"):
+        logger.warning(f"市值快照补查失败: {str(env.get('error', ''))[:80]}")
+        return []
+    rows = ((env.get("data") or {}).get("data")) or []
+    row = next((r for r in rows if r.get("trade_date")), None)
+    if not row:
+        return []
+    td = str(row["trade_date"])
+    name = str(row.get("stock_name") or stock)
+    out = []
+    for m in _MARK_SNAP:
+        raw = _fnum(row.get(m["bare"]))
+        if raw is None:
+            continue
+        if m["wan"]:
+            val, conf = round(raw / 1e4, 4), 0.9   # daily_basic 万元 → 亿元
+            note = "|原值单位万元,÷1e4折亿元"
+        else:
+            val, conf = round(raw, 4), 1.0
+            note = ""
+        out.append(Fact(
+            eid=f"T:tushare.{m['slug']}.{td}",
+            content=f"{name} {td} {m['cn']} {val:.2f}{m['unit']}",
+            source=f"工具query_financials(mode=single,metrics=[总市值]行情宽列)"
+                   f"|{m['src']}{note}",
+            period=td, value=val, unit=m["unit"], confidence=conf))
+    return out
+
+
 # ---------- 主入口 ----------
 
 def collect_tushare_facts(stock: str, years: int = 5,
@@ -374,6 +419,7 @@ def collect_tushare_facts(stock: str, years: int = 5,
     facts += _facts_valuation(sections, snap)
     facts += _facts_holders(sections)
     facts += _facts_industry(sections, name, ts_code, snap)
+    facts += _facts_market_snapshot(registry, stock)
     for f in facts:
         f.ts_code = ts_code
 
@@ -423,6 +469,9 @@ def _build_meta(profile: Dict[str, Any], years: int, facts: List[Fact],
                     "无年报年份按实际季报期标注(Q1/H1/Q3 均为年初至期末累计); "
                     "金额字段原值单位元已÷1e8折算亿元(confidence=0.9, source注明); "
                     "期间标签 YYYYA=年报 YYYYH1=中报 YYYYQ1/Q3=季报"),
+        "valuation_note": ("估值水位=画像valuation板块(PE/PB现值+近3年分位); 市值为最新交易日现值"
+                           "(万元÷1e4折亿); 多年估值/市值年度时序在禁直写SQL约束下不可达"
+                           "(query_financials行情分支仅近30天宽列)"),
         "excluded": ("画像中 forecasts/verification/reports/risk/regime 板块未纳入: "
                      "属观点/判断层 (T04/T09 职责), 本分片纯事实层"),
     }

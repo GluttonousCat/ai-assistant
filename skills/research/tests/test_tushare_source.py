@@ -87,6 +87,15 @@ def _extra_rows():
                 row[b] = vals[b][i]
             rows.append(row)
         table[tuple(m["query"] for m in batch)] = rows
+    # 行情快照 (总市值): 最新 2 个交易日, 最新在前
+    table[("总市值",)] = [
+        {"trade_date": "2026-09-24", "stock_name": "贵州茅台", "close": 1470.5,
+         "pe_ttm": 18.99, "pb": 7.5, "total_mv": 18445100.0,
+         "circ_mv": 18445100.0, "turnover_rate": 0.31},
+        {"trade_date": "2026-09-23", "stock_name": "贵州茅台", "close": 1465.0,
+         "pe_ttm": 18.92, "pb": 7.47, "total_mv": 18376050.0,
+         "circ_mv": 18376050.0, "turnover_rate": 0.28},
+    ]
     return table
 
 
@@ -299,10 +308,28 @@ def test_save_and_load_roundtrip(shard, tmp_path):
     assert shard.meta["path"] == str(path)
 
 
+def test_market_snapshot_facts(shard):
+    """市值快照: 万元÷1e4折亿 confidence=0.9, 收盘价直引 1.0, 取最新交易日"""
+    by = {f.eid: f for f in shard.facts}
+    mv = by["T:tushare.val_mv.2026-09-24"]
+    assert mv.value == pytest.approx(1844.51, abs=0.01)
+    assert mv.unit == "亿元" and mv.confidence == 0.9
+    assert "÷1e4" in mv.source and "stock.daily_basic.total_mv" in mv.source
+    assert mv.period == "2026-09-24"
+    close = by["T:tushare.val_close.2026-09-24"]
+    assert close.value == pytest.approx(1470.5)
+    assert close.confidence == 1.0 and close.unit == "元"
+    assert "T:tushare.val_mv.2026-09-23" not in by   # 非最新交易日不取
+
+
 def test_fetch_batches_called(tmp_path, fake_profile):
     reg = FakeRegistry(_extra_rows())
     collect_tushare_facts("贵州茅台", years=5, out_dir=tmp_path,
                           profile=fake_profile, registry=reg)
     fin_calls = [c for c in reg.calls if c[0] == "query_financials"]
-    assert len(fin_calls) == len(_EXTRA_BATCHES)
-    assert all("最近5年" in c[1]["time"] for c in fin_calls)
+    batch_calls = [c for c in fin_calls
+                   if c[1].get("metrics") != ["总市值"]]
+    assert len(batch_calls) == len(_EXTRA_BATCHES)
+    assert all("最近5年" in c[1]["time"] for c in batch_calls)
+    # 行情快照单独一次 (无 time 参数)
+    assert any(c[1].get("metrics") == ["总市值"] for c in fin_calls)
