@@ -155,7 +155,7 @@ def test_valid_shards(shard):
 
 
 def test_valid_period_formats():
-    for p in ["2025", "2025A", "2025H1", "2025Q1", "2025Q4", "2025-12-31", "1999-01-01"]:
+    for p in ["2025", "2025A", "2026E", "2025H1", "2025Q1", "2025Q4", "2025-12-31", "1999-01-01"]:
         assert valid_period(p), p
 
 
@@ -212,7 +212,7 @@ def test_invalid_view_publish_date_empty():
 
 
 @pytest.mark.parametrize("period", ["2025年", "FY2025", "2025Q5", "2025-13-01",
-                                    "2025-02-30", "2025-1-1", "25A", ""])
+                                    "2025-02-30", "2025-1-1", "25A", "2026EE", ""])
 def test_invalid_period_format(period):
     shard = _shard_tushare()
     shard.facts[0].period = period
