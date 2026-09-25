@@ -2,7 +2,7 @@
 """T06 草稿生成器测试 — 全部离线: 注入 FakeLLM, 不连真实模型/DB。
 
 分组:
-  test_prompt_lib    提示词库加载 (T05 未合并时回退 stub, 10 章契约仍成立)
+  test_template      T05 提示词库契约 (10 章/假设章常量/文风内嵌)
   test_select        wants 证据路由与未命中回退
   test_digest        摘要化: 条数上限/期间排序/字符截断
   test_resolve       股票名/代码 → 目录解析
@@ -17,6 +17,7 @@ import pytest
 
 from skills.research.compose import generator as gen
 from skills.research.contracts import (
+
     Draft,
     EvidenceShard,
     Fact,
@@ -24,6 +25,7 @@ from skills.research.contracts import (
     load_draft,
     save_shard,
 )
+from skills.research.prompts_chapters import HYPOTHESES_CHAPTER_NO
 
 # ---------- fixtures ----------
 
@@ -88,7 +90,7 @@ class FakeLLM:
                 "中金(2026-03-01)认为高端白酒需求稳健[V:R:101.1]。"
                 "净利润达862亿元。"                     # 无引用数字 → 应出 unverified-number
                 "本报告覆盖2021-2025年经营历史。")       # 纯年份 → 不应告警
-        if no == 8 and self.hyp_with_json:
+        if no == HYPOTHESES_CHAPTER_NO and self.hyp_with_json:
             body += "\n```json\n" + json.dumps(CH10_JSON, ensure_ascii=False) + "\n```"
         return body
 
@@ -104,29 +106,21 @@ class FakeLLM:
         return self._body(no)
 
 
-# ---------- 提示词库 ----------
+# ---------- 提示词库 (T05 真模块, generator 直接 import) ----------
 
-def test_prompt_lib_has_ten_chapters():
-    chapters, style, fn, hyp_no = gen._load_prompt_lib()
-    assert 1 <= hyp_no <= 10
-    assert len(chapters) == 10
-    for ch in chapters:
+def test_chapters_template_contract():
+    from skills.research.prompts_chapters import CHAPTERS, chapter_prompt
+    from skills.research.prompts_style import STYLE_PROMPT
+    assert len(CHAPTERS) == 10
+    assert 1 <= HYPOTHESES_CHAPTER_NO <= 10
+    for ch in CHAPTERS:
         assert ch["title"] and ch["question"] and ch["wants"] and ch["structure"]
         assert int(ch["no"]) in range(1, 11)
-    assert "三层分离" in style and "[E:eid]" in style and "待验证" in style
-    out = fn(chapters[0], "事实摘要X", "观点摘要Y")
-    assert "事实摘要X" in out and "观点摘要Y" in out and chapters[0]["question"] in out
-
-
-def test_prompts_stub_is_usable_fallback():
-    """T05 未合并时 (本分支独立检出) 的回退保障: stub 自身满足 10 章契约。"""
-    from skills.research.compose import _prompts_stub as stub
-    assert len(stub.CHAPTERS) == 10
-    assert stub.HYPOTHESES_CHAPTER_NO == 8
-    assert "三层分离" in stub.STYLE_PROMPT
-    out = stub.chapter_prompt(stub.CHAPTERS[0], "F", "V")
-    assert "F" in out and "V" in out
-    assert "研究假设" in stub.chapter_prompt(stub.CHAPTERS[7], "F", "V")   # 假设章注入 JSON 要求
+    assert "三层分离" in STYLE_PROMPT and "[E:eid]" in STYLE_PROMPT and "待验证" in STYLE_PROMPT
+    out = chapter_prompt(CHAPTERS[0], "事实摘要X", "观点摘要Y")
+    assert "事实摘要X" in out and "观点摘要Y" in out and CHAPTERS[0]["question"] in out
+    assert STYLE_PROMPT.strip()[:60] in out                     # 文风已内嵌, generator 不再外拼
+    assert "研究假设" in chapter_prompt(CHAPTERS[HYPOTHESES_CHAPTER_NO - 1], "F", "V")
 
 
 # ---------- 证据路由 ----------
@@ -229,13 +223,13 @@ def test_generate_draft_offline(tmp_path):
     assert "本报告覆盖2021-2025年经营历史" in ch1.body_md
     assert len(llm.prompts) == 10 and "三层分离" in llm.prompts[0]
     assert llm.prompts[0].count("三层分离") == 1    # T05 chapter_prompt 已内嵌文风, 不得重复拼接
-    assert "研究假设" in llm.prompts[7]                      # 第 8 章 (假设章) JSON 要求已随模板注入
+    assert "研究假设" in llm.prompts[HYPOTHESES_CHAPTER_NO - 1]   # 假设章 JSON 要求已随模板注入
     assert all("T:tushare.roe.2019A" not in p for p in llm.prompts)   # 窗口外证据已过滤
     # 假设回填: body 不再含 JSON 围栏
     assert len(draft.hypotheses) == 1
     h = draft.hypotheses[0]
     assert h.hid == "H1" and h.indicators and h.related_eids == ["T:tushare.revenue.2025A"]
-    assert "```" not in draft.chapters[7].body_md           # 假设章正文已剥离 JSON 围栏
+    assert "```" not in draft.chapters[HYPOTHESES_CHAPTER_NO - 1].body_md  # 假设章正文已剥离 JSON 围栏
     # flags 机制: 无引用数字被点名, 合法引用不产生硬伤
     assert any(f.startswith("unverified-number") and "862" in f for f in draft.flags)
     assert not [f for f in draft.flags if f.startswith(("ghost-citation", "contract-invalid"))]

@@ -15,8 +15,8 @@ CLI:
     python -m skills.research.compose.generator 贵州茅台
     python -m skills.research.compose.generator 600519.SH --years 5
 
-提示词库来自 T05 (prompts_chapters/prompts_style, 兼容其 STYLE_PROMPT 内嵌与
-HYPOTHESES_CHAPTER_NO 常量); 未合并期间回退本包 _prompts_stub。
+提示词库直接 import T05 (prompts_chapters.CHAPTERS/chapter_prompt/HYPOTHESES_CHAPTER_NO,
+chapter_prompt 已内嵌 STYLE_PROMPT)。
 测试与离线场景通过 llm= 参数注入桩, 不触真实模型。
 """
 from __future__ import annotations
@@ -43,6 +43,11 @@ from skills.research.contracts import (
     save_draft,
     validate_draft,
 )
+from skills.research.prompts_chapters import (
+    CHAPTERS,
+    HYPOTHESES_CHAPTER_NO,
+    chapter_prompt,
+)
 
 logger = get_logger(__name__)
 
@@ -52,7 +57,6 @@ FACT_ITEM_CAP = 60         # 事实/观点并存时的事实份额 (观点保底
 VIEW_ITEM_CAP = 20
 DIGEST_CHAR_CAP = 30000
 
-HYPOTHESES_CHAPTER_NO = 8           # 假设章默认值; 优先采信 T05 模块同名常量 (见 _load_prompt_lib)
 RETRY_TIMES = 2                     # 失败章重试 1 次 (共 2 次尝试)
 
 _TS_CODE_RE = re.compile(r"^\d{6}\.(SH|SZ|BJ)$", re.I)
@@ -70,38 +74,6 @@ _HYPOTHESES_INSTRUCTION = """
 围栏外不要再输出任何解释。"""
 
 _RETRY_NUDGE = "\n\n(注意: 上次调用失败或输出为空, 请严格按输出约定重新生成本章正文。)"
-
-
-# ---------- T05 提示词库加载 ----------
-
-def _load_prompt_lib() -> Tuple[List[Dict[str, Any]], str, Any, int]:
-    """加载 T05 提示词库 (CHAPTERS / STYLE_PROMPT / chapter_prompt / 假设章序)。
-
-    T05 分支未合并时回退 compose/_prompts_stub; T05 合并后删除 stub 与本回退。
-    chapter_prompt 与 STYLE_PROMPT 允许落在两个模块任一处, 以实际定义者为准;
-    假设章序采信模板模块的 HYPOTHESES_CHAPTER_NO 常量 (T05 落库为 8), 缺省回退本模块默认。
-    """
-    try:
-        from skills.research import prompts_chapters as pc
-    except ImportError:
-        from skills.research.compose import _prompts_stub as pc
-    try:
-        from skills.research import prompts_style as ps
-    except ImportError:
-        from skills.research.compose import _prompts_stub as ps
-
-    chapters = list(getattr(pc, "CHAPTERS", None) or [])
-    style = getattr(ps, "STYLE_PROMPT", None) or getattr(pc, "STYLE_PROMPT", "")
-    fn = getattr(pc, "chapter_prompt", None) or getattr(ps, "chapter_prompt", None)
-    if not chapters or not fn:
-        raise RuntimeError("T05 提示词库不可用: CHAPTERS 或 chapter_prompt 缺失 "
-                           "(检查 skills/research/prompts_chapters.py)")
-    hyp_no = getattr(pc, "HYPOTHESES_CHAPTER_NO", None) \
-        or getattr(ps, "HYPOTHESES_CHAPTER_NO", None) or HYPOTHESES_CHAPTER_NO
-    nos = {int(c["no"]) for c in chapters}
-    if int(hyp_no) not in nos:
-        hyp_no = HYPOTHESES_CHAPTER_NO
-    return chapters, str(style), fn, int(hyp_no)
 
 
 # ---------- 股票/目录解析 ----------
@@ -263,18 +235,15 @@ def build_digest(ch_no: int, facts: List[Fact], views: List[View],
 
 # ---------- 章节生成 ----------
 
-def _generate_chapter_body(ch: Dict[str, Any], style: str, prompt_fn: Any,
-                           facts_digest: str, views_digest: str, hyp_no: int,
-                           llm: Any) -> Tuple[str, str]:
+def _generate_chapter_body(ch: Dict[str, Any], facts_digest: str,
+                           views_digest: str, llm: Any) -> Tuple[str, str]:
     """单章 LLM 调用 (非流式): 成功返回 (body, ""); 两次尝试均失败返回 ("", 原因)。
 
-    T05 的 chapter_prompt 已内嵌 STYLE_PROMPT (检测到即不再外层重复拼接);
-    假设章 prompt 若未含假设 JSON 要求 (模板缺失/回退 stub), 追加兜底指令。
+    T05 的 chapter_prompt 已内嵌 STYLE_PROMPT 与假设章 JSON 指令;
+    若模板日后缺失假设 JSON 要求, 追加兜底指令 (正常不触发)。
     """
-    prompt = prompt_fn(ch, facts_digest, views_digest)
-    if style and style.strip()[:60] and style.strip()[:60] not in prompt:
-        prompt = f"{style.strip()}\n\n{prompt}"
-    if int(ch["no"]) == hyp_no and ("假设" not in prompt or "```json" not in prompt):
+    prompt = chapter_prompt(ch, facts_digest, views_digest)
+    if int(ch["no"]) == HYPOTHESES_CHAPTER_NO and ("假设" not in prompt or "```json" not in prompt):
         prompt += _HYPOTHESES_INSTRUCTION
     last_err = ""
     for attempt in range(1, RETRY_TIMES + 1):
@@ -384,7 +353,6 @@ def generate_draft(stock: str, years: int = 5,
     if not facts and not views:
         raise ValueError(f"{rdir} 内无 {floor} 年后的证据, 拒绝生成空稿 (可调大 years)")
 
-    chapters_tpl, style, prompt_fn, hyp_no = _load_prompt_lib()
     if llm is None:
         from harness.llm import get_agent_llm     # 懒加载: 离线测试不初始化 OpenAI 客户端
         llm = get_agent_llm(timeout=300.0)        # 长文+思考生成, 默认 120s 偏紧
@@ -392,14 +360,13 @@ def generate_draft(stock: str, years: int = 5,
     flags: List[str] = []
     chapters: List[Chapter] = []
     hypotheses: List[Hypothesis] = []
-    for ch in chapters_tpl:
+    for ch in CHAPTERS:
         no = int(ch["no"])
         sel_f, sel_v, sel_flags = select_chapter_evidence(ch.get("wants", []), facts, views)
         flags += sel_flags
         facts_digest, views_digest, dflags = build_digest(no, sel_f, sel_v)
         flags += dflags
-        body, err = _generate_chapter_body(ch, style, prompt_fn, facts_digest, views_digest,
-                                           hyp_no, llm)
+        body, err = _generate_chapter_body(ch, facts_digest, views_digest, llm)
         if err:
             flags.append(f"chapter-failed: 第{no}章<{ch['title']}> 跳过 ({err})")
             continue
@@ -414,7 +381,8 @@ def generate_draft(stock: str, years: int = 5,
         chapters.append(Chapter(no=no, title=str(ch["title"]), body_md=body, used_eids=used))
         logger.info("第%s章<%s>完成: %d 字, 引用 %d 处", no, ch["title"], len(body), len(used))
     if not hypotheses:
-        flags.append(f"hypotheses-missing: 第{hyp_no}章(假设章) 未解析出假设 JSON 数组")
+        flags.append(f"hypotheses-missing: 第{HYPOTHESES_CHAPTER_NO}章(假设章) "
+                     f"未解析出假设 JSON 数组")
 
     draft = Draft(ts_code=ts_code, name=name,
                   generated_at=datetime.now().isoformat(timespec="seconds"),
@@ -424,7 +392,7 @@ def generate_draft(stock: str, years: int = 5,
     draft.flags = _dedup_flags(flags)
     save_draft(draft, rdir / "draft.json")
     logger.info("草稿完成: %d/%d 章, %d 假设, %d flags → %s",
-                len(chapters), len(chapters_tpl), len(hypotheses), len(draft.flags),
+                len(chapters), len(CHAPTERS), len(hypotheses), len(draft.flags),
                 rdir / "draft.json")
     return draft
 
