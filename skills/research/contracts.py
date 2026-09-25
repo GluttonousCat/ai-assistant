@@ -174,9 +174,10 @@ def research_dir(root_out: Path, ts_code: str) -> Path:
 
 # ---------- 校验与统计 (T01: 分片/草稿进入下一 Stage 前的机器检查, 纯逻辑) ----------
 
-# period 合法格式: YYYY / YYYYA / YYYYH1 / YYYYQn(n=1-4) / YYYY-MM-DD (真实日期)
+# period 合法格式: YYYY / YYYYA / YYYYE / YYYYH1 / YYYYQn(n=1-4) / YYYY-MM-DD (真实日期)
+# YYYYE = 研报盈利预测估计期间 (如 2026E, T04 契约变更 2026-09-25)
 _PERIOD_RE = re.compile(
-    r"^(?:\d{4}|\d{4}A|\d{4}H1|\d{4}Q[1-4]"
+    r"^(?:\d{4}|\d{4}A|\d{4}E|\d{4}H1|\d{4}Q[1-4]"
     r"|\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01]))$"
 )
 _HAS_DIGIT = re.compile(r"\d")
@@ -187,7 +188,7 @@ _VIEW_VID_PREFIX = "R:"             # R:研报
 
 
 def valid_period(period: str) -> bool:
-    """期间格式合法: YYYY / YYYYA / YYYYH1 / YYYYQn / YYYY-MM-DD (月日须真实)"""
+    """期间格式合法: YYYY / YYYYA / YYYYE / YYYYH1 / YYYYQn / YYYY-MM-DD (月日须真实)"""
     if not _PERIOD_RE.match(period):
         return False
     if len(period) == 10:           # 日期型再挡 02-30 之类"格式对但非真实日期"
@@ -218,7 +219,7 @@ def validate_shard(shard: EvidenceShard) -> List[str]:
             errors.append(f"{where} layer 必须为 'fact', 实为 {f.layer!r}")
         if f.period and not valid_period(f.period):
             errors.append(f"{where} period 格式非法: {f.period!r} "
-                          f"(合法: YYYY/YYYYA/YYYYH1/YYYYQn/YYYY-MM-DD)")
+                          f"(合法: YYYY/YYYYA/YYYYE/YYYYH1/YYYYQn/YYYY-MM-DD)")
         if _HAS_DIGIT.search(f.content) and f.value is None and not f.unit:
             errors.append(f"{where} content 含数字但 value 与 unit 均空: {f.eid!r}")
     seen_vids: set = set()
@@ -235,7 +236,7 @@ def validate_shard(shard: EvidenceShard) -> List[str]:
             errors.append(f"{where} View.publish_date 为空 (观点必须可定位日期)")
         if v.period and not valid_period(v.period):
             errors.append(f"{where} period 格式非法: {v.period!r} "
-                          f"(合法: YYYY/YYYYA/YYYYH1/YYYYQn/YYYY-MM-DD)")
+                          f"(合法: YYYY/YYYYA/YYYYE/YYYYH1/YYYYQn/YYYY-MM-DD)")
     return errors
 
 
@@ -267,7 +268,7 @@ def validate_draft(draft: Draft, facts: List[Fact], views: List[View]) -> List[s
 
 
 def pack_stats(facts: List[Fact], views: List[View]) -> Dict[str, Any]:
-    """证据包统计: 按来源前缀 (T=tushare/A=annual/R=reports) 与期间分布 — 供 T09 评分卡与调试。"""
+    """证据包统计: 按来源前缀 (T=tushare/A=annual/R=reports)/期间/观点机构分布 — 供 T09 评分卡与调试。"""
     def kind_of(ref: str) -> str:
         if ref.startswith("T:"):
             return "tushare"
@@ -287,15 +288,19 @@ def pack_stats(facts: List[Fact], views: List[View]) -> Dict[str, Any]:
         bump(facts_by_period, f.period or "unknown")
     views_by_kind: Dict[str, int] = {}
     views_by_period: Dict[str, int] = {}
+    views_by_org: Dict[str, int] = {}
     for v in views:
         bump(views_by_kind, kind_of(v.vid))
         bump(views_by_period, v.period or "unknown")
+        bump(views_by_org, v.org or "unknown")
     return {
         "fact_count": len(facts),
         "view_count": len(views),
         "numeric_fact_count": sum(1 for f in facts if f.value is not None),
         "facts_by_kind": facts_by_kind,
         "views_by_kind": views_by_kind,
+        # 机构覆盖分布 (观点多样性供评分卡): 计数降序、同数按名称升序
+        "views_by_org": dict(sorted(views_by_org.items(), key=lambda kv: (-kv[1], kv[0]))),
         "facts_by_period": dict(sorted(facts_by_period.items())),
         "views_by_period": dict(sorted(views_by_period.items())),
     }
