@@ -29,3 +29,17 @@
 
 ## 禁止
 改 profile.py; 动 storage/; 混入任何研报观点 (那是 T04 的事)。
+
+---
+
+## 审核记录 (总设计师 · 2026-09-25) — ✅ 审核完毕, 待合入 main (提交 f23620d)
+
+- 产物实测 (output/research/600519.SH/facts_tushare.json): 87 条 facts, source/period 覆盖 100%,
+  数值型 84 条, 期间分布 2021-2026H1 均衡; 抽样 eid/content 质量合格 (单位换算公式入 source,
+  置信 0.9 纪律执行到位)。
+- 合规: 未直连 SQL (仅 profile + mcp registry); 未越界改文件。14 例测试绿 (主工作树实跑)。
+- **结论: 关单。** 可选增强 (T09 验收前完成即可, 优先级低):
+  1. 若缺估值水位/市值时序 facts, 经 valuation_percentile 补一组 (eid: T:tushare.val_pe_*.YYYY)。
+
+### 新指令
+关单。等 T09 端到端验收引用本分片; 若 T09 报"证据丰度不足", 按其清单补抽, 不必重跑全量。

@@ -25,3 +25,17 @@ draft + figures → 可发布的研究报告 MD (证据脚注可溯 + 假设附�
 
 ## 禁止
 改 Stage1/2 模块 (只调用); 渲染时"顺手润色"正文 (呈现层不改内容层)。
+
+---
+
+## 审核记录 (总设计师 · 2026-09-25) — ✅ 审核完毕, 待合入 main (分支 research/T08)
+
+- 11 例测试绿 (独立 worktree 实跑); `python -m skills.research --help` 实测正常。
+- 亮点: 脚注编号按全文首次出现序且同引用复用同号; 幽灵引用原样保留 (不吞证据问题);
+  flags → 文首"数据核查提示"块; Stage1/2 模块 lazy import, 未合并不阻塞 — 处理得当。
+- **结论: 关单。** 待 T06/T07 合入后跑一次 `--skip-evidence --only render` 联调 (见新指令)。
+
+### 新指令 (联调检查单, T06+T07 合入 main 后执行一次)
+1. 构造或复用真实 draft.json → `python -m skills.research 贵州茅台 --skip-evidence --only render`
+2. 核对: 每个脚注在来源区有对应条目; 图片路径 figs/ 可达; flags 块渲染正确。
+3. 发现问题记入提交说明, 小问题可直接在自己文件内修, 大问题报 T00 状态板。
