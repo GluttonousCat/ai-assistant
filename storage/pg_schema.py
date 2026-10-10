@@ -13,6 +13,9 @@ schema: stock
 
 from contextlib import contextmanager
 
+import psycopg2
+
+from core.config import get_config
 from core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -987,8 +990,6 @@ def ddl_cursor():
     ALTER/CREATE 持表级锁, 放业务事务里会一直锁到事务提交 (LLM 调用期间整表被堵),
     所有 ensure 类 DDL 一律走本连接立即提交。
     """
-    import psycopg2
-    from core.config import get_config
     cfg = get_config().pg_config
     conn = psycopg2.connect(
         host=cfg["host"], port=cfg["port"], user=cfg["user"],

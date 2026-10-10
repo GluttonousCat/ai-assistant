@@ -1,39 +1,23 @@
 # -*- encoding: utf-8 -*-
-"""
-Milvus 向量库 Collection 定义 (角色对应 pg_schema.py 之于 PG)
 
-分工: PG 存结构化事实 (fin.report_meta 一行 = 一篇研报), Milvus 存非结构化语义
-(COLLECTION_REPORT_CHUNKS 一行 = 一个正文分块); report_id 是两库连接键 ——
-PG 为主、Milvus 为从: 删研报须连带 delete_by_expr("report_id == ..."),
-无外键级联, 由上层 (jobs/merge_report_duplicates 等) 负责成对清理。
-
-与 PG 的关键差异 (DDL 语义):
-- 维度不可 ALTER: embedding 维度 = MILVUS_EMBED_DIM, 与 embedding 模型强耦合,
-  换模型必须 drop + rebuild + 重灌向量 (rebuild_report_chunks);
-- 标量字段无 NULL: 未知的 ts_code/market 用空串 '' 哨兵, 过滤时注意
-  (ts_code == "" 不是 IS NULL)。
-"""
 from __future__ import annotations
 
 from typing import Optional
+
+from pymilvus import DataType, MilvusClient
 
 from core.config import get_config
 from core.logger import get_logger
 
 logger = get_logger(__name__)
 
-# 研报正文分块 (语义检索/RAG 的主 collection)
 COLLECTION_REPORT_CHUNKS = "report_chunks"
 
-# 分块正文上限 (VARCHAR max_length; 与上层分块器约定一致, 超长截断在分块时做)
 CHUNK_TEXT_MAX = 16384
 
 
 def build_report_chunks_schema(dim: int):
     """report_chunks 的字段定义 (确定性主键 "{report_id}:{chunk_idx}", upsert 幂等)"""
-    from pymilvus import DataType
-    from pymilvus import MilvusClient
-
     schema = MilvusClient.create_schema(auto_id=False, enable_dynamic_field=False)
     schema.add_field("chunk_id", DataType.VARCHAR, is_primary=True, max_length=128)
     schema.add_field("report_id", DataType.INT64)                  # -> fin.report_meta.report_id

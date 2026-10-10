@@ -1,39 +1,22 @@
 # -*- encoding: utf-8 -*-
-"""
-Milvus 向量库底层封装 (角色对应 pg.py 之于 PG)
-
-- 单例连接: MilvusClient 进程内一份 (gRPC 长连接, 自身线程安全,
-  无连接耗尽问题 —— 不需要 PG 式连接池)
-- 惰性连接 + 探活: milvus_ready() 在服务端未起时返回 False 而非抛错,
-  向量检索属增强功能, 服务不在时上层降级、不阻塞主链路 (PG 不可用才是故障)
-- 通用执行器: insert/upsert/search/delete/query/count;
-  collection 的字段定义在 storage.milvus_schema (业务语义不在这层)
-- 向量化不在这层: embedding 由上层 (skill/tool) 用模型生成后传入
-
-服务端部署 (Windows 无 Milvus Lite, 须 Docker 跑 standalone):
-    官方 standalone compose (etcd+minio+milvus 三容器) 见 Milvus 文档;
-    起来后 .env 配 MILVUS_URI=http://127.0.0.1:19530 即可。
-
-用法:
-    python -m storage.milvus           # 探活 + collection 状态汇总
-    python -m storage.milvus --smoke   # 全链路冒烟: 假向量写入 -> 检索 -> 删除
-"""
 from __future__ import annotations
 
+import random
 import threading
 from typing import Any, Dict, List, Optional, Sequence
+
+from pymilvus import MilvusClient
 
 from core.config import get_config
 from core.logger import get_logger
 
-from storage.milvus_schema import COLLECTION_ENSURES
+from storage.milvus_schema import COLLECTION_ENSURES, COLLECTION_REPORT_CHUNKS
 
 logger = get_logger(__name__)
 
 _client = None
 _lock = threading.Lock()
 _not_ready_warned = False
-# 进程内已 ensure 过的 collection (与 pg_schema._report_analysis_cols_ensured 同款惰性)
 _ensured: set = set()
 
 
@@ -45,14 +28,13 @@ def get_milvus():
     with _lock:
         if _client is not None:
             return _client
-        from pymilvus import MilvusClient
         cfg = get_config().milvus_config
         kwargs: Dict[str, Any] = {"uri": cfg["uri"], "db_name": cfg["db_name"]}
         if cfg["token"]:
             kwargs["token"] = cfg["token"]
         try:
             _client = MilvusClient(**kwargs)
-            _client.list_collections()  # 探活: 连接串错/服务未起在此暴露
+            _client.list_collections()
         except Exception as e:
             _client = None
             raise RuntimeError(
@@ -98,7 +80,6 @@ def _ensure(collection: str) -> None:
 
 
 # ---------- 通用执行器 (字段语义见 milvus_schema) ----------
-
 def insert_rows(collection: str, rows: List[Dict[str, Any]]) -> int:
     """插入 (主键重复会报错; 灌库幂等请用 upsert_rows)"""
     if not rows:
@@ -179,10 +160,6 @@ def _status() -> None:
 
 def _smoke() -> int:
     """假向量全链路: 写入 -> 检索 -> 清理 (服务端须已启动)"""
-    import random
-
-    from storage.milvus_schema import COLLECTION_REPORT_CHUNKS
-
     if not milvus_ready():
         print("Milvus 不可达, 冒烟终止 (exit 1)")
         return 1
@@ -206,11 +183,3 @@ def _smoke() -> int:
     except Exception as e:
         print(f"冒烟失败: {e}")
         return 1
-
-
-if __name__ == "__main__":
-    import sys
-
-    if "--smoke" in sys.argv:
-        sys.exit(_smoke())
-    _status()
