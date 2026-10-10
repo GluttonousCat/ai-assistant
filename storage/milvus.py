@@ -1,17 +1,21 @@
 # -*- encoding: utf-8 -*-
 from __future__ import annotations
 
+import logging
 import random
 import threading
 from typing import Any, Dict, List, Optional, Sequence
 
 from pymilvus import MilvusClient
 
-from storage.env import milvus_config
-from storage.log import get_logger
-from storage.milvus_schema import COLLECTION_ENSURES, COLLECTION_REPORT_CHUNKS
+from storage.milvus_schema import (
+    COLLECTION_ENSURES,
+    COLLECTION_REPORT_CHUNKS,
+    check_milvus_config,
+    milvus_config,
+)
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 _client: MilvusClient | None = None
 _lock = threading.Lock()
@@ -28,6 +32,8 @@ def get_milvus():
         if _client is not None:
             return _client
         cfg = milvus_config()
+        for problem in check_milvus_config(cfg):
+            logger.warning(f"Milvus 配置异常: {problem}")
         kwargs: Dict[str, Any] = {"uri": cfg["uri"], "db_name": cfg["db_name"]}
         if cfg["token"]:
             kwargs["token"] = cfg["token"]

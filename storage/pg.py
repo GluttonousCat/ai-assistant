@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 import math
+import os
 import threading
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -11,12 +13,35 @@ import psycopg2
 import psycopg2.extras
 from psycopg2.pool import SimpleConnectionPool
 
-from storage.env import pg_config
-from storage.log import get_logger
-
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 _CONN_KW = dict(application_name="ai-assistant")
+
+
+def pg_config() -> Dict[str, Any]:
+    """PG 连接配置 dict (进程 env 直读; .env 由应用侧 core.config 统一加载)"""
+    return {
+        "host": os.environ.get("PG_HOST", "127.0.0.1"),
+        "port": int(os.environ.get("PG_PORT", 5432)),
+        "user": os.environ.get("PG_USER", "postgres"),
+        "password": os.environ.get("PG_PASSWORD", ""),
+        "database": os.environ.get("PG_DATABASE", "data"),
+    }
+
+
+def check_pg_config(cfg: Dict[str, Any]) -> List[str]:
+    """配置检测: 返回问题清单 (空列表 = 通过)"""
+    problems: List[str] = []
+    for key in ("host", "user", "database"):
+        if not str(cfg.get(key) or "").strip():
+            problems.append(f"{key} 为空")
+    try:
+        port = int(cfg.get("port", 0))
+        if not 1 <= port <= 65535:
+            problems.append(f"port 越界: {port}")
+    except (TypeError, ValueError):
+        problems.append(f"port 非数字: {cfg.get('port')!r}")
+    return problems
 
 
 class PgPool:
@@ -38,6 +63,8 @@ class PgPool:
              minconn: int = 1, maxconn: int = 10) -> None:
         """初始化连接池 (可重复调用, 仅首次生效)"""
         cfg = config or pg_config()
+        for problem in check_pg_config(cfg):
+            logger.warning(f"PG 配置异常: {problem}")
         if cls._pool is not None:
             # 连接串变化时重建
             if cls._config == cfg:

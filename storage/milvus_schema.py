@@ -2,14 +2,39 @@
 
 from __future__ import annotations
 
-from typing import Optional
+import logging
+import os
+from typing import Any, Dict, List, Optional
 
 from pymilvus import DataType, MilvusClient
 
-from storage.env import milvus_config
-from storage.log import get_logger
+logger = logging.getLogger(__name__)
 
-logger = get_logger(__name__)
+
+def milvus_config() -> Dict[str, Any]:
+    """Milvus 连接配置 dict (进程 env 直读; .env 由应用侧 core.config 统一加载)"""
+    return {
+        "uri": os.environ.get("MILVUS_URI", "http://127.0.0.1:19530"),
+        "token": os.environ.get("MILVUS_TOKEN", ""),
+        "db_name": os.environ.get("MILVUS_DB", "default"),
+        # 维度与 embedding 模型强耦合 (换模型须 rebuild collection)
+        "embed_dim": int(os.environ.get("MILVUS_EMBED_DIM", 1024)),
+    }
+
+
+def check_milvus_config(cfg: Dict[str, Any]) -> List[str]:
+    """配置检测: 返回问题清单 (空列表 = 通过)"""
+    problems: List[str] = []
+    uri = str(cfg.get("uri") or "")
+    if not (uri.startswith("http://") or uri.startswith("https://")):
+        problems.append(f"uri 非法: {uri!r} (须 http(s)://host:port)")
+    try:
+        dim = int(cfg.get("embed_dim", 0))
+        if dim <= 0:
+            problems.append(f"embed_dim 须为正整数: {dim}")
+    except (TypeError, ValueError):
+        problems.append(f"embed_dim 非数字: {cfg.get('embed_dim')!r}")
+    return problems
 
 COLLECTION_REPORT_CHUNKS = "report_chunks"
 

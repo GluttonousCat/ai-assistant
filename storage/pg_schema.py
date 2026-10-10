@@ -1,11 +1,11 @@
+import logging
 from contextlib import contextmanager
 
 import psycopg2
 
-from storage.env import pg_config
-from storage.log import get_logger
+from storage.pg import pg_config
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 # 支持的数据类型常量
 DDL_STOCK_SCHEMA = """CREATE SCHEMA IF NOT EXISTS stock"""

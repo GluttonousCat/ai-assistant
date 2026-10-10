@@ -123,8 +123,7 @@ class Config:
     def tushare_token(self) -> str:
         return self.env("TUSHARE_TOKEN", "")
 
-    # PG/Milvus 连接配置已随 storage 包解耦迁至 storage/env.py
-    # (pg_config/pg_url/milvus_config 此前仅 storage 消费, 现无调用方)
+    # PG/Milvus 连接配置已内联至 storage 包 (pg.py: pg_config / milvus_schema.py: milvus_config, 进程 env 直读)
 
     @property
     def zsxq_cookie(self) -> str:
