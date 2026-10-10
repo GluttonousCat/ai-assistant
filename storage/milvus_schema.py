@@ -4,21 +4,49 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import yaml
 from pymilvus import DataType, MilvusClient
 
 logger = logging.getLogger(__name__)
 
+_yaml_milvus_cache: Optional[Dict[str, Any]] = None
+
+
+def _yaml_milvus() -> Dict[str, Any]:
+    """config.yaml 的 milvus 段 (进程内读一次; 文件缺失/无该段返回空 dict)"""
+    global _yaml_milvus_cache
+    if _yaml_milvus_cache is None:
+        _yaml_milvus_cache = {}
+        path = Path(__file__).resolve().parent.parent / "config.yaml"
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = yaml.safe_load(f) or {}
+            if isinstance(data.get("milvus"), dict):
+                _yaml_milvus_cache = data["milvus"]
+        except Exception as e:
+            logger.warning(f"config.yaml 读取失败 (Milvus 配置仅用 env/默认值): {e}")
+    return _yaml_milvus_cache
+
 
 def milvus_config() -> Dict[str, Any]:
-    """Milvus 连接配置 dict (进程 env 直读; .env 由应用侧 core.config 统一加载)"""
+    """Milvus 连接配置: env MILVUS_* > config.yaml milvus 段 > 默认值 (项目约定 env > yaml)
+
+    yaml 可配: uri / db_name / embed_dim; token 属敏感信息, 建议只放 .env (MILVUS_TOKEN)。
+    """
+    def _pick(env_key: str, yaml_key: str, default: Any) -> Any:
+        v = os.environ.get(env_key)
+        if v not in (None, ""):
+            return v
+        return _yaml_milvus().get(yaml_key, default)
+
     return {
-        "uri": os.environ.get("MILVUS_URI", "http://127.0.0.1:19530"),
-        "token": os.environ.get("MILVUS_TOKEN", ""),
-        "db_name": os.environ.get("MILVUS_DB", "default"),
-        # 维度与 embedding 模型强耦合 (换模型须 rebuild collection)
-        "embed_dim": int(os.environ.get("MILVUS_EMBED_DIM", 1024)),
+        "uri": str(_pick("MILVUS_URI", "uri", "http://127.0.0.1:19530")),
+        "token": str(_pick("MILVUS_TOKEN", "token", "")),
+        "db_name": str(_pick("MILVUS_DB", "db_name", "default")),
+        "embed_dim": int(_pick("MILVUS_EMBED_DIM", "embed_dim", 1024)),
     }
 
 
@@ -67,7 +95,6 @@ def _vector_index_params(client):
     )
     return index_params
 
-
 def ensure_report_chunks(client, dim: Optional[int] = None) -> bool:
     """幂等建 collection; 返回是否本次新建。
 
@@ -103,7 +130,6 @@ def rebuild_report_chunks(client, dim: Optional[int] = None) -> None:
     ensure_report_chunks(client, dim)
 
 
-# collection -> ensure 函数注册表 (storage.milvus 的通用执行器按名惰性 ensure, 进程内一次)
 COLLECTION_ENSURES = {
     COLLECTION_REPORT_CHUNKS: ensure_report_chunks,
 }
