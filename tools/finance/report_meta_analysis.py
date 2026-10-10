@@ -29,6 +29,7 @@ from typing import Any, Dict, Optional
 from core.config import get_config
 from core.logger import get_logger
 from storage.pg import PgClient
+from storage.pg_schema import ensure_report_analysis_columns
 
 logger = get_logger(__name__)
 
@@ -80,57 +81,18 @@ H股 (港股, 代码 XXXX.HK)
 
 文件名: {filename}"""
 
-# 新列 DDL (幂等; 独立连接立即提交, 避免事务内 DDL 锁表)
-DDL_META_COLS = [
-    ("ALTER TABLE fin.report_meta ADD COLUMN IF NOT EXISTS target VARCHAR(64)",
-     "col", "target"),
-    ("ALTER TABLE fin.report_meta ADD COLUMN IF NOT EXISTS industry VARCHAR(64)",
-     "col", "industry"),
-    ("ALTER TABLE fin.report_meta ADD COLUMN IF NOT EXISTS region VARCHAR(64)",
-     "col", "region"),
-    ("CREATE INDEX IF NOT EXISTS idx_report_meta_industry ON fin.report_meta (industry)",
-     "idx", "idx_report_meta_industry"),
-    ("CREATE INDEX IF NOT EXISTS idx_report_meta_region ON fin.report_meta (region)",
-     "idx", "idx_report_meta_region"),
-]
+# target/industry/region 等增量列 DDL 的单一事实源在
+# storage.pg_schema.DDL_REPORT_ANALYSIS_STATEMENTS (与 LLM 深度提取列同表收敛)
 
 _MARKETS = {"A股", "H股", "台股", "日股", "韩股", "美股", "欧洲股", "东南亚股",
             "商品", "宏观", "其他"}
 # 旧值归一化 (行业/地区不是市场)
 _MARKET_REMAP = {"行业": "其他", "港股": "H股"}
 
-_cols_ensured = False
-
 
 def ensure_meta_columns() -> None:
-    """新列 DDL: 独立连接立即提交, 缺才执行 (进程内只跑一次)"""
-    global _cols_ensured
-    if _cols_ensured:
-        return
-    import psycopg2
-    cfg = get_config().pg_config
-    conn = psycopg2.connect(
-        host=cfg["host"], port=cfg["port"], user=cfg["user"],
-        password=cfg["password"], dbname=cfg["database"], connect_timeout=10,
-        options="-c search_path=stock,fin,public")
-    try:
-        conn.autocommit = True
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT column_name FROM information_schema.columns "
-            "WHERE table_schema='fin' AND table_name='report_meta'")
-        cols = {r[0] for r in cur.fetchall()}
-        cur.execute(
-            "SELECT indexname FROM pg_indexes WHERE schemaname='fin' AND tablename='report_meta'")
-        idx = {r[0] for r in cur.fetchall()}
-        for stmt, kind, key in DDL_META_COLS:
-            exists = (key in idx) if kind == "idx" else (key in cols)
-            if not exists:
-                cur.execute(stmt)
-        cur.close()
-        _cols_ensured = True
-    finally:
-        conn.close()
+    """新列 DDL: 单一事实源在 storage.pg_schema (幂等, 进程内只跑一次)"""
+    ensure_report_analysis_columns()
 
 
 def _get_llm():

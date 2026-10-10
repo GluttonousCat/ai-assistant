@@ -11,6 +11,12 @@ schema: stock
 - sync_meta:      同步水位线 (断点续传)
 """
 
+from contextlib import contextmanager
+
+from core.logger import get_logger
+
+logger = get_logger(__name__)
+
 # 支持的数据类型常量
 DDL_STOCK_SCHEMA = """CREATE SCHEMA IF NOT EXISTS stock"""
 
@@ -378,8 +384,6 @@ CREATE TABLE IF NOT EXISTS fin.fina_indicator (
     end_date         DATE NOT NULL,
     report_type      VARCHAR(2) NOT NULL DEFAULT '1',
     comp_type        VARCHAR(2),
-    ann_date                         VARCHAR(16),
-    end_date                         VARCHAR(16),
     eps                              NUMERIC(20,6),
     dt_eps                           NUMERIC(20,6),
     total_revenue_ps                 NUMERIC(20,6),
@@ -835,7 +839,7 @@ DDL_REPORT_FORECAST = """
 CREATE TABLE IF NOT EXISTS fin.report_forecast (
     id              SERIAL PRIMARY KEY,
     report_id       INTEGER NOT NULL REFERENCES fin.report_meta(report_id),
-    ts_code         VARCHAR(16) NOT NULL,
+    ts_code         VARCHAR(16),               -- 标的代码 (可空: 非A股研报无 ts_code; 旧库 NOT NULL 由 ensure 放宽)
     forecast_type   VARCHAR(32),               -- 预测类型: revenue/net_profit/eps/target_price
     forecast_period VARCHAR(16),               -- 预测期间: 2024/2025E
     forecast_value  NUMERIC(24,4),             -- 预测值
@@ -921,6 +925,119 @@ def init_report_views(pg_client) -> None:
     for ddl in REPORT_VIEW_DDL:
         pg_client.execute(ddl)
     pg_client.conn.commit()
+
+
+# ============================================================
+# 研报表增量列 — 单一事实源
+# ============================================================
+# report_meta / report_forecast 的扩展列与索引曾散落于
+# tools/finance/report_meta_analysis.py (文件名推断列) 与
+# skills/report/skill.py (LLM 深度提取列) 两处 ensure, 重构收敛于此;
+# 两模块的 ensure_* 仅做委托调用。
+
+DDL_REPORT_ANALYSIS_STATEMENTS = [
+    # (语句, 表, 列名或索引名): 缺列/缺索引才执行 (幂等 + 避免无谓 ALTER 锁)
+    # 文件名推断列
+    ("ALTER TABLE fin.report_meta ADD COLUMN IF NOT EXISTS target VARCHAR(64)",
+     "report_meta", "target"),
+    ("ALTER TABLE fin.report_meta ADD COLUMN IF NOT EXISTS industry VARCHAR(64)",
+     "report_meta", "industry"),
+    ("ALTER TABLE fin.report_meta ADD COLUMN IF NOT EXISTS region VARCHAR(64)",
+     "report_meta", "region"),
+    ("CREATE INDEX IF NOT EXISTS idx_report_meta_industry ON fin.report_meta (industry)",
+     "report_meta", "idx_report_meta_industry"),
+    ("CREATE INDEX IF NOT EXISTS idx_report_meta_region ON fin.report_meta (region)",
+     "report_meta", "idx_report_meta_region"),
+    # LLM 深度提取列 (analysis_status 取值: none/done/failed/no_llm)
+    ("ALTER TABLE fin.report_meta ADD COLUMN IF NOT EXISTS analysis_json TEXT",
+     "report_meta", "analysis_json"),
+    ("ALTER TABLE fin.report_meta ADD COLUMN IF NOT EXISTS analysis_status VARCHAR(16) DEFAULT 'none'",
+     "report_meta", "analysis_status"),
+    ("ALTER TABLE fin.report_meta ADD COLUMN IF NOT EXISTS market VARCHAR(8)",
+     "report_meta", "market"),
+    ("ALTER TABLE fin.report_meta ADD COLUMN IF NOT EXISTS symbols TEXT",
+     "report_meta", "symbols"),
+    ("ALTER TABLE fin.report_meta ADD COLUMN IF NOT EXISTS tags_industries TEXT",
+     "report_meta", "tags_industries"),
+    ("ALTER TABLE fin.report_meta ADD COLUMN IF NOT EXISTS tags_regions TEXT",
+     "report_meta", "tags_regions"),
+    ("ALTER TABLE fin.report_meta ADD COLUMN IF NOT EXISTS tags_commodities TEXT",
+     "report_meta", "tags_commodities"),
+    ("ALTER TABLE fin.report_meta ADD COLUMN IF NOT EXISTS tags_themes TEXT",
+     "report_meta", "tags_themes"),
+    ("ALTER TABLE fin.report_meta ADD COLUMN IF NOT EXISTS tags_targets TEXT",
+     "report_meta", "tags_targets"),
+    ("ALTER TABLE fin.report_forecast ADD COLUMN IF NOT EXISTS symbol VARCHAR(32)",
+     "report_forecast", "symbol"),
+    ("ALTER TABLE fin.report_forecast ADD COLUMN IF NOT EXISTS market VARCHAR(8)",
+     "report_forecast", "market"),
+    ("CREATE INDEX IF NOT EXISTS idx_report_meta_market ON fin.report_meta (market)",
+     "report_meta", "idx_report_meta_market"),
+    ("CREATE INDEX IF NOT EXISTS idx_report_forecast_symbol ON fin.report_forecast (symbol)",
+     "report_forecast", "idx_report_forecast_symbol"),
+]
+
+_report_analysis_cols_ensured = False
+
+
+@contextmanager
+def ddl_cursor():
+    """DDL 专用独立连接 (autocommit, 用完即关)。
+
+    ALTER/CREATE 持表级锁, 放业务事务里会一直锁到事务提交 (LLM 调用期间整表被堵),
+    所有 ensure 类 DDL 一律走本连接立即提交。
+    """
+    import psycopg2
+    from core.config import get_config
+    cfg = get_config().pg_config
+    conn = psycopg2.connect(
+        host=cfg["host"], port=cfg["port"], user=cfg["user"],
+        password=cfg["password"], dbname=cfg["database"], connect_timeout=10,
+        options="-c search_path=stock,fin,public")
+    try:
+        conn.autocommit = True
+        yield conn.cursor()
+    finally:
+        conn.close()
+
+
+def ensure_report_analysis_columns() -> None:
+    """补齐研报表增量列/索引, 并放宽旧库 report_forecast.ts_code 可空 (幂等, 进程内一次)。
+
+    ts_code 基表 DDL 已可空; 旧库曾以 NOT NULL 建表, 非 A 股研报无 ts_code, 此处兜底放宽。
+    """
+    global _report_analysis_cols_ensured
+    if _report_analysis_cols_ensured:
+        return
+    with ddl_cursor() as cur:
+        cur.execute(
+            "SELECT table_name, column_name FROM information_schema.columns "
+            "WHERE table_schema='fin' AND table_name IN ('report_meta','report_forecast')")
+        existing = {(r[0], r[1]) for r in cur.fetchall()}
+        cur.execute(
+            "SELECT indexname FROM pg_indexes WHERE schemaname='fin' "
+            "AND tablename IN ('report_meta','report_forecast')")
+        existing_idx = {r[0] for r in cur.fetchall()}
+        need = []
+        for stmt, table, key in DDL_REPORT_ANALYSIS_STATEMENTS:
+            if stmt.startswith("CREATE INDEX"):
+                if key not in existing_idx:
+                    need.append(stmt)
+            elif (table, key) not in existing:
+                need.append(stmt)
+        for stmt in need:
+            cur.execute(stmt)
+        if need:
+            logger.info(f"研报表结构补列: {len(need)} 条 DDL")
+        cur.execute(
+            "SELECT is_nullable FROM information_schema.columns "
+            "WHERE table_schema='fin' AND table_name='report_forecast' "
+            "AND column_name='ts_code'")
+        row = cur.fetchone()
+        if row and row[0] == "NO":
+            cur.execute(
+                "ALTER TABLE fin.report_forecast ALTER COLUMN ts_code DROP NOT NULL")
+    _report_analysis_cols_ensured = True
 
 
 # ============================================================

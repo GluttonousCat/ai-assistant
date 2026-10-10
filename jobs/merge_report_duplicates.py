@@ -25,34 +25,17 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.logger import get_logger
 from storage.pg import PgClient
+from storage.pg_schema import DDL_REPORT_MERGED, ddl_cursor
 from core.helpers import is_chinese_translated
 
 logger = get_logger(__name__)
 
 
 def _ensure_merged_table() -> None:
-    """留痕表 DDL: 独立连接立即提交 (DDL 不进业务事务, 防锁表)"""
-    import psycopg2
-    from core.config import get_config as _gc
-    cfg = _gc().pg_config
-    conn = psycopg2.connect(
-        host=cfg["host"], port=cfg["port"], user=cfg["user"],
-        password=cfg["password"], dbname=cfg["database"], connect_timeout=10,
-        options="-c search_path=stock,fin,public")
-    try:
-        conn.autocommit = True
-        cur = conn.cursor()
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS fin.report_meta_merged (
-                file_id     BIGINT PRIMARY KEY,
-                report_id   INTEGER,
-                topic_id    BIGINT,
-                file_name   VARCHAR(256),
-                merged_at   TIMESTAMP DEFAULT now()
-            )""")
-        cur.close()
-    finally:
-        conn.close()
+    """留痕表 DDL: 独立连接立即提交 (DDL 不进业务事务, 防锁表);
+    DDL 单一事实源在 storage.pg_schema (与 init_report_schema 同源)"""
+    with ddl_cursor() as cur:
+        cur.execute(DDL_REPORT_MERGED)
 
 
 def _delete_row(pg: PgClient, r: dict) -> None:

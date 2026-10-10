@@ -21,6 +21,7 @@ from typing import Any, Dict, Iterator, List, Optional
 from core.config import get_config
 from core.logger import get_logger
 from storage.pg import PgClient
+from storage.pg_schema import ensure_report_analysis_columns
 from core.helpers import normalize_org_name
 from skills.base import BaseSkill, SkillContext
 from skills.report.prompts import (
@@ -36,66 +37,9 @@ _MAX_TEXT_CHARS = 12000
 MARKETS = {"A股", "H股", "台股", "日股", "韩股", "美股", "欧洲股", "东南亚股", "宏观", "商品", "行业", "其他"}
 
 
-DDL_ANALYSIS_COLS = """
-ALTER TABLE fin.report_meta ADD COLUMN IF NOT EXISTS analysis_json TEXT;
-ALTER TABLE fin.report_meta ADD COLUMN IF NOT EXISTS analysis_status VARCHAR(16) DEFAULT 'none';
-ALTER TABLE fin.report_meta ADD COLUMN IF NOT EXISTS market VARCHAR(8);
-ALTER TABLE fin.report_meta ADD COLUMN IF NOT EXISTS symbols TEXT;
-ALTER TABLE fin.report_meta ADD COLUMN IF NOT EXISTS tags_industries TEXT;
-ALTER TABLE fin.report_meta ADD COLUMN IF NOT EXISTS tags_regions TEXT;
-ALTER TABLE fin.report_meta ADD COLUMN IF NOT EXISTS tags_commodities TEXT;
-ALTER TABLE fin.report_meta ADD COLUMN IF NOT EXISTS tags_themes TEXT;
-ALTER TABLE fin.report_meta ADD COLUMN IF NOT EXISTS tags_targets TEXT;
-ALTER TABLE fin.report_forecast ADD COLUMN IF NOT EXISTS symbol VARCHAR(32);
-ALTER TABLE fin.report_forecast ADD COLUMN IF NOT EXISTS market VARCHAR(8);
-CREATE INDEX IF NOT EXISTS idx_report_meta_market ON fin.report_meta (market);
-CREATE INDEX IF NOT EXISTS idx_report_forecast_symbol ON fin.report_forecast (symbol);
-"""
-# 旧表 ts_code 为 NOT NULL, 非 A 股标的没有 ts_code -> 放宽为可空 (幂等)
-DDL_RELAX_TS_CODE = """
-DO $$
-BEGIN
-    IF EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_schema='fin' AND table_name='report_forecast'
-          AND column_name='ts_code' AND is_nullable='NO'
-    ) THEN
-        ALTER TABLE fin.report_forecast ALTER COLUMN ts_code DROP NOT NULL;
-    END IF;
-END $$;
-"""
-
-# (语句, 表, 列) 三元组: 缺列时才执行, 用于避免无谓 ALTER 锁
-# 索引项的第三字段 = 完整索引名 (用于 pg_indexes 存在性判断)
-_DDL_ANALYSIS_STATEMENTS = [
-    ("ALTER TABLE fin.report_meta ADD COLUMN IF NOT EXISTS analysis_json TEXT",
-     "report_meta", "analysis_json"),
-    ("ALTER TABLE fin.report_meta ADD COLUMN IF NOT EXISTS analysis_status VARCHAR(16) DEFAULT 'none'",
-     "report_meta", "analysis_status"),
-    ("ALTER TABLE fin.report_meta ADD COLUMN IF NOT EXISTS market VARCHAR(8)",
-     "report_meta", "market"),
-    ("ALTER TABLE fin.report_meta ADD COLUMN IF NOT EXISTS symbols TEXT",
-     "report_meta", "symbols"),
-    ("ALTER TABLE fin.report_meta ADD COLUMN IF NOT EXISTS tags_industries TEXT",
-     "report_meta", "tags_industries"),
-    ("ALTER TABLE fin.report_meta ADD COLUMN IF NOT EXISTS tags_regions TEXT",
-     "report_meta", "tags_regions"),
-    ("ALTER TABLE fin.report_meta ADD COLUMN IF NOT EXISTS tags_commodities TEXT",
-     "report_meta", "tags_commodities"),
-    ("ALTER TABLE fin.report_meta ADD COLUMN IF NOT EXISTS tags_themes TEXT",
-     "report_meta", "tags_themes"),
-    ("ALTER TABLE fin.report_meta ADD COLUMN IF NOT EXISTS tags_targets TEXT",
-     "report_meta", "tags_targets"),
-    ("ALTER TABLE fin.report_forecast ADD COLUMN IF NOT EXISTS symbol VARCHAR(32)",
-     "report_forecast", "symbol"),
-    ("ALTER TABLE fin.report_forecast ADD COLUMN IF NOT EXISTS market VARCHAR(8)",
-     "report_forecast", "market"),
-    ("CREATE INDEX IF NOT EXISTS idx_report_meta_market ON fin.report_meta (market)",
-     "report_meta", "idx_report_meta_market"),
-    ("CREATE INDEX IF NOT EXISTS idx_report_forecast_symbol ON fin.report_forecast (symbol)",
-     "report_forecast", "idx_report_forecast_symbol"),
-]
-# analysis_status: none / done / failed / no_llm
+# 研报表增量列 DDL (analysis_json/market/tags_*/forecast.symbol 等) 的
+# 单一事实源在 storage.pg_schema.DDL_REPORT_ANALYSIS_STATEMENTS,
+# 由 ensure_report_analysis_columns() 统一补列 (analysis_status: none/done/failed/no_llm)。
 
 # 视觉 OCR 并发上限: 本地已有的积压文件会在下载循环里秒过 (无网络请求无睡眠),
 # 瞬间起十几个 OCR 线程有打爆 qwen 网关的风险 — 信号量限流, 超出的排队等待
@@ -699,51 +643,8 @@ class ReportSkill(BaseSkill):
     # ---------- 工具 ----------
     @staticmethod
     def _ensure_columns(pg: PgClient) -> None:
-        """
-        确保 tags/market 等扩展列存在.
-        【关键】DDL 用独立连接立即提交: ALTER TABLE 持有表级排它锁,
-        若放在外层事务里, 锁会持续到事务提交 (LLM 调用期间整表被堵).
-        """
-        import psycopg2
-        from core.config import get_config as _gc
-        cfg = _gc().pg_config
-        conn = psycopg2.connect(
-            host=cfg["host"], port=cfg["port"], user=cfg["user"],
-            password=cfg["password"], dbname=cfg["database"], connect_timeout=10,
-            options="-c search_path=stock,fin,public")
-        try:
-            conn.autocommit = True
-            cur = conn.cursor()
-            # 缺哪个列才 ALTER 哪个 (幂等 + 避免无谓锁)
-            cur.execute(
-                "SELECT table_name, column_name FROM information_schema.columns "
-                "WHERE table_schema='fin' AND table_name IN ('report_meta','report_forecast')")
-            existing = {(r[0], r[1]) for r in cur.fetchall()}
-            cur.execute(
-                "SELECT indexname FROM pg_indexes WHERE schemaname='fin' "
-                "AND tablename IN ('report_meta','report_forecast')")
-            existing_idx = {r[0] for r in cur.fetchall()}
-            need = []
-            for stmt, table, col in _DDL_ANALYSIS_STATEMENTS:
-                if stmt.startswith("CREATE INDEX"):
-                    if col not in existing_idx:
-                        need.append(stmt)
-                elif (table, col) not in existing:
-                    need.append(stmt)
-            if need:
-                for stmt in need:
-                    cur.execute(stmt)
-                logger.info(f"研报表结构补列: {len(need)} 条 DDL")
-            # ts_code NOT NULL 放宽 (一次性)
-            cur.execute("SELECT is_nullable FROM information_schema.columns "
-                        "WHERE table_schema='fin' AND table_name='report_forecast' "
-                        "AND column_name='ts_code'")
-            row = cur.fetchone()
-            if row and row[0] == "NO":
-                cur.execute("ALTER TABLE fin.report_forecast ALTER COLUMN ts_code DROP NOT NULL")
-            cur.close()
-        finally:
-            conn.close()
+        """确保 tags/market 等扩展列存在 (DDL 单一事实源: storage.pg_schema)"""
+        ensure_report_analysis_columns()
 
     @staticmethod
     def _reload_row(pg: PgClient, report_id: int) -> Optional[Dict[str, Any]]:
