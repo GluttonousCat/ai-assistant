@@ -123,36 +123,8 @@ class Config:
     def tushare_token(self) -> str:
         return self.env("TUSHARE_TOKEN", "")
 
-    @property
-    def pg_config(self) -> Dict[str, Any]:
-        """PostgreSQL 连接配置"""
-        return {
-            "host": self.env("PG_HOST", "127.0.0.1"),
-            "port": int(self.env("PG_PORT", 5432)),
-            "user": self.env("PG_USER", "postgres"),
-            "password": self.env("PG_PASSWORD", ""),
-            "database": self.env("PG_DATABASE", "data"),
-        }
-
-    @property
-    def pg_url(self) -> str:
-        """SQLAlchemy PG 连接串 (保留密码原文, psycopg2 直接读 .env 参数)"""
-        cfg = self.pg_config
-        return (
-            f"postgresql+psycopg2://{cfg['user']}:{cfg['password']}"
-            f"@{cfg['host']}:{cfg['port']}/{cfg['database']}"
-        )
-
-    @property
-    def milvus_config(self) -> Dict[str, Any]:
-        """Milvus 向量库连接配置 (与 pg_config 同风格: env > 默认值)"""
-        return {
-            "uri": self.env("MILVUS_URI", "http://127.0.0.1:19530"),
-            "token": self.env("MILVUS_TOKEN", ""),
-            "db_name": self.env("MILVUS_DB", "default"),
-            # 向量维度与 embedding 模型强耦合 (换模型须重建 collection), 见 storage/milvus_schema.py
-            "embed_dim": int(self.env("MILVUS_EMBED_DIM", 1024)),
-        }
+    # PG/Milvus 连接配置已随 storage 包解耦迁至 storage/env.py
+    # (pg_config/pg_url/milvus_config 此前仅 storage 消费, 现无调用方)
 
     @property
     def zsxq_cookie(self) -> str:

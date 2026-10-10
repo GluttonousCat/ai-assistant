@@ -6,8 +6,8 @@ from typing import Optional
 
 from pymilvus import DataType, MilvusClient
 
-from core.config import get_config
-from core.logger import get_logger
+from storage.env import milvus_config
+from storage.log import get_logger
 
 logger = get_logger(__name__)
 
@@ -48,7 +48,7 @@ def ensure_report_chunks(client, dim: Optional[int] = None) -> bool:
 
     已存在且维度一致 -> 跳过; 维度不一致 -> 告警并指导 rebuild (不自动删数据)。
     """
-    dim = dim or get_config().milvus_config["embed_dim"]
+    dim = dim or milvus_config()["embed_dim"]
     if client.has_collection(COLLECTION_REPORT_CHUNKS):
         desc = client.describe_collection(COLLECTION_REPORT_CHUNKS)
         for f in desc.get("fields", []):
@@ -71,7 +71,7 @@ def ensure_report_chunks(client, dim: Optional[int] = None) -> bool:
 
 def rebuild_report_chunks(client, dim: Optional[int] = None) -> None:
     """drop + 重建 (换 embedding 模型/维度后用; 原向量全部作废, 须重灌)"""
-    dim = dim or get_config().milvus_config["embed_dim"]
+    dim = dim or milvus_config()["embed_dim"]
     if client.has_collection(COLLECTION_REPORT_CHUNKS):
         client.drop_collection(COLLECTION_REPORT_CHUNKS)
         logger.warning(f"已 drop {COLLECTION_REPORT_CHUNKS} (维度变更重建)")

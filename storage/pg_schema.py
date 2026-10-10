@@ -1,22 +1,9 @@
-"""
-行情数据仓库表结构 (PostgreSQL)
-
-schema: stock
-包含:
-- stock_basic:   股票基础信息 (唯一股票池, 含复权因子)
-- trade_calendar: 交易日历
-- daily:          日K主表 (OHLCV, 前后复权价格预计算列)
-- adj_factor:     复权因子明细
-- daily_basic:    每日估值指标 (PE/PB/换手/市值)
-- sync_meta:      同步水位线 (断点续传)
-"""
-
 from contextlib import contextmanager
 
 import psycopg2
 
-from core.config import get_config
-from core.logger import get_logger
+from storage.env import pg_config
+from storage.log import get_logger
 
 logger = get_logger(__name__)
 
@@ -990,7 +977,7 @@ def ddl_cursor():
     ALTER/CREATE 持表级锁, 放业务事务里会一直锁到事务提交 (LLM 调用期间整表被堵),
     所有 ensure 类 DDL 一律走本连接立即提交。
     """
-    cfg = get_config().pg_config
+    cfg = pg_config()
     conn = psycopg2.connect(
         host=cfg["host"], port=cfg["port"], user=cfg["user"],
         password=cfg["password"], dbname=cfg["database"], connect_timeout=10,

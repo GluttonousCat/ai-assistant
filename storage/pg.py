@@ -1,40 +1,26 @@
-"""
-PostgreSQL 底层封装
-功能:
-- 连接池管理 (psycopg2.pool)
-- 上下文管理器 (事务自动提交/回滚)
-- DataFrame 批量写入 (COPY / executemany)
-- UPSERT (ON CONFLICT)
-- 通用查询 / DDL 执行
+# -*- encoding: utf-8 -*-
 
-【边界约束】本模块只通过 PostgreSQL 网络协议(SQL)读写远程数据库,
-不执行任何服务器级操作 (无 SSH / 无远端 Shell / 不修改服务器配置)。
-远程主机仅作为数据仓库访问。
-"""
 from __future__ import annotations
-
 
 import math
 import threading
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
 import psycopg2
 import psycopg2.extras
 from psycopg2.pool import SimpleConnectionPool
 
-from core.config import get_config
+from storage.env import pg_config
+from storage.log import get_logger
 
-from core.logger import get_logger
 logger = get_logger(__name__)
 
-# pscopg2 连接默认行为
 _CONN_KW = dict(application_name="ai-assistant")
 
 
 class PgPool:
     """PG 连接池 (单例)"""
-
     _instance: Optional["PgPool"] = None
     _lock = threading.Lock()
     _pool: Optional[SimpleConnectionPool] = None
@@ -51,7 +37,7 @@ class PgPool:
     def init(cls, config: Optional[Dict[str, Any]] = None,
              minconn: int = 1, maxconn: int = 10) -> None:
         """初始化连接池 (可重复调用, 仅首次生效)"""
-        cfg = config or get_config().pg_config
+        cfg = config or pg_config()
         if cls._pool is not None:
             # 连接串变化时重建
             if cls._config == cfg:
