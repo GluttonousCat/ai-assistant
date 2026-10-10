@@ -144,6 +144,17 @@ class Config:
         )
 
     @property
+    def milvus_config(self) -> Dict[str, Any]:
+        """Milvus 向量库连接配置 (与 pg_config 同风格: env > 默认值)"""
+        return {
+            "uri": self.env("MILVUS_URI", "http://127.0.0.1:19530"),
+            "token": self.env("MILVUS_TOKEN", ""),
+            "db_name": self.env("MILVUS_DB", "default"),
+            # 向量维度与 embedding 模型强耦合 (换模型须重建 collection), 见 storage/milvus_schema.py
+            "embed_dim": int(self.env("MILVUS_EMBED_DIM", 1024)),
+        }
+
+    @property
     def zsxq_cookie(self) -> str:
         return self.env("ZSXQ_COOKIE", "")
 
