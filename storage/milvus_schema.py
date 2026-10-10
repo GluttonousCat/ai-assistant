@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -12,30 +13,26 @@ from pymilvus import DataType, MilvusClient
 
 logger = logging.getLogger(__name__)
 
-_yaml_milvus_cache: Optional[Dict[str, Any]] = None
 
-
+@lru_cache(maxsize=1)
 def _yaml_milvus() -> Dict[str, Any]:
-    """config.yaml 的 milvus 段 (进程内读一次; 文件缺失/无该段返回空 dict)"""
-    global _yaml_milvus_cache
-    if _yaml_milvus_cache is None:
-        _yaml_milvus_cache = {}
-        path = Path(__file__).resolve().parent.parent / "config.yaml"
-        try:
-            with open(path, encoding="utf-8") as f:
-                data = yaml.safe_load(f) or {}
-            if isinstance(data.get("milvus"), dict):
-                _yaml_milvus_cache = data["milvus"]
-        except Exception as e:
-            logger.warning(f"config.yaml 读取失败 (Milvus 配置仅用 env/默认值): {e}")
-    return _yaml_milvus_cache
+    """config.yaml 的 milvus 段 (进程内读一次; 文件缺失/无该段返回空 dict)
+
+    测试重置: _yaml_milvus.cache_clear()
+    """
+    path = Path(__file__).resolve().parent.parent / "config.yaml"
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        if isinstance(data.get("milvus"), dict):
+            return data["milvus"]
+    except Exception as e:
+        logger.warning(f"config.yaml 读取失败将采用默认值: {e}")
+    return {}
 
 
 def milvus_config() -> Dict[str, Any]:
-    """Milvus 连接配置: env MILVUS_* > config.yaml milvus 段 > 默认值 (项目约定 env > yaml)
-
-    yaml 可配: uri / db_name / embed_dim; token 属敏感信息, 建议只放 .env (MILVUS_TOKEN)。
-    """
+    """Milvus Connection Config"""
     def _pick(env_key: str, yaml_key: str, default: Any) -> Any:
         v = os.environ.get(env_key)
         if v not in (None, ""):
