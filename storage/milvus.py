@@ -2,17 +2,21 @@
 from __future__ import annotations
 
 import logging
+import os
 import random
 import threading
+from functools import lru_cache
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
-from pymilvus import MilvusClient
+import yaml
+from pymilvus import DataType, MilvusClient
 
 from storage.milvus_schema import (
-    COLLECTION_ENSURES,
-    COLLECTION_REPORT_CHUNKS,
-    check_milvus_config,
-    milvus_config,
+    ensure_collection,
+    new_schema,
+    rebuild_collection,
+    vector_index_params,
 )
 
 logger = logging.getLogger(__name__)
@@ -20,7 +24,51 @@ logger = logging.getLogger(__name__)
 _client: MilvusClient | None = None
 _lock = threading.Lock()
 _not_ready_warned = False
-_ensured: set = set()
+
+
+@lru_cache(maxsize=1)
+def _yaml_milvus() -> Dict[str, Any]:
+    """config.yaml 的 milvus 段 (进程内读一次; 文件缺失/无该段返回空 dict)"""
+    path = Path(__file__).resolve().parent.parent / "config.yaml"
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        if isinstance(data.get("milvus"), dict):
+            return data["milvus"]
+    except Exception as e:
+        logger.warning(f"config.yaml 读取失败将采用默认值: {e}")
+    return {}
+
+
+def milvus_config() -> Dict[str, Any]:
+    """Milvus 连接配置: env MILVUS_* > config.yaml milvus 段 > 默认值 (env > yaml)"""
+    def _pick(env_key: str, yaml_key: str, default: Any) -> Any:
+        v = os.environ.get(env_key)
+        if v not in (None, ""):
+            return v
+        return _yaml_milvus().get(yaml_key, default)
+
+    return {
+        "uri": str(_pick("MILVUS_URI", "uri", "http://127.0.0.1:19530")),
+        "token": str(_pick("MILVUS_TOKEN", "token", "")),
+        "db_name": str(_pick("MILVUS_DB", "db_name", "default")),
+        "embed_dim": int(_pick("MILVUS_EMBED_DIM", "embed_dim", 1024)),
+    }
+
+
+def check_milvus_config(cfg: Dict[str, Any]) -> List[str]:
+    """配置检测: 返回问题清单 (空列表 = 通过)"""
+    problems: List[str] = []
+    uri = str(cfg.get("uri") or "")
+    if not (uri.startswith("http://") or uri.startswith("https://")):
+        problems.append(f"uri 非法: {uri!r} (须 http(s)://host:port)")
+    try:
+        dim = int(cfg.get("embed_dim", 0))
+        if dim <= 0:
+            problems.append(f"embed_dim 须为正整数: {dim}")
+    except (TypeError, ValueError):
+        problems.append(f"embed_dim 非数字: {cfg.get('embed_dim')!r}")
+    return problems
 
 
 def get_milvus():
@@ -72,20 +120,12 @@ def milvus_ready() -> bool:
         return False
 
 
-def _ensure(collection: str) -> None:
-    """按注册表惰性建 collection"""
-    if collection in _ensured:
-        return
-    ensure_fn = COLLECTION_ENSURES.get(collection)
-    if ensure_fn is not None:
-        ensure_fn(get_milvus())
-    _ensured.add(collection)
+# ---------- 通用执行器 (collection 须已由业务侧 ensure, 缺表由 Milvus 报错) ----------
 
 def insert_rows(collection: str, rows: List[Dict[str, Any]]) -> int:
     """插入"""
     if not rows:
         return 0
-    _ensure(collection)
     res = get_milvus().insert(collection_name=collection, data=rows)
     return int(res.get("insert_count", len(rows))) \
         if isinstance(res, dict) else len(rows)
@@ -94,7 +134,6 @@ def upsert_rows(collection: str, rows: List[Dict[str, Any]]) -> int:
     """按主键 upsert"""
     if not rows:
         return 0
-    _ensure(collection)
     res = get_milvus().upsert(collection_name=collection, data=rows)
     return int(res.get("upsert_count", len(rows))) \
         if isinstance(res, dict) else len(rows)
@@ -103,7 +142,6 @@ def search_similar(collection: str, vector: Sequence[float], limit: int = 5,
                    expr: Optional[str] = None,
                    output_fields: Optional[List[str]] = None) -> List[Dict[str, Any]]:
     """向量近邻检索"""
-    _ensure(collection)
     res = get_milvus().search(
         collection_name=collection,
         data=[list(vector)],
@@ -122,22 +160,24 @@ def fetch_by_expr(collection: str, expr: str,
                   output_fields: Optional[List[str]] = None,
                   limit: int = 100) -> List[Dict[str, Any]]:
     """标量过滤查询"""
-    _ensure(collection)
     return list(get_milvus().query(
         collection_name=collection, filter=expr,
         output_fields=output_fields or ["*"], limit=limit))
 
 def delete_by_expr(collection: str, expr: str) -> int:
     """按标量过滤删除"""
-    _ensure(collection)
     res = get_milvus().delete(collection_name=collection, filter=expr)
     return int(res.get("delete_count", 0)) if isinstance(res, dict) else 0
 
 def count_rows(collection: str) -> int:
     """行数"""
-    _ensure(collection)
     stats = get_milvus().get_collection_stats(collection_name=collection)
     return int(stats.get("row_count", 0)) if isinstance(stats, dict) else 0
+
+
+# ---------- 状态/自检 ----------
+
+SMOKE_COLLECTION = "storage_smoke"
 
 def _status() -> None:
     ready = milvus_ready()
@@ -147,33 +187,26 @@ def _status() -> None:
     client = get_milvus()
     cfg = milvus_config()
     logger.info(f"uri={cfg['uri']} db={cfg['db_name']} embed_dim={cfg['embed_dim']}")
-    for name in sorted(COLLECTION_ENSURES):
-        exists = client.has_collection(name)
-        n = count_rows(name) if exists else "-"
-        logger.info(f"{name}: {'存在' if exists else '未建'}, 行数={n}")
+    for name in sorted(client.list_collections()):
+        logger.info(f"{name}: 行数={count_rows(name)}")
 
 def _smoke() -> int:
-    """假向量全链路: 写入 -> 检索 -> 清理 (服务端须已启动)"""
+    """SDK 自检: 临时 collection 写入 -> 检索 -> 清理 (不碰业务数据)"""
     if not milvus_ready():
         logger.warning("Milvus 不可达, 冒烟终止 (exit 1)")
         return 1
     dim = milvus_config()["embed_dim"]
-    chunk_id = "smoke:0"
-    row = {
-        "chunk_id": chunk_id, "report_id": 0, "chunk_idx": 0,
-        "ts_code": "", "market": "其他", "org_name": "smoke",
-        "publish_year": 2026, "chunk_text": "milvus 冒烟测试行",
-        "embedding": [random.random() for _ in range(dim)],
-    }
+    schema = new_schema()
+    schema.add_field("id", DataType.VARCHAR, is_primary=True, max_length=32)
+    schema.add_field("embedding", DataType.FLOAT_VECTOR, dim=dim)
+    client = get_milvus()
+    rebuild_collection(client, SMOKE_COLLECTION, schema, vector_index_params(client))
     try:
-        n = upsert_rows(COLLECTION_REPORT_CHUNKS, [row])
-        hits = search_similar(COLLECTION_REPORT_CHUNKS, row["embedding"],
-                              limit=3, expr='org_name == "smoke"')
-        logger.info(f"写入 {n} 行, 检索命中 {len(hits)} (top1 distance={hits[0]['distance']:.4f})"
-                    if hits else "检索未命中")
-        deleted = delete_by_expr(COLLECTION_REPORT_CHUNKS, f'chunk_id == "{chunk_id}"')
-        logger.info(f"清理 {deleted} 行 —— 冒烟通过")
+        vec = [random.random() for _ in range(dim)]
+        n = upsert_rows(SMOKE_COLLECTION, [{"id": "smoke", "embedding": vec}])
+        hits = search_similar(SMOKE_COLLECTION, vec, limit=1)
+        top = f"top1 distance={hits[0]['distance']:.4f}" if hits else "未命中"
+        logger.info(f"写入 {n} 行, 检索 {len(hits)} ({top}) —— SDK 冒烟通过")
         return 0
-    except Exception as e:
-        logger.warning(f"冒烟失败: {e}")
-        return 1
+    finally:
+        client.drop_collection(SMOKE_COLLECTION)
