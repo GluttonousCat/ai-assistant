@@ -3,7 +3,7 @@
 知识星球研报每日抓取调度器 (asyncio 后台任务, 随后端常驻)
 
 调度规则:
-- 每天 07:00 与 23:00 各执行一轮 (07:00 覆盖前一天晚间~今晨的内容, 23:00 覆盖当天)
+- 每天 12:00 与 24:00 各执行一轮
 - 每轮流程:
     1. 爬取最新话题 (增量, 研报核心观点文本附在话题里)
     2. 收集文件列表 (增量) + 下载待下载文件 (限额, 反检测间隔)
@@ -17,15 +17,15 @@ from __future__ import annotations
 
 import asyncio
 from datetime import date, datetime, timedelta
-from typing import Optional
+from typing import Optional, Any, Dict
 
 from core.config import get_config
 from core.logger import get_logger
 
 logger = get_logger(__name__)
 
-# 调度时点 (可通过 config.yaml zsxq_schedule 覆盖)
-RUN_HOURS = [7, 23]
+# 调度时点 (可通过 config.yaml zsxq_schedule 覆盖; hour 取值 0-23, 24 会被归一化为 0)
+RUN_HOURS = [12, 0]
 # 每轮 LLM 提取上限 (控制 token 成本; 23:00 那轮多跑一些)
 EXTRACT_LIMITS = {7: 8, 23: 15}
 # 每轮文件下载上限
@@ -42,19 +42,19 @@ class ZSXQScheduleScheduler:
         self._stop_event = asyncio.Event()
         self.last_run: Optional[datetime] = None
         self.last_result: Optional[dict] = None
-        # state key -> 完成日期 (用于启动补跑判断: 今天该跑的轮次是否已跑)
         self._done: dict = {}
 
         cfg = get_config()
         hours = cfg.get("zsxq_schedule.run_hours")
         if isinstance(hours, list) and hours:
-            self.run_hours = sorted(int(h) for h in hours)
+            # hour 合法域 0-23: 24 之类归一化为 0 (曾致 replace(hour=24) 抛
+            # ValueError -> 调度协程静默死亡, 启动补跑与后续轮次全部失效)
+            self.run_hours = sorted({int(h) % 24 for h in hours})
         else:
             self.run_hours = RUN_HOURS
 
     # ---------- 时间计算 ----------
     def _next_run(self, now: Optional[datetime] = None) -> datetime:
-        """下一个调度时点 (今天未到的最早时点, 否则明天的第一个时点)"""
         now = now or datetime.now()
         for h in self.run_hours:
             target = now.replace(hour=h, minute=0, second=0, microsecond=0)
@@ -163,11 +163,20 @@ class ZSXQScheduleScheduler:
     # ---------- 调度循环 ----------
     async def _loop(self):
         logger.info(f"[知识星球] 研报抓取调度器已启动 (每日 {'/'.join(f'{h:02d}:00' for h in self.run_hours)})")
-        await self._catchup_if_missed()
+        try:
+            await self._catchup_if_missed()
+        except Exception as e:
+            # 补跑阶段异常绝不杀循环 (曾因配置非法静默死亡, 全部调度失效)
+            logger.error(f"[知识星球] 启动补跑异常 (调度继续): {e}")
 
         while not self._stop_event.is_set():
-            next_run = self._next_run()
-            wait = self._seconds_until(next_run)
+            try:
+                next_run = self._next_run()
+                wait = self._seconds_until(next_run)
+            except Exception as e:
+                logger.error(f"[知识星球] 下轮时间计算失败, 1 小时后重试: {e}")
+                await asyncio.sleep(3600)
+                continue
             logger.info(f"[知识星球] 下次抓取: {next_run} (等待 {wait:.0f}s)")
             try:
                 await asyncio.wait_for(self._stop_event.wait(), timeout=wait)

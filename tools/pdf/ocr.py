@@ -1,6 +1,5 @@
 # -*- encoding: utf-8 -*-
-"""PDF OCR
-"""
+"""PDF OCR"""
 from __future__ import annotations
 
 from typing import Any, List, Optional
@@ -12,11 +11,7 @@ logger = get_logger(__name__)
 
 
 def ocr_page_png(b64_png: str, prompt: str, vision_llm: Any) -> str:
-    """单页视觉 OCR。
-
-    vision_llm: 调用方注入的视觉模型客户端 (契约 .invoke(messages)->str,
-    如 core.llm.client.get_vision_llm()) —— 本层不依赖 core.llm。
-    """
+    """单页视觉 OCR"""
     messages = [
         {"role": "system", "content": prompt},
         {"role": "user", "content": [
@@ -30,12 +25,7 @@ def ocr_page_png(b64_png: str, prompt: str, vision_llm: Any) -> str:
 
 def ocr_pdf(path: str, prompt: str, vision_llm: Any, max_pages: int = 10,
             dpi: int = 130) -> Optional[str]:
-    """扫描件 PDF 整册识别: 逐页渲染 → OCR → 拼接。
-
-    vision_llm: 调用方注入的视觉模型客户端 (契约见 ocr_page_png)。
-    成本提示: 每页一次视觉调用 (max_pages 控制上限)。
-    返回全文; 全部页面失败或结果过短 (≤10 字) 返回 None。
-    """
+    """扫描件 PDF 整册识别: 逐页渲染 → OCR → 拼接。"""
     from core.config import get_config
     if not get_config().openai_api_key:
         return None

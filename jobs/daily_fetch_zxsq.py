@@ -1,8 +1,8 @@
 # -*- encoding: utf-8 -*-
 """
-每日定时抓取知识星球文件 (供 cron/计划任务每 6 小时调用一次)
+每日定时抓取知识星球文件
 
-用途: 猫哥的研报圈等以文件为主的群组, 每天 6/12/18/24 四时段将当天新增文件下载到本地.
+用途: 猫哥的研报圈等以文件为主的群组, 每天 7/23 二时段将当天新增文件下载到本地.
 
 流程:
   1. 收集文件列表 (增量, 只新增不在库中的文件)
@@ -28,7 +28,6 @@ logger = get_logger(__name__)
 
 from core.config import get_config
 from tools.zsxq.downloader import FileDownloader
-from storage.sqlite.files import FilesDatabase
 from core.paths import PathManager
 
 
@@ -110,7 +109,11 @@ def run_once(group_id: str, max_fetch: int = 10, max_pages: int = 10,
         from tools.zsxq.crawler import ZSXQCrawler
         try:
             crawler = ZSXQCrawler(cookie, str(group_id))
-            crawler.set_custom_intervals(crawl_interval_min=1.5, crawl_interval_max=2.5)
+            # 话题爬取间隔走 config (zsxq.crawl_interval_min/max), 不再硬编码
+            _cfg = get_config()
+            crawler.set_custom_intervals(
+                crawl_interval_min=float(_cfg.get("zsxq.crawl_interval_min", 1.5)),
+                crawl_interval_max=float(_cfg.get("zsxq.crawl_interval_max", 2.5)))
             result["topics"] = crawler.crawl_latest(count=20)
             crawler.close()
         except Exception as e:
@@ -130,11 +133,8 @@ def run_once(group_id: str, max_fetch: int = 10, max_pages: int = 10,
 
     processed = 0
     if pending_before > 0 and max_fetch > 0:
-        # 关闭下载器内置的"每文件后长休眠", 由本循环控制节奏:
-        # 下载完立即入库分析, 分析耗时被长休眠自然覆盖
-        dl.long_sleep_min = 60
-        dl.long_sleep_max = 120
-
+        # 长休眠间隔由 FileDownloader 按 config 初始化 (zsxq.download_*),
+        # 分析耗时被长休眠自然覆盖 —— 此处不再硬编码覆盖
         n_done = 0
         while n_done < max_fetch:
             # 先重试此前失败的任务 (每轮最多 3 个, fail_count<=5), 再下新文件
@@ -231,15 +231,3 @@ def _check_today(group_id: str):
 
 if __name__ == "__main__":
     main()
-
-# =========================================================================
-# 定时任务配置 (schtasks / cron)
-# =========================================================================
-# Windows 定时任务 (schtasks) — 每天 6/12/18/24 点:
-#   schtasks /Create /TN "ZSXQ每日抓取6" /TR "C:\Users\...\.venv\Scripts\python.exe C:\Users\...\scripts\daily_fetch_zxsq.py --group 51288148188224 --max-fetch 10" /SC DAILY /ST 06:00
-#   schtasks /Create /TN "ZSXQ每日抓取12" /TR "..." /SC DAILY /ST 12:00
-#   schtasks /Create /TN "ZSXQ每日抓取18" /TR "..." /SC DAILY /ST 18:00
-#   schtasks /Create /TN "ZSXQ每日抓取24" /TR "..." /SC DAILY /ST 00:00
-#
-# Linux cron:
-#   0 6,12,18,0 * * * cd /path/ai-assistant && .venv/bin/python -m scripts.daily_fetch_zxsq --group 51288148188224 --max-fetch 10 >> logs/daily_fetch.log 2>&1

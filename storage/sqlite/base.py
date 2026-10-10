@@ -1,9 +1,8 @@
-#!/usr/bin/env python3
+# -*- encoding: utf-8 -*-
 """
 数据库基类
 """
 import sqlite3
-from typing import Optional
 
 
 class BaseDatabase:

@@ -2,7 +2,6 @@
 """PDF 表格提取 (pdfplumber, 线框表/准线框表)
 
 适用: 定期报告里的财务表/股东表等结构化线框表格。
-无框线的"视觉表格"不在本层能力内 —— 那是 OCR prompt 约定的事。
 """
 from __future__ import annotations
 
@@ -13,14 +12,9 @@ from core.logger import get_logger
 logger = get_logger(__name__)
 
 
-def extract_tables(path: str, max_pages: int = 20,
-                   min_rows: int = 2) -> List[Dict]:
-    """提取 PDF 表格。返回 [{"page": 页码1based, "rows": [[单元格...]]}, ...]
-
-    - 只保留 ≥min_rows 行的表 (过滤页眉碎块)
-    - 单元格 None → 空串
-    - 缺 pdfplumber / 打不开 / 无表格均返回 [] (降级不抛)
-    """
+def extract_tables(
+        path: str, max_pages: int = 20,min_rows: int = 2
+) -> List[Dict]:
     try:
         import pdfplumber
     except ImportError:

@@ -37,7 +37,6 @@ _PERIODIC_CATEGORIES = {
 
 
 def _resolve_ts_code(stock: str) -> Optional[str]:
-    """股票名/代码 -> ts_code (复用 fin_query 的映射)"""
     from skills.fin_query.skill import lookup_ts_code
     return lookup_ts_code(stock.strip())
 
@@ -50,7 +49,7 @@ class CninfoDownloader:
 
     @staticmethod
     def _upsert_announcement(pg, ann: Dict, ts_code: str) -> None:
-        """巨潮原始条目 -> fin.cninfo_announcement (保留已有下载状态列)"""
+        """巨潮原始条目"""
         from datetime import datetime
         title = ann.get("announcementTitle") or ""
         aid = str(ann.get("announcementId") or ann.get("adjunctUrl", ""))

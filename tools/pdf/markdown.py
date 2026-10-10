@@ -1,14 +1,5 @@
 # -*- encoding: utf-8 -*-
-"""PDF → Markdown (pymupdf4llm: 标题层级 + 表格→MD管道表)
-
-一个函数三种用法:
-    md = to_markdown(path)                          # 返回字符串 (管线默认: annual_items 等)
-    to_markdown(path, output_md_path="x.md")        # 顺带落盘
-    chunks = to_markdown(path, save_as_chunks=True) # 按页分块 (RAG检索), 返回 list[dict]
-
-财报优化: margins 裁掉页眉页脚 (每页重复的公司名/页码, 实测不伤章节锚点);
-降级链: pymupdf4llm 失败/过短 → 纯文本层 + 分页标记; 全败返回 ""(chunks 模式 []).
-"""
+"""PDF to Markdown"""
 from __future__ import annotations
 
 import json
@@ -27,15 +18,7 @@ def to_markdown(path: str,
                 pages: Optional[Union[List[int], range]] = None,
                 ignore_header_footer: bool = True,
                 save_as_chunks: bool = False) -> Union[str, List[dict]]:
-    """PDF 全文转 Markdown。
 
-    :param path: PDF 路径
-    :param output_md_path: 落盘路径 (可选; chunks 模式写 .json)
-    :param pages: 页码列表 (0 起计数, 如 range(50, 100)), 缺省全册
-    :param ignore_header_footer: 裁页眉页脚 (margins 45pt, 防每页重复噪声)
-    :param save_as_chunks: 按页结构化分块 (大模型 RAG 检索友好)
-    :return: MD 字符串; save_as_chunks=True 时返回分块列表
-    """
     pdf_file = Path(path)
     if not pdf_file.exists():
         raise FileNotFoundError(f"文件不存在: {path}")
@@ -82,12 +65,11 @@ def to_markdown(path: str,
 
 
 def _write(dest: Path, data) -> None:
-    """落盘 (chunks 模式写 JSON, 否则写 MD)。"""
     dest.parent.mkdir(parents=True, exist_ok=True)
     if isinstance(data, list):
         dest = dest.with_suffix(".json")
-        dest.write_text(json.dumps(data, ensure_ascii=False, indent=2),
-                        encoding="utf-8")
+        dest.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     else:
         dest.write_text(data, encoding="utf-8")
     logger.info(f"已保存: {dest}")

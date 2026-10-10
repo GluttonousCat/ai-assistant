@@ -1,6 +1,6 @@
 # -*- encoding: utf-8 -*-
 """
-ai-assistant 统一入口
+fin-agent 统一入口
 运行: uvicorn app:app --reload --port 8208
 """
 from pathlib import Path

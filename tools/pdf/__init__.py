@@ -13,8 +13,8 @@ PDF 通用工具层 (与领域无关的原语集)
 
 边界约定: 领域知识一律不进本层 ——
     - 金融研报版式 prompt → skills/report/prompts.py (VISION_OCR_PROMPT)
-    - 视觉模型客户端由调用方注入 (vision_llm 参数, 如 core.llm.client.get_vision_llm()),
-      本层不 import core.llm
+    - 视觉模型客户端由调用方注入 (vision_llm 参数, 如 harness.llm.get_vision_llm()),
+      本层不 import harness.llm
     - 券商研报噪音清洗/多格式分派 → tools/finance/report_extractor.py
     - 年报章节切片 → skills/content/annual_report.py
 """

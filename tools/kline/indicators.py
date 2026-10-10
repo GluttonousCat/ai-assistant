@@ -1,7 +1,7 @@
 # -*- encoding: utf-8 -*-
 """
 @date: 2026/03/23
-@file: algorithm.py
+@file: indicators.py
 @author: GluttonousCat
 """
 from __future__ import annotations

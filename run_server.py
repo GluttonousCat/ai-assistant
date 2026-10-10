@@ -1,5 +1,4 @@
 # -*- encoding: utf-8 -*-
-"""独立服务启动入口 (供后台常驻)"""
 import uvicorn
 
 if __name__ == "__main__":

@@ -7,8 +7,7 @@ import os
 import time
 import random
 import requests
-from typing import Dict, Any, Optional, List
-from datetime import datetime, timedelta
+from typing import Dict, Optional
 
 from storage.sqlite.files import FilesDatabase
 from storage.sqlite.topics import TopicsDatabase
@@ -48,11 +47,13 @@ class FileDownloader:
         # 反检测
         self.anti_detect = AntiDetectManager(self.cookie)
 
-        # 下载间隔配置
-        self.min_delay = 60      # 最小间隔60秒
-        self.max_delay = 120     # 最大间隔120秒
-        self.long_sleep_min = 60   # 长休眠最小60秒
-        self.long_sleep_max = 120  # 长休眠最大120秒
+        # 下载间隔配置 (config.yaml zsxq: 段, 缺省回落内置值)
+        from core.config import get_config
+        _cfg = get_config()
+        self.min_delay = float(_cfg.get("zsxq.download_min_delay", 60))
+        self.max_delay = float(_cfg.get("zsxq.download_max_delay", 120))
+        self.long_sleep_min = float(_cfg.get("zsxq.download_long_sleep_min", 60))
+        self.long_sleep_max = float(_cfg.get("zsxq.download_long_sleep_max", 120))
 
         # 统计
         self.download_count = 0
@@ -90,15 +91,20 @@ class FileDownloader:
         topics_db = TopicsDatabase(topics_db_path)
 
         # 下载地址: 优先本地 download_url, 否则从 API 获取
-        files = topics_db.get_topic_files(limit=max_files, status="pending")
+        # 超额取数防名额被中文版占用 (见 download_pending 同款注释)
+        files = topics_db.get_topic_files(limit=max_files * 3, status="pending")
 
         # 中文翻译版不下载 (保留英文原版)
+        skipped = 0
         for row in files[:]:
             if is_chinese_translated(row.get('name') or ''):
                 topics_db.update_topic_file_status(row['file_id'], 'skipped')
                 files.remove(row)
-                self.log(f"⏭️ 跳过中文版: {row.get('name')}")
+                skipped += 1
+        if skipped:
+            self.log(f"⏭️ 跳过中文版: {skipped} 个")
         topics_db.commit()
+        files = files[:max_files]
 
         stats = {'total': len(files), 'success': 0, 'failed': 0}
         self.log(f"📥 下载话题附件 (本批次 {len(files)} 个)")
@@ -343,17 +349,24 @@ class FileDownloader:
 
         self.log(f"📥 开始下载文件 (限制{max_files}个)")
 
-        # 获取待下载文件
-        files = self.db.get_pending_files(limit=max_files, order_by='create_time DESC')
+        # 超额取数: 名额可能被中文版占用 (过滤后不足), 拉 3 倍再筛 —— 否则
+        # "limit=1 恰好取到中文版 → 本批空 → 循环误判无待下载而整轮退出"
+        files = self.db.get_pending_files(limit=max_files * 3, order_by='create_time DESC')
 
         # 中文翻译版不下载 (保留英文原版): 标 skipped 终态, 不再进 pending
+        skipped = []
         for file_row in files[:]:
             if is_chinese_translated(file_row[1]):
                 self.db.update_status(file_row[0], 'skipped')
                 files.remove(file_row)
-                self.log(f"⏭️ 跳过中文版: {file_row[1]}")
-        if files:
+                skipped.append(file_row[1])
+        if skipped:
             self.db.commit()
+            for name in skipped[:3]:
+                self.log(f"⏭️ 跳过中文版: {name}")
+            if len(skipped) > 3:
+                self.log(f"⏭️ …共跳过中文版 {len(skipped)} 个")
+        files = files[:max_files]
 
         if not files:
             self.log("📭 无待下载文件")

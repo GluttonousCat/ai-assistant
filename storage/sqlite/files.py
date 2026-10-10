@@ -3,7 +3,6 @@
 文件数据库模块
 整合原 zsxq_file_database.py 核心功能
 """
-import sqlite3
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 
