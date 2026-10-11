@@ -15,7 +15,12 @@ from psycopg2.pool import ThreadedConnectionPool
 
 logger = logging.getLogger(__name__)
 
-_CONN_KW = dict(application_name="ai-assistant")
+_CONN_KW = dict(
+    application_name="ai-assistant",
+    # TCP keepalive: 网络黑洞(静默丢包)时 psycopg2 的 execute() 读 socket 无超时会永久阻塞
+    # (2026-10-11 回填实挂 40+ 分钟无异常); 30s 探测 x 3 次失败 -> ~60s 内断连抛错, 交上层重试
+    keepalives=1, keepalives_idle=30, keepalives_interval=10, keepalives_count=3,
+)
 
 
 def pg_config() -> Dict[str, Any]:
@@ -74,7 +79,9 @@ class PgPool:
             cls._config = dict(cfg)
             try:
                 # search_path: 让无 schema 前缀的表名可解析 (LLM 生成 SQL 常省略 schema)
-                conn_options = "-c search_path=stock,fin,public"
+                # statement_timeout: 服务端兜底, 防 DDL/长查询持锁拖死池
+                conn_options = ("-c search_path=stock,fin,public "
+                                "-c statement_timeout=180000")
                 cls._pool = ThreadedConnectionPool(
                     minconn=minconn,
                     maxconn=maxconn,

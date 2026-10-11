@@ -1237,7 +1237,8 @@ def ddl_cursor():
     conn = psycopg2.connect(
         host=cfg["host"], port=cfg["port"], user=cfg["user"],
         password=cfg["password"], dbname=cfg["database"], connect_timeout=10,
-        options="-c search_path=stock,fin,public")
+        options="-c search_path=stock,fin,public -c statement_timeout=180000",
+        keepalives=1, keepalives_idle=30, keepalives_interval=10, keepalives_count=3)
     try:
         conn.autocommit = True
         yield conn.cursor()
