@@ -698,6 +698,58 @@ def build_for_index(index_code: str, year: Optional[int] = None) -> Dict[str, in
     return stats
 
 
+def annual_corpus(ts_code: str, year: Optional[int] = None,
+                  max_chars: int = 2500) -> Optional[str]:
+    """items+sections → 年报要点语料 (确定性零 LLM)。
+
+    语料 = kpi3y(指标说明) + mdna 经营讨论小节 + mdna 风险小节的 text 合并,
+    每段截 max_chars; items.json 不存在则现场 build_items。
+    sections 结构不符被跳过的公司 (B 方言/ESG 式治理) 退回 kpi3y 或旧版键;
+    全空返回 None (调用方自行降级, 如成文侧退回量化画像)。"""
+    if not ts_code:
+        return None
+    paths = sorted(MD_ROOT.glob(f"{ts_code}/*_items.json"), reverse=True)
+    if year:
+        paths = [p for p in paths if p.name.startswith(f"{year}_")] or paths
+    if not paths:
+        r = build_items(ts_code)
+        if not r.get("ok"):
+            return None
+        paths = [Path(r["json"])]
+    d = json.loads(paths[0].read_text(encoding="utf-8"))
+    items = d.get("items", {})
+    sections = d.get("sections", {})
+    label = (f"{d['report_year']} 年度报告" if d.get("category") == "ndbg"
+             else f"{d['report_year']} 半年度报告")
+    parts = []
+    kpi = items.get("kpi3y")
+    if kpi and kpi.get("text"):
+        parts.append(f"### 主要会计数据与指标说明\n{kpi['text'][:max_chars]}")
+    mdna_subs = sections.get("mdna", {}).get("subsections", [])
+    picks = (("经营情况讨论(管理层口径)",
+              ("经营情况讨论", "主要经营情况", "经营情况分析", "业务情况分析")),
+             ("公司自认风险", ("风险",)))
+    for head, kws in picks:
+        block = next((s["text"] for s in mdna_subs
+                      if s.get("text") and any(kw in s["title"] for kw in kws)),
+                     None)
+        if block is None and head.startswith("经营"):
+            # 银行等措辞漂移兜底: 取 mdna 首个非空小节 (兴业 '十四五成就回顾')
+            block = next((s["text"] for s in mdna_subs if s.get("text")), None)
+        if block:
+            parts.append(f"### {head}\n{block[:max_chars]}")
+    if not parts:
+        # 旧版 items.json 兼容 (business_review/risks 词表键)
+        for key, head in (("business_review", "经营情况讨论(管理层口径)"),
+                          ("risks", "公司自认风险")):
+            it = items.get(key)
+            if it and it.get("text"):
+                parts.append(f"### {head}\n{it['text'][:max_chars]}")
+    if not parts:
+        return None
+    return f"### {label}要点 (年报披露项提取)\n" + "\n\n".join(parts)
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description="定期报告披露项提取 (JSON 文件产物)")
     p.add_argument("stock", nargs="?", default="", help="证券代码 (6位或 ts_code)")

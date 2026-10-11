@@ -14,6 +14,7 @@ import pytest
 
 from skills.research.contracts import load_shard, validate_shard
 from skills.research.sources import annual_source
+from tools.cninfo import evidence
 
 YEAR = 2025
 
@@ -68,56 +69,56 @@ def items_path(tmp_path: Path) -> Path:
 
 def test_parse_fenced_dict():
     text = '```json\n{"facts": [{"category": "operating", "content": "x"}]}\n```'
-    assert annual_source._parse_llm_facts(text) == [{"category": "operating", "content": "x"}]
+    assert evidence._parse_llm_facts(text) == [{"category": "operating", "content": "x"}]
 
 
 def test_parse_bare_array_with_prose():
     text = '以下是抽取结果:\n[{"category": "risk", "content": "y"}]\n以上。'
-    assert annual_source._parse_llm_facts(text) == [{"category": "risk", "content": "y"}]
+    assert evidence._parse_llm_facts(text) == [{"category": "risk", "content": "y"}]
 
 
 def test_parse_data_key_and_no_facts_key():
-    assert annual_source._parse_llm_facts('{"data": [{"content": "z"}]}') == [{"content": "z"}]
-    assert annual_source._parse_llm_facts('{"summary": "无证据"}') == []
+    assert evidence._parse_llm_facts('{"data": [{"content": "z"}]}') == [{"content": "z"}]
+    assert evidence._parse_llm_facts('{"summary": "无证据"}') == []
 
 
 def test_parse_garbage_returns_none():
-    assert annual_source._parse_llm_facts("抱歉, 我无法完成。") is None
-    assert annual_source._parse_llm_facts("") is None
-    assert annual_source._parse_llm_facts("```json\n{broken\n```") is None
+    assert evidence._parse_llm_facts("抱歉, 我无法完成。") is None
+    assert evidence._parse_llm_facts("") is None
+    assert evidence._parse_llm_facts("```json\n{broken\n```") is None
 
 
 # ---------- 清洗 ----------
 
 def test_to_float_variants():
-    assert annual_source._to_float("116,123.73") == 116123.73
-    assert annual_source._to_float("583.80亿美元") == 583.80
-    assert annual_source._to_float(-4.53) == -4.53
-    assert annual_source._to_float("不适用") is None
-    assert annual_source._to_float(None) is None
-    assert annual_source._to_float(True) is None
+    assert evidence._to_float("116,123.73") == 116123.73
+    assert evidence._to_float("583.80亿美元") == 583.80
+    assert evidence._to_float(-4.53) == -4.53
+    assert evidence._to_float("不适用") is None
+    assert evidence._to_float(None) is None
+    assert evidence._to_float(True) is None
 
 
 def test_norm_period_variants():
-    assert annual_source._norm_period("2025年", YEAR) == "2025A"
-    assert annual_source._norm_period("", YEAR) == "2025A"
-    assert annual_source._norm_period("2025年末", YEAR) == "2025-12-31"
-    assert annual_source._norm_period("期末", YEAR) == "2025-12-31"
-    assert annual_source._norm_period("2024A", YEAR) == "2024A"        # 合法原值保留
-    assert annual_source._norm_period("2025-13-01", YEAR) == "2025A"   # 非法日期兜底
+    assert evidence._norm_period("2025年", YEAR) == "2025A"
+    assert evidence._norm_period("", YEAR) == "2025A"
+    assert evidence._norm_period("2025年末", YEAR) == "2025-12-31"
+    assert evidence._norm_period("期末", YEAR) == "2025-12-31"
+    assert evidence._norm_period("2024A", YEAR) == "2024A"        # 合法原值保留
+    assert evidence._norm_period("2025-13-01", YEAR) == "2025A"   # 非法日期兜底
 
 
 def test_sanitize_numeric_without_value_unit_dropped():
     raw = {"category": "operating", "content": "产量为116,123.73",
            "value": None, "unit": "", "period": "2025A"}
-    clean, reason = annual_source._sanitize_fact(raw, YEAR)
+    clean, reason = evidence.sanitize_fact(raw, YEAR)
     assert clean is None and reason == "numeric_without_value_unit"
 
 
 def test_sanitize_unit_salvaged_from_content():
     raw = {"category": "operating", "content": "国内经销商2,353家",
            "value": None, "unit": "", "period": "2025年末"}
-    clean, _ = annual_source._sanitize_fact(raw, YEAR)
+    clean, _ = evidence.sanitize_fact(raw, YEAR)
     assert clean["unit"] == "家" and clean["period"] == "2025-12-31"
 
 
@@ -126,15 +127,15 @@ def test_sanitize_unit_must_be_digit_adjacent():
     raw = {"category": "statement",
            "content": "国家十五五规划提出到2035年人均GDP达到中等发达国家水平",
            "value": None, "unit": "", "period": "2025A"}
-    clean, reason = annual_source._sanitize_fact(raw, YEAR)
+    clean, reason = evidence.sanitize_fact(raw, YEAR)
     assert clean is None and reason == "numeric_without_value_unit"
 
 
 def test_sanitize_bad_category_and_confidence_clamp():
     raw = {"category": "financial", "content": "x", "value": 1, "unit": "元"}
-    assert annual_source._sanitize_fact(raw, YEAR)[1] == "bad_category"
+    assert evidence.sanitize_fact(raw, YEAR)[1] == "bad_category"
     raw2 = {"category": "risk", "content": "政策风险", "confidence": 5.0}
-    clean2, _ = annual_source._sanitize_fact(raw2, YEAR)
+    clean2, _ = evidence.sanitize_fact(raw2, YEAR)
     assert clean2["confidence"] == 1.0 and clean2["value"] is None
 
 

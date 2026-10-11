@@ -1,0 +1,250 @@
+# -*- encoding: utf-8 -*-
+"""
+年报原子证据抽取 · 领域内核 (提示词 + 序列化 + 清洗, 2026-10 从
+skills/research/sources/annual_source.py 迁入; 编排与证据契约留调用方)
+
+职责边界: 本模块只含"对年报文本抽原子证据"的领域知识 —
+- _SYSTEM_PROMPT      证据抽取系统提示词 (四类原子/抽取纪律/输出格式)
+- extract_subsection  单小节一次 LLM 调用 → 原始原子数组
+                       (LLM 客户端由调用方注入, 只需 .invoke(messages)->str;
+                        本模块不绑定任何 LLM 框架)
+- build_subsection_body  小节 {title,text,tables} → 送 LLM 的原文块
+- _sanitize_fact 等     LLM 原始条目 → 干净条目 (数值化/period 归一/单位抢救)
+
+四类原子 (category):
+  operating  经营数据数字证据 (产能/产量/销量/利用率/经销商数…, 财务报表之外最有价值)
+  segment    分部/产品明细 (分产品/地区/渠道的收入、成本、毛利率)
+  statement  管理层论断 (展望/战略/风险应对的原句引用, 不冒充数值事实)
+  risk       风险条目
+
+输入: parse.py 产物 items.json 的 sections 小节 (每小节 {title,text,tables})。
+period 年报口径: 流量 "<年>A" / 期末存量 "<年>-12-31"。
+"""
+from __future__ import annotations
+
+import json
+import logging
+import re
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
+
+SECTION_ORDER = ("mdna", "governance", "matters", "shareholders")
+SECTION_CN = {
+    "mdna": "管理层讨论与分析",
+    "governance": "公司治理",
+    "matters": "重要事项",
+    "shareholders": "股份变动及股东情况",
+}
+CATEGORIES = ("operating", "segment", "statement", "risk")
+CATEGORY_CN = {
+    "operating": "经营数据",
+    "segment": "分部明细",
+    "statement": "管理层论断",
+    "risk": "风险条目",
+}
+# 空小节阈值: 正文过短且无表格时不值得一次 LLM 调用
+MIN_BODY_CHARS = 30
+# 契约兜底: content 含数字但 value/unit 均空时, 从数字后紧跟的单位抢救 (长词优先;
+# 须紧邻数字, 防"发达国【家】""两【个】方向"之类误配)
+_UNIT_ADJACENT_RE = re.compile(
+    r"\d(?:,\d{3})*(?:\.\d+)?\s*(个百分点|万吨|千吨|亿元|万元|亿|万|吨|%|元|家|人|个|项|次|名|强|款|瓶|户|亩|度|千瓦时)"
+)
+_HAS_DIGIT = re.compile(r"\d")
+
+# period 合法格式 (镜像自宿主 research 契约 contracts.valid_period, 本模块自包含):
+# YYYY / YYYYA / YYYYE / YYYYH1 / YYYYQn / YYYY-MM-DD (真实日期)
+_PERIOD_RE = re.compile(
+    r"^(?:\d{4}|\d{4}A|\d{4}E|\d{4}H1|\d{4}Q[1-4]"
+    r"|\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01]))$"
+)
+
+# 系统提示词为普通字符串 (非 .format/f-string 模板), JSON 花括号按字面量直书
+_SYSTEM_PROMPT = """你是年报细粒度证据抽取器。任务: 从用户给出的年报小节原文中抽取原子级证据事实, 供研究报告显式引用。
+
+【抽取纪律 — 违反任一条即为废稿】
+1. 只抽取原文明确陈述的信息; 严禁推断、演绎、跨句拼接、用常识补全。
+2. 数字原样照抄: content 与 quote 中的数值保留原文写法 (含千分位逗号与小数位); value 字段才是去千分位的纯数值。
+3. 每条必须附 quote = 原句逐字摘录 (表格数据摘抄整行, 单元格以" | "连接; 长句截取包含该数字的最短完整子句), 供人工复核对照。
+4. content 为单句且自含完整信息: 指标名 + 数值 + 单位 + 期间; 不用"公司/本公司"等代词开头。
+5. 拿不准的一律不抽。
+6. 所有文本字段一律简体中文 (原文如此则照抄)。
+7. 数量纪律: 单次输出不超过 60 条, 优先级 operating > segment > risk > statement; 超出时舍弃低价值条目。
+8. statement 与 risk 类: content 中不要出现具体数字 (期间信息放 period 字段);
+   论断本身的关键数字须原文直引, 并同时填 value 与 unit。
+
+【四类原子 (category)】
+- operating 经营数据: 产能/产量/销量/库存量/利用率/单价/经销商数量/门店数/员工与研发人员/在建项目/原料采购/分红回购 等经营指标 (财务报表之外的数字证据, 优先级最高)。
+- segment 分部明细: 分产品/分档次/分地区/分渠道/分行业的收入、成本、毛利率及同比变动。
+- statement 管理层论断: 展望、战略、经营举措、风险应对的原句要点引用 (是公司管理层观点, 不得虚构或推算数字)。
+- risk 风险条目: 公司披露的风险因素, 逐条原子化。
+
+【输出格式 — 只输出一个 JSON 对象, 围栏与解释都不要】
+{"facts": [{"category": "operating", "content": "贵州茅台2025年度酒类产量116,123.73吨", "value": 116123.73, "unit": "吨", "period": "2025A", "quote": "酒类 | 吨 | 116,123.73 | 85,104.14 | 339,977.86 | 11.25 | 2.13 | 9.67", "confidence": 1.0, "formula": ""}]}
+
+【字段规则】
+- category: operating / segment / statement / risk 四选一。
+- value: 数值型证据的纯数值 (去千分位与百分号; 百分数填数字本身, 如 16.50% 填 16.50); 非数值型填 null。
+- unit: 原始单位 (吨/万吨/万元/亿元/元/%/个百分点/家/人/个/项等); 表注单位 (如"单位:万元") 必须并入 unit 或 content, 不得丢失; 非数值型填 ""。
+- period: 报告期流量数据填 "<年>A"; 期末时点存量 (库存量/经销商数/期末员工数等) 填 "<年>-12-31" (年份见用户消息)。
+- confidence: 原文直引填 1.0; 经换算/推算 (如由同比反推) 填 0.9 且 formula 写明公式; 直引时 formula 为 ""。"""
+
+
+# ---------- 序列化 ----------
+
+def _table_to_lines(table: Dict[str, Any]) -> List[str]:
+    """表格 → 管道分隔文本行 (表名/单位并入首行, 供 LLM 保留单位口径)"""
+    if not isinstance(table, dict):
+        return []
+    lines: List[str] = []
+    head = " ".join(x for x in (table.get("name") or "", table.get("unit") or "") if x)
+    if head:
+        lines.append(f"[{head}]")
+    header = [str(h) for h in (table.get("header") or []) if str(h).strip()]
+    if header:
+        lines.append("| " + " | ".join(header))
+    for row in table.get("rows") or []:
+        cells = [str(c) for c in row]
+        if any(c.strip() for c in cells):
+            lines.append("| " + " | ".join(cells))
+    return lines
+
+
+def build_subsection_body(sub: Dict[str, Any]) -> str:
+    """小节正文 + 表格 → 送入 LLM 的原文块"""
+    parts: List[str] = []
+    text = (sub.get("text") or "").strip()
+    if text:
+        parts.append(text)
+    table_lines: List[str] = []
+    for t in sub.get("tables") or []:
+        table_lines.extend(_table_to_lines(t))
+    if table_lines:
+        parts.append("【表格】(管道符分隔; 表名行的方括号内为表名与单位)")
+        parts.extend(table_lines)
+    return "\n".join(parts)
+
+
+# ---------- LLM 调用与宽容解析 ----------
+
+def extract_subsection(llm, year: int, sec_key: str, title: str,
+                       body: str) -> List[Dict[str, Any]]:
+    """单小节一次 LLM 调用 → 原始原子数组 (未清洗); 解析失败抛 ValueError。
+
+    llm 由调用方注入 (只需 .invoke([{role,content}...]) -> str 的客户端)。
+    """
+    user = (
+        f"小节定位: {year}年年度报告 · {SECTION_CN.get(sec_key, sec_key)} ({sec_key}) · 小节「{title}」\n"
+        f"period 取值: 报告期流量用 \"{year}A\"; 期末时点用 \"{year}-12-31\"。\n\n"
+        f"【原文】\n{body}"
+    )
+    resp = llm.invoke([
+        {"role": "system", "content": _SYSTEM_PROMPT},
+        {"role": "user", "content": user},
+    ])
+    facts = _parse_llm_facts(resp)
+    if facts is None:
+        raise ValueError(f"LLM 输出无法解析为 JSON: {resp[:200]!r}")
+    return facts
+
+
+def _extract_outer_json(t: str) -> Any:
+    """混杂文本中剥最外层 JSON 容器: 以先出现的 [ 或 { 为界, 取到与之配对的最后一个闭括号"""
+    order = sorted((p, o, c) for p, o, c in
+                   ((t.find("["), "[", "]"), (t.find("{"), "{", "}")) if p >= 0)
+    for start, _, close in order:
+        frag = t[start:t.rfind(close) + 1]
+        if frag:
+            try:
+                return json.loads(frag)
+            except json.JSONDecodeError:
+                continue
+    return None
+
+
+def _parse_llm_facts(text: str) -> Optional[List[Dict[str, Any]]]:
+    """宽容解析: 剥 ```json 围栏; 接受 {"facts":[...]} 包装或裸数组; 彻底失败返回 None"""
+    if not text or not text.strip():
+        return None
+    t = text.strip()
+    if t.startswith("```"):
+        t = re.sub(r"^```[a-zA-Z]*\s*", "", t)
+        t = re.sub(r"\s*```\s*$", "", t)
+    try:
+        obj = json.loads(t)
+    except json.JSONDecodeError:
+        obj = _extract_outer_json(t)
+    if isinstance(obj, dict):
+        obj = obj.get("facts") or obj.get("data") or []
+    if isinstance(obj, list):
+        return [x for x in obj if isinstance(x, dict)]
+    return None
+
+
+# ---------- 清洗 ----------
+
+def _to_float(v: Any) -> Optional[float]:
+    """value 宽容数值化: 千分位/百分号/带单位串 → 纯 float; 不可数值化返回 None"""
+    if v is None or isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    s = str(v).replace(",", "").replace("，", "").strip()
+    m = re.search(r"-?\d+(?:\.\d+)?", s)
+    return float(m.group(0)) if m else None
+
+
+def _valid_period(period: str) -> bool:
+    """period 格式合法 (与宿主 research 契约同规; 日期型再挡 02-30)"""
+    if not _PERIOD_RE.match(period):
+        return False
+    if len(period) == 10:
+        try:
+            datetime.strptime(period, "%Y-%m-%d")
+        except ValueError:
+            return False
+    return True
+
+
+def _norm_period(p: Any, year: int) -> str:
+    """period 归一: 年报口径只允许 {年}A (流量) / {年}-12-31 (期末存量) / 合法原值"""
+    s = str(p or "").strip()
+    flow = ("", str(year), f"{year}年", f"{year}年度", f"{year}A", "报告期", "本期")
+    stock = (f"{year}年末", f"{year}-12-31", "期末", f"{year}年期末")
+    if s in flow:
+        return f"{year}A"
+    if s in stock:
+        return f"{year}-12-31"
+    return s if _valid_period(s) else f"{year}A"
+
+
+def sanitize_fact(raw: Dict[str, Any], year: int) -> Tuple[Optional[Dict[str, Any]], str]:
+    """LLM 原始条目 → 干净条目; 返回 (条目, 丢弃原因) — 条目为 None 即丢弃"""
+    category = str(raw.get("category") or "").strip()
+    if category not in CATEGORIES:
+        return None, "bad_category"
+    content = re.sub(r"\s+", " ", str(raw.get("content") or "")).strip()
+    if not content:
+        return None, "empty_content"
+    value = _to_float(raw.get("value"))
+    unit = str(raw.get("unit") or "").strip()
+    if value is None and not unit and _HAS_DIGIT.search(content):
+        m = _UNIT_ADJACENT_RE.search(content)      # 契约兜底: 从数字后抢救单位
+        if not m:
+            return None, "numeric_without_value_unit"
+        unit = m.group(1)
+    try:
+        confidence = min(1.0, max(0.0, float(raw.get("confidence", 1.0))))
+    except (TypeError, ValueError):
+        confidence = 1.0
+    return {
+        "category": category,
+        "content": content,
+        "value": value,
+        "unit": unit,
+        "period": _norm_period(raw.get("period"), year),
+        "quote": str(raw.get("quote") or "").replace("\n", " ").strip(),
+        "confidence": confidence,
+        "formula": str(raw.get("formula") or "").strip(),
+    }, ""

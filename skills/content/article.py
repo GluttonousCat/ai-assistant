@@ -65,68 +65,13 @@ def _render_charts(profile: Dict) -> Dict[str, str]:
     return out
 
 
-def _annual_block_from_items(ts_code: str,
-                             year: Optional[int] = None) -> str:
-    """年报语料块: cninfo.parse 的 items+sections → 成文素材 (确定性零 LLM)。
-
-    语料 = kpi3y(指标说明) + mdna 经营讨论小节 + mdna 风险小节的 text 合并;
-    items.json 不存在则现场 build_items (秒级 MD 转换)。sections 结构不符
-    被跳过的公司 (B 方言/ESG 式治理) 退回 kpi3y 或量化画像, 不阻塞成文。
-    """
-    if not ts_code:
-        return "(无语料: 按上方量化画像成文)"
-    import json
-    from pathlib import Path
-    from tools.cninfo.parse import MD_ROOT, build_items
-
-    paths = sorted(MD_ROOT.glob(f"{ts_code}/*_items.json"), reverse=True)
-    if year:
-        paths = [p for p in paths if p.name.startswith(f"{year}_")] or paths
-    if not paths:
-        r = build_items(ts_code)
-        if not r.get("ok"):
-            return "(无语料: 按上方量化画像成文)"
-        paths = [Path(r["json"])]
-    d = json.loads(paths[0].read_text(encoding="utf-8"))
-    items = d.get("items", {})
-    sections = d.get("sections", {})
-    label = (f"{d['report_year']} 年度报告" if d.get("category") == "ndbg"
-             else f"{d['report_year']} 半年度报告")
-    parts = []
-    kpi = items.get("kpi3y")
-    if kpi and kpi.get("text"):
-        parts.append(f"### 主要会计数据与指标说明\n{kpi['text'][:2500]}")
-    mdna_subs = sections.get("mdna", {}).get("subsections", [])
-    picks = (("经营情况讨论(管理层口径)",
-              ("经营情况讨论", "主要经营情况", "经营情况分析", "业务情况分析")),
-             ("公司自认风险", ("风险",)))
-    for head, kws in picks:
-        block = next((s["text"] for s in mdna_subs
-                      if s.get("text") and any(kw in s["title"] for kw in kws)),
-                     None)
-        if block is None and head.startswith("经营"):
-            # 银行等措辞漂移兜底: 取 mdna 首个非空小节 (兴业 '十四五成就回顾')
-            block = next((s["text"] for s in mdna_subs if s.get("text")), None)
-        if block:
-            parts.append(f"### {head}\n{block[:2500]}")
-    if not parts:
-        # 旧版 items.json 兼容 (business_review/risks 词表键)
-        for key, head in (("business_review", "经营情况讨论(管理层口径)"),
-                          ("risks", "公司自认风险")):
-            it = items.get(key)
-            if it and it.get("text"):
-                parts.append(f"### {head}\n{it['text'][:2500]}")
-    if not parts:
-        return "(无语料: 按上方量化画像成文)"
-    return f"### {label}要点 (年报披露项提取)\n" + "\n\n".join(parts)
-
-
 def write_stock_article(stock: str, years: int = 5,
                         annual_year: Optional[int] = None,
                         use_annual: bool = True) -> Dict[str, Any]:
     """画像 + 年报语料 -> 配图 -> 公众号文章 (六模块, 图文混排)。
 
-    年报语料 (cninfo PDF 提炼) 全程降级: 无 PDF/无文本层/提炼失败均不阻塞成文。
+    年报语料 (cninfo.parse.annual_corpus 提炼) 全程降级:
+    无 PDF/无文本层/提炼失败均不阻塞成文。
     """
     from harness.llm import get_agent_llm
     profile = build_company_profile(stock, years)
@@ -138,8 +83,10 @@ def write_stock_article(stock: str, years: int = 5,
     annual_block = "(无语料: 按上方量化画像成文)"
     if use_annual:
         try:
-            annual_block = _annual_block_from_items(
-                profile.get("ts_code", ""), year=annual_year)
+            from tools.cninfo.parse import annual_corpus
+            annual_block = (annual_corpus(profile.get("ts_code", ""),
+                                          year=annual_year)
+                            or annual_block)
         except Exception as e:  # noqa: BLE001 语料单源失败不挡主链路
             logger.warning(f"年报语料获取失败, 降级: {e}")
 
