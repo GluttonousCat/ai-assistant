@@ -21,7 +21,7 @@ items 范围内命中 100%（94 exact + 2 miss 均为财报主体版变体，范
 ## 2. 当前代码实态（从这里出发）
 
 ```
-skills/content/annual_items.py   单模块两层 (本任务全部落点):
+tools/cninfo/parse.py   单模块两层 (本任务全部落点):
   节层   _SECTION_ANCHOR_RE(第X节/章+装饰) / _pick_topic_level(主题式动态选级)
          / split_sections_titled(双方言+空标题两行式+混合式补齐)
   小节层 _anchor_rank(编号秩: 一、=2.5 / N.M=3.0 / N.M.K=+0.1·段 / （一）=3.5)
@@ -33,7 +33,7 @@ skills/content/annual_items.py   单模块两层 (本任务全部落点):
   编排   build_items(--audit 出审计) / build_for_index / main
 skills/content/article.py        interpret 成文语料块已接 items+sections
 样例产物: output/cninfo/md/{688008,600028,601166}.SH/2025_ndbg_items.json
-单测: skills/content/tests/test_annual_items.py (16例) + tools/pdf/tests
+单测: tools/cninfo/tests/test_parse.py (16例) + tools/pdf/tests
 ```
 
 ## 3. 提取规则（用户已拍板，勿改）
@@ -112,7 +112,7 @@ skills/content/article.py        interpret 成文语料块已接 items+sections
 48 份实测词表：kpi3y 8 别名 + nonrecurring 5 别名。
 注意：不收「主要财务指标」短别名 — 会把 kpi3y 锚到第二节节标题（澜起实证）。
 
-### 5.4 清洗规则（annual_items.py，items/sections 共用管线）
+### 5.4 清洗规则（tools/cninfo/parse.py，items/sections 共用管线）
 
 - 标题：去 #/编号/装饰符（`<u>(3)</u>` 的编号在装饰符**之内**，装饰先剥）/勾选框
 - text：剥表格行/页码行（`**14**` 装饰先剥；兴业裸数字页码 `15` 单列守卫）/
@@ -147,17 +147,17 @@ skills/content/article.py        interpret 成文语料块已接 items+sections
 - 用户逐行审代码：每个函数带实证注释（哪只股票哪一行踩的坑）
 - 提交规范：`feat/fix/refactor(日期): 模块 — 一句话`，用户审完才 push
 - 全部产物先文件后 SQL；LLM 定性层保持封存（等用户定用法）
-- 测试先行：改完跑 `pytest skills/content/tests tools/pdf/tests`
+- 测试先行：改完跑 `pytest tools/cninfo/tests tools/pdf/tests`
 
 ## 8. 入口与验证
 
 ```bash
 # 单股提取 (MD 已在盘时秒级; 会重新转 PDF)
-.venv/Scripts/python.exe -m skills.content.annual_items 澜起科技 [--audit]
+.venv/Scripts/python.exe -m tools.cninfo.parse 300308 [--audit]
 # 指数批量
-.venv/Scripts/python.exe -m skills.content.annual_items --index 000016.SH
+.venv/Scripts/python.exe -m tools.cninfo.parse --index 000016.SH
 # 测试
-.venv/Scripts/python.exe -m pytest skills/content/tests tools/pdf/tests -q
+.venv/Scripts/python.exe -m pytest tools/cninfo/tests tools/pdf/tests -q
 ```
 
 三方言样本（PDF 与 MD 均在盘）：澜起 688008.SH 准则式 / 中石化 600028.SH 主题式 /

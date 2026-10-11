@@ -3,7 +3,7 @@
 T03 · 年报细粒度证据抽取 (Stage 1 事实层)
 
 输入: output/cninfo/md/<ts_code>/<年>_ndbg_items.json
-      (skills/content/annual_items.py 的产物, 本模块只读不写; sections 每小节含 title/text/tables)
+      (tools/cninfo/parse.py 的产物, 本模块只读不写; sections 每小节含 title/text/tables)
 输出: EvidenceShard(kind="annual") → output/research/<ts_code>/facts_annual_<年>.json
       + 人工抽检复核清单 annual_review_<年>.md (随机 10% 抽取句↔原句对照)
 
@@ -107,7 +107,7 @@ def annual_items_path(ts_code: str, year: int) -> Path:
 def load_annual_items(items_path: Path) -> Dict[str, Any]:
     if not items_path.exists():
         raise FileNotFoundError(
-            f"年报 items 不存在: {items_path} (先运行 skills/content/annual_items.py 生成)")
+            f"年报 items 不存在: {items_path} (先运行 python -m tools.cninfo.parse 生成)")
     data = json.loads(items_path.read_text(encoding="utf-8"))
     if not isinstance(data.get("sections"), dict):
         raise ValueError(f"items 缺少 sections 结构: {items_path}")

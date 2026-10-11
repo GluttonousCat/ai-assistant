@@ -71,7 +71,8 @@ DB 实时角色校验）、`storage/pg.py`（PgClient 是上下文管理器，�
 关键表：`fin.report_meta`（file_name 原名/title 清洗后/org/target/industry/region/market）、
 `fin.report_forecast`（盈利预测）。market 词表：A股/H股/TW股/日股/韩股/美股/欧洲股/东南亚股/商品/宏观/其他。
 
-另：**年报披露项提取**（skills/content/annual_items.py，纯文件产物不碰 SQL）：
+另：**年报披露项提取**（tools/cninfo/parse.py，自包含解析、纯文件产物不碰 SQL；
+2026-10 从 skills/content/annual_items.py 迁入 cninfo 模块，输入只认代码）：
 cninfo 报告 PDF → MD（output/cninfo/md/）→ `{items, sections}` JSON。
 items=第二章精确两项（kpi3y/nonrecurring，词表+相似度兜底，分季度走 Tushare SQL）；
 sections=三~七节按 L1 小节全量（mdna 全量/治理·事项关键词/股东整节+节首前文/

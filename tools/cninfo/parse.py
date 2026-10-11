@@ -1,85 +1,127 @@
 # -*- encoding: utf-8 -*-
 """
-年报披露项提取: 全文 MD → {items, sections} JSON (纯文件产物, 不碰 SQL)
+定期报告解析: 报告 PDF → MD → {items, sections} JSON (纯文件产物, 不碰任何数据库)
 
-  items     第二章精确两项 (词表+相似度兜底): kpi3y / nonrecurring
-            (分季度数据 Tushare fin.income 季度期已覆盖, 走 SQL 不做提取)
-  sections  三~七节按 L1 小节全量 (SECTION_RULES); 结构不符的节跳过不兜底,
-            跳过原因进 audit (--audit) — 由面到点, 词表/规则按审计迭代
+覆盖类别 (Q1/Q3/H1/AR):
+- AR 年报 (ndbg) / H1 半年报 (bndbg) — 同构解析, 当前解析覆盖面;
+  H1 与 AR 章节同构 (管理层讨论与分析/风险), AR 为图片版无文本层时 H1 顶上
+- Q1 一季报 (yjdbg) / Q3 三季报 (sjdbg) — 下载与元数据已支持 (client/downloader),
+  解析暂未覆盖 (短报告无三~七节结构, 需另立规则, 后续按需扩展)
+
+链路:
+  downloads/<ts_code>/<year>_<cat>.pdf (downloader 产物, 文件在盘即输入)
+    → MD   (pymupdf4llm 主路; 失败/过短降级 文本层链 fitz→pdfplumber→pypdf)
+    → items    第二章精确两项 (kpi3y/nonrecurring, 词表+相似度兜底)
+    → sections 三~七节按 L1 小节全量 (SECTION_RULES): mdna 全量/治理·事项关键词/
+               股东整节+节首前文/债券<500字跳过; 结构不符的节跳过并记审计
+    → output/cninfo/md/<ts_code>/<year>_<cat>.md + _items.json
 
 小节切分: 编号形态判兄弟 (一、=2.5 / N.M=3.0 / N.M.K=+0.1·段 / （一）=3.5),
 # 层数不可信 — 澜起 L1 与 L2 同为 ####; 兴业 L1 混用 ####/#####/######。
-方言/清洗/守卫的实证依据见 docs/agents/profile_extraction_handoff.md §5。
+节定位双方言+混合式 (第X节/章锚≥4 / 主题式动态选节级)。
+方言/清洗/守卫的实证依据见宿主项目 docs/agents/profile_extraction_handoff.md §5。
+
+输入只认证券代码 (6 位或 ts_code); 名称解析归调用方 (agent 词表)。
+存储说明: 当前产物为 JSON 文件; 结构化存储架构另行设计 (勿在此加库依赖)。
 
 用法:
-    python -m skills.content.annual_items 澜起科技 [--year 2025] [--audit]
-    → output/cninfo/md/<代码>/<年度>_<类别>_items.json
+    python -m tools.cninfo.parse 300308 [--year 2025] [--audit]
+    python -m tools.cninfo.parse --index 000300.SH --year 2025   # 指数成分批量
 """
 from __future__ import annotations
 
+import argparse
 import json
+import logging
 import re
 import sys
+import time
 from collections import Counter
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from core.logger import get_logger
+from .downloader import DOWNLOAD_ROOT
+from .filters import normalize_ts_code
 
-logger = get_logger(__name__)
-
-
-def _locate_report_pdfs(ts_code: str,
-                        year: Optional[int] = None) -> list:
-    """年报+半年报候选 (报告期新→旧, 同期年报优先)。半年报与年报同构
-    (管理层讨论与分析/风险章节), 年报为图片版无文本层时以半年报顶上。
-
-    下载目录即真相 (cninfo 2026-10 起纯文件产物): output/cninfo/downloads/
-    <ts_code>/<year>_<cat>.pdf, 文件在盘即已下载; 排序与旧 PG 查询一致
-    (report_year DESC, category DESC — 'ndbg' > 'bndbg' 同期年报优先)。"""
-    root = Path("output/cninfo/downloads") / ts_code
-    if not root.is_dir():
-        return []
-    cands = []
-    for p in root.glob("*_ndbg.pdf"):
-        cands.append(p)
-    for p in root.glob("*_bndbg.pdf"):
-        cands.append(p)
-    out = [{"report_year": int(p.stem.split("_")[0]),
-            "category": p.stem.split("_", 1)[1], "file_path": str(p)}
-           for p in cands]
-    out = [c for c in out if year is None or c["report_year"] == year]
-    out.sort(key=lambda c: (c["report_year"], c["category"]), reverse=True)
-    return out
-
+logger = logging.getLogger(__name__)
 
 MD_ROOT = Path("output/cninfo/md")
 
-# 第二章披露项词表 (受控 item_key; 别名按实证扩充, 遇新措辞加一条)。
-# 三~七节内容不再走词表 — sections 结构按小节全量, 覆盖面更完整。
-ITEM_ALIASES: Dict[str, List[str]] = {
-    "kpi3y": ["主要会计数据和财务指标", "主要财务数据及指标", "近三年主要会计数据",
-              "近三年主要财务数据", "会计数据和财务指标摘要", "主要会计数据及财务指标",
-              "财务概要", "财务摘要"],
-    # 注: 不收「主要财务指标」短别名 — 会把 kpi3y 锚到第二节节标题
-    # (澜起 '## 第二节 公司简介和主要财务指标' 实证); 该措辞由相似度兜底覆盖
-    "nonrecurring": ["非经常性损益项目和金额", "非经常性损益项目及涉及金额",
-                     "非经常性损益项目", "非经常性损益明细表", "非经常性损益表"],
-}
+# ---------------- PDF → MD ----------------
 
-# 勾选框后缀 '√适用□不适用' 常贴在标题尾 (万华600309/中铝601600 实证,
-# 曾把非标记行守卫挤爆致 miss); 独立成行时是纯噪声
-_CHECKBOX = re.compile(r"[□√]\s*(?:不\s*)?适\s*用(?:\s*[□√]\s*(?:不\s*)?适\s*用)?")
+
+def _extract_text(path: str) -> str:
+    """PDF 文本层全文提取。降级链: fitz → pdfplumber → pypdf, 全败返回空串。
+    (图片型/扫描件 PDF 文本层为空, 需视觉 OCR, 不在本模块范围)"""
+    try:
+        import fitz
+        with fitz.open(path) as doc:
+            return "\n".join(p.get_text() for p in doc)
+    except ImportError:
+        pass
+    except Exception as e:  # noqa: BLE001 损坏文件降级链兜底
+        logger.warning(f"fitz 提取失败, 降级 pdfplumber: {e}")
+
+    try:
+        import pdfplumber
+        with pdfplumber.open(path) as pdf:
+            return "\n".join((p.extract_text() or "") for p in pdf.pages)
+    except ImportError:
+        pass
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"pdfplumber 提取失败, 降级 pypdf: {e}")
+
+    try:
+        from pypdf import PdfReader
+        with open(path, "rb") as f:
+            reader = PdfReader(f)
+            return "\n".join((p.extract_text() or "") for p in reader.pages)
+    except ImportError:
+        logger.warning("PDF 提取库均不可用 (需 pymupdf/pdfplumber/pypdf 之一)")
+        return ""
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"PDF 文本提取全部失败 {path}: {e}")
+        return ""
+
+
+def to_markdown(path: str) -> str:
+    """PDF → MD。pymupdf4llm 主路 (margins 剥页眉页脚); 失败/结果过短降级
+    纯文本层 + 分页标记 (保章节可定位性)。"""
+    try:
+        import pymupdf4llm
+        md = pymupdf4llm.to_markdown(doc=path, margins=(45, 45, 0, 0),
+                                     write_images=False)
+        if isinstance(md, str) and len(md.strip()) > 100:
+            return md
+        logger.warning(f"MD 转换结果过短, 走文本降级: {path}")
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"MD 转换失败降级纯文本 {path}: {e}")
+
+    text = _extract_text(path)
+    if not text:
+        return ""
+    out, n = [], 0
+    for i, line in enumerate(text.splitlines()):
+        if i and i % 40 == 0:
+            n += 1
+            out.append(f"\n\n----- [第{n}页段] -----\n\n")
+        out.append(line)
+    return "".join(out)
+
 
 # ---------------- ① 定位与② 边界 ----------------
 
-# 编号后容忍空格 (澜起 '#### 二、 经营情况讨论与分析' 实证 — 曾致 L1 误判深层)
+# 编号行容忍空格 (澜起 '#### 二、 经营情况讨论与分析' 实证 — 曾致 L1 误判深层)
 _L1_NUM = re.compile(r"^[一二三四五六七八九十]+、\s*\S{0,50}$")
 _L2_NUM = re.compile(r"^[（(][一二三四五六七八九十]+[）)]\s*\S{0,50}$")
 _D_NUM = re.compile(r"^\d+(?:\.\d+)+\s*\S{0,50}$")
 _HEAD = re.compile(r"^(#{1,6})\s+\S")
 _PAGE_NO = re.compile(r"^\d+\s*/\s*\d+$")
+
+# 勾选框后缀 '√适用□不适用' 常贴在标题尾 (万华600309/中铝601600 实证,
+# 曾把非标记行守卫挤爆致 miss); 独立成行时是纯噪声
+_CHECKBOX = re.compile(r"[□√]\s*(?:不\s*)?适\s*用(?:\s*[□√]\s*(?:不\s*)?适\s*用)?")
 
 _BARE_STRIP = re.compile(r"[#\s、。（(）)0-9.\-—第三节第四五六年度近<>*_/a-zA-Z]")
 
@@ -456,8 +498,21 @@ def _subsection_dict(title: str, body: str, headers: set) -> Dict:
             "tables": tables}
 
 
-# ---------------- 三~七节规则 (§3, 用户拍板) ----------------
+# ---------------- 披露项词表与节规则 ----------------
 
+# 第二章披露项词表 (受控 item_key; 别名按实证扩充, 遇新措辞加一条)。
+# 三~七节内容不再走词表 — sections 结构按小节全量, 覆盖面更完整。
+ITEM_ALIASES: Dict[str, List[str]] = {
+    "kpi3y": ["主要会计数据和财务指标", "主要财务数据及指标", "近三年主要会计数据",
+              "近三年主要财务数据", "会计数据和财务指标摘要", "主要会计数据及财务指标",
+              "财务概要", "财务摘要"],
+    # 注: 不收「主要财务指标」短别名 — 会把 kpi3y 锚到第二节节标题
+    # (澜起 '## 第二节 公司简介和主要财务指标' 实证); 该措辞由相似度兜底覆盖
+    "nonrecurring": ["非经常性损益项目和金额", "非经常性损益项目及涉及金额",
+                     "非经常性损益项目", "非经常性损益明细表", "非经常性损益表"],
+}
+
+# 三~七节规则 (§3, 用户拍板)
 SECTION_RULES: Dict[str, Dict] = {
     "mdna":         {"mode": "all"},          # 全量 (用户原话"全部重要")
     "governance":   {"mode": "keyword",
@@ -556,21 +611,40 @@ def extract_items(md: str, audit: Optional[Dict] = None) -> Dict[str, Dict]:
     return out
 
 
+def _locate_report_pdfs(ts_code: str,
+                        year: Optional[int] = None) -> list:
+    """AR+H1 候选 (报告期新→旧, 同期年报优先)。半年报与年报同构
+    (管理层讨论与分析/风险章节), 年报为图片版无文本层时以半年报顶上。
+
+    下载目录即真相 (downloader 产物): downloads/<ts_code>/<year>_<cat>.pdf,
+    文件在盘即已下载; 排序 year DESC, category DESC ('ndbg' > 'bndbg' 同期年报优先)。"""
+    root = DOWNLOAD_ROOT / ts_code
+    if not root.is_dir():
+        return []
+    cands = list(root.glob("*_ndbg.pdf")) + list(root.glob("*_bndbg.pdf"))
+    out = [{"report_year": int(p.stem.split("_")[0]),
+            "category": p.stem.split("_", 1)[1], "file_path": str(p)}
+           for p in cands]
+    out = [c for c in out if year is None or c["report_year"] == year]
+    out.sort(key=lambda c: (c["report_year"], c["category"]), reverse=True)
+    return out
+
+
 def build_items(stock: str, year: Optional[int] = None,
                 want_audit: bool = False) -> Dict:
-    """单股: 定位报告 PDF (年报→半年报降级链) → MD → items+sections → JSON 落盘。"""
-    from skills.fin_query.skill import lookup_ts_code
+    """单股: 定位报告 PDF (年报→半年报降级链) → MD → items+sections → JSON 落盘。
 
-    ts_code = lookup_ts_code(stock.strip())
+    输入只认证券代码 (名称解析归调用方)。"""
+    ts_code = normalize_ts_code(stock.strip())
     if not ts_code:
-        return {"ok": False, "error": f"未识别股票: {stock}"}
+        return {"ok": False, "error": f"未识别证券代码: {stock} "
+                f"(只认 6 位代码或 ts_code, 名称解析归调用方)"}
 
     cands = _locate_report_pdfs(ts_code, year)
     if not cands:
         return {"ok": False, "error":
                 f"{ts_code} 无已下载年报/半年报 PDF (先跑 tools.cninfo.downloader)"}
 
-    from tools.pdf import to_markdown
     loc, md = None, ""
     for row in cands:
         if not Path(row["file_path"]).exists():
@@ -607,19 +681,9 @@ def build_items(stock: str, year: Optional[int] = None,
 
 
 def build_for_index(index_code: str, year: Optional[int] = None) -> Dict[str, int]:
-    """指数成分股批量 → 每股 items.json (Tushare 取最新成分, 逐股重提)。"""
-    import time
-    from datetime import date, timedelta
-    import tushare as ts
-    from core.config import get_config
-
-    pro = ts.pro_api(get_config().tushare_token)
-    start = (date.today() - timedelta(days=95)).strftime("%Y%m%d")
-    df = pro.index_weight(
-        index_code=index_code,
-        start_date=start, end_date=date.today().strftime("%Y%m%d"))
-    latest = df["trade_date"].max()
-    codes = sorted(df[df["trade_date"] == latest]["con_code"].unique())
+    """指数成分股批量 → 每股 items.json (tushare 最新成分, 逐股重提)。"""
+    from .batch import _load_index_universe
+    codes = [s["ts_code"] for s in _load_index_universe(index_code)]
     logger.info(f"披露项批量: {index_code} {len(codes)} 只")
     stats = {"ok": 0, "err": 0}
     for i, code in enumerate(codes, 1):
@@ -635,23 +699,29 @@ def build_for_index(index_code: str, year: Optional[int] = None) -> Dict[str, in
 
 
 def main() -> int:
-    import argparse
-    p = argparse.ArgumentParser(description="年报披露项提取 (JSON 文件产物)")
-    p.add_argument("stock", nargs="?", default="", help="股票名或代码")
-    p.add_argument("--year", type=int, default=0, help="指定报告年度")
-    p.add_argument("--index", default="", help="指数成分批量 (如 000016.SH)")
+    p = argparse.ArgumentParser(description="定期报告披露项提取 (JSON 文件产物)")
+    p.add_argument("stock", nargs="?", default="", help="证券代码 (6位或 ts_code)")
+    p.add_argument("--year", type=int, default=0, help="报告年度 (缺省最新)")
     p.add_argument("--audit", action="store_true",
-                   help="输出审计 (items 命中方式/sections 跳过原因)")
+                   help="输出审计 (命中方式/相似度/跳过原因)")
+    p.add_argument("--index", default="",
+                   help="指数成分批量 (如 000300.SH, 需 TUSHARE_TOKEN)")
     args = p.parse_args()
+
     if args.index:
         stats = build_for_index(args.index, year=args.year or None)
-        print(f"[ITEMS] {stats}")
-        return 0 if stats["err"] == 0 else 1
+        print(f"[INDEX] {stats}")
+        return 0
+
     if not args.stock:
-        p.error("stock 或 --index 至少一个")
+        p.error("需提供证券代码或 --index")
     r = build_items(args.stock, year=args.year or None, want_audit=args.audit)
-    print(json.dumps(r, ensure_ascii=False, indent=1))
-    return 0 if r["ok"] else 1
+    if not r["ok"]:
+        print(f"[ERR] {r['error']}")
+        return 1
+    print(json.dumps(r, ensure_ascii=False, indent=1,
+                     default=str)[:4000])
+    return 0
 
 
 if __name__ == "__main__":

@@ -1,8 +1,8 @@
 # -*- encoding: utf-8 -*-
-"""annual_items 单测 — 五条硬规则各一例 + 三方言形态 fixture (澜起/中石化/兴业实证)。"""
+"""定期报告解析单测 — 五条硬规则各一例 + 三方言形态 fixture (澜起/中石化/兴业实证)。"""
 from __future__ import annotations
 
-from skills.content.annual_items import (
+from tools.cninfo.parse import (
     _block_end, _clean_text, _clean_title, extract_items, marker_rank,
     parse_md_tables,
 )
@@ -142,7 +142,7 @@ def test_marker_rank_segment_depth():
 
 # ---------- 节层: 双方言 + §3 五节规则 ----------
 
-from skills.content.annual_items import (  # noqa: E402
+from tools.cninfo.parse import (  # noqa: E402
     _alias_hit, extract_sections, split_sections_titled,
 )
 

@@ -67,7 +67,7 @@ def _render_charts(profile: Dict) -> Dict[str, str]:
 
 def _annual_block_from_items(ts_code: str,
                              year: Optional[int] = None) -> str:
-    """年报语料块: annual_items 的 items+sections → 成文素材 (确定性零 LLM)。
+    """年报语料块: cninfo.parse 的 items+sections → 成文素材 (确定性零 LLM)。
 
     语料 = kpi3y(指标说明) + mdna 经营讨论小节 + mdna 风险小节的 text 合并;
     items.json 不存在则现场 build_items (秒级 MD 转换)。sections 结构不符
@@ -77,7 +77,7 @@ def _annual_block_from_items(ts_code: str,
         return "(无语料: 按上方量化画像成文)"
     import json
     from pathlib import Path
-    from skills.content.annual_items import MD_ROOT, build_items
+    from tools.cninfo.parse import MD_ROOT, build_items
 
     paths = sorted(MD_ROOT.glob(f"{ts_code}/*_items.json"), reverse=True)
     if year:
