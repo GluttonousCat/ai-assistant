@@ -27,9 +27,9 @@ tools/cninfo/
   store.py       文件存储: org_map.json + 单股 <ts_code>.json (公告元数据+断点 state)
   downloader.py  获取编排 + CLI 单入口: 单股 CninfoDownloader / 批量 BatchCrawler
                  (断点续传 + 限流熔断 + 时间预算; 2026-10 batch.py 并入)
-  parse.py       报告解析 + CLI: PDF→MD→{items,sections} JSON (AR/H1);
-                 annual_corpus 确定性语料提炼
-  evidence.py    年报原子证据抽取内核: 系统提示词/小节序列化/原子清洗
+  parse.py       报告处理 + CLI: PDF→MD→{items,sections} JSON (AR/H1);
+                 annual_corpus 语料提炼; 证据抽取内核 (四类原子提示词+清洗,
+                 LLM 调用方注入; 2026-10-11 evidence.py 并入)
                  (LLM 客户端由调用方注入; 编排与 EvidenceShard 契约在 research 侧)
   tests/         纯函数/文件存储/解析方言单测 (无网络)
 ```
@@ -97,7 +97,6 @@ meta 已 done 仅缺 PDF 的股票走 **meta 直读下载**（`download_from_met
   fitz→pdfplumber→pypdf）→ items（第二章 kpi3y/nonrecurring 词表+相似度兜底）
   + sections（三~七节 L1 小节全量，SECTION_RULES）；AR 无文本层时 H1 顶上。
   Q1/Q3 下载与元数据已支持，解析待另立规则（短报告无三~七节结构）。
-- evidence.py：四类原子（operating/segment/statement/risk）证据抽取提示词与
   清洗链；LLM 客户端调用方注入（`.invoke(messages)->str`），编排与 EvidenceShard
   契约留 research 侧（annual_source.py）。
 

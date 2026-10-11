@@ -8,7 +8,7 @@
 — 下载与元数据四类全覆盖; 解析当前覆盖 AR/H1 (同构), Q1/Q3 待后续规则。
 
 结构 (分层: client 纯网络 / filters 纯函数 / store 文件存储 /
-        downloader 获取编排(单股+批量) / parse 解析 / evidence 证据抽取内核):
+        downloader 获取编排(单股+批量) / parse 报告处理):
 - client.py     HTTP 客户端: orgId 解析 / 公告检索 / 全市场清单 / PDF 下载
                 (直连+重试+断点续传+魔数校验)
 - filters.py    公告筛选纯函数: 年报全文识别 / 报告年度解析 / 代码归一化
@@ -17,12 +17,11 @@
                 单股 CninfoDownloader (--stock 300308 --years 2024) /
                 批量 BatchCrawler (断点续传/限流熔断/时间预算/--index 指数成分,
                 无 --stock 即批量)
-- parse.py      报告解析+CLI: PDF→MD→{items,sections} JSON (AR/H1);
-                annual_corpus 确定性语料提炼 (kpi3y+mdna 经营/风险)
+- parse.py      报告处理+CLI (2026-10-11 evidence.py 并入, 同为处理类):
+                解析 PDF→MD→{items,sections} JSON (AR/H1) /
+                annual_corpus 确定性语料提炼 (kpi3y+mdna 经营/风险) /
+                证据抽取内核 (四类原子提示词+清洗, LLM 客户端由调用方注入)
                 python -m tools.cninfo.parse 300308 --year 2024 [--audit]
-- evidence.py   年报原子证据抽取内核: 系统提示词/小节序列化/原子清洗
-                (LLM 客户端由调用方注入, 四类原子 operating/segment/
-                statement/risk; 编排与证据契约留调用方)
 
 输入只认证券代码 (6 位或 ts_code) — 股票名称解析 (如 '中际旭创') 是调用方
 (agent 词表) 的职责。历史版本曾写 PG 表 fin.cninfo_* (2026-10 起改文件产物,

@@ -8,7 +8,7 @@ T03 · 年报细粒度证据抽取 (Stage 1 事实层)
       + 人工抽检复核清单 annual_review_<年>.md (随机 10% 抽取句↔原句对照)
 
 分层 (2026-10 起): 抽取领域内核 — 系统提示词/小节序列化/原子清洗 — 在
-tools/cninfo/evidence.py (自包含, LLM 客户端由本模块注入 get_extract_llm);
+tools/cninfo/parse.py 证据抽取段 (自包含, LLM 客户端由本模块注入 get_extract_llm);
 本模块只做研究侧契约编排: eid 生成 (A:<年>.<节>.<小节序号>.<序号>, 绝不信任
 LLM 生成 ID) / EvidenceShard 装配 / 契约校验兜底 / 抽检清单 / research 目录落盘。
 
@@ -37,7 +37,7 @@ from skills.research.contracts import (
     save_shard,
     validate_shard,
 )
-from tools.cninfo.evidence import (CATEGORIES, CATEGORY_CN, MIN_BODY_CHARS,
+from tools.cninfo.parse import (CATEGORIES, CATEGORY_CN, MIN_BODY_CHARS,
                                    SECTION_ORDER, build_subsection_body,
                                    extract_subsection, sanitize_fact)
 
