@@ -56,7 +56,7 @@ def detect_financial_risk(stock: str) -> Dict[str, Any]:
         fin_rows = pg.fetch_all(
             "SELECT i.end_date, i.revenue, i.n_income_attr_p, "
             "       i.net_after_nr_lp_correct, c.n_cashflow_act, "
-            "       b.goodwill, b.equity_attr_p, b.accounts_receiv, "
+            "       b.goodwill, b.total_hldr_eqy_exc_min_int, b.accounts_receiv, "
             "       b.total_assets "
             "FROM fin.income i "
             "LEFT JOIN fin.cashflow c ON i.ts_code=c.ts_code "
@@ -131,7 +131,7 @@ def detect_financial_risk(stock: str) -> Dict[str, Any]:
     # 5. 商誉占净资产比
     if fin_rows:
         r = fin_rows[0]
-        gw, eq = _num(r["goodwill"]), _num(r["equity_attr_p"])
+        gw, eq = _num(r["goodwill"]), _num(r["total_hldr_eqy_exc_min_int"])
         if gw is not None and eq and eq > 0:
             share = gw / eq * 100
             if share > 20:

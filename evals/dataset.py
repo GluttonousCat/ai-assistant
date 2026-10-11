@@ -53,7 +53,7 @@ METRIC_STD = {
     # --- 财务 (balancesheet) ---
     "total_assets": "fin_b_total_assets",
     "total_liab": "fin_b_total_liab",
-    "equity_attr_p": "fin_b_equity_attr_p",
+    "total_hldr_eqy_exc_min_int": "fin_b_total_hldr_eqy_exc_min_int",
     "goodwill": "fin_b_goodwill",
     # --- 财务 (cashflow) ---
     "n_cashflow_act": "fin_c_n_cashflow_act",

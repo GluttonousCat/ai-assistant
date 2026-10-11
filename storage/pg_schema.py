@@ -162,7 +162,9 @@ def init_schema(pg_client) -> None:
 # ============================================================
 # 财务数据仓库 (schema: fin)
 # ============================================================
-# 四大财务报表 + 财务指标, 全字段覆盖 Tushare 规范
+# 三大财务报表与官方文档全字段 1:1 (income 94 / balancesheet 158 / cashflow 97,
+# 2026-10 官网输出参数表; 存量库曾为子集+错名列, 已迁齐并删死列);
+# 财务指标 fina_indicator 为表内子集 (111/167, 未补全)
 
 DDL_FIN_SCHEMA = """CREATE SCHEMA IF NOT EXISTS fin"""
 
@@ -270,100 +272,277 @@ COMMENT ON TABLE fin.income IS '利润表(全字段)';
 """
 
 
-# ---------- 资产负债表 ----------
+# ---------- 资产负债表 (Tushare 官方 158 字段 1:1, 2026-10 官网输出参数表) ----------
 DDL_BALANCESHEET = """
 CREATE TABLE IF NOT EXISTS fin.balancesheet (
-    ts_code          VARCHAR(16) NOT NULL,
-    ann_date         DATE,
-    f_ann_date       DATE,
-    end_date         DATE NOT NULL,
-    report_type      VARCHAR(2) NOT NULL DEFAULT '1',
-    comp_type        VARCHAR(2),
-    end_type         VARCHAR(2),
-    total_share      NUMERIC(24,4),          -- 总股本
-    cap_rese         NUMERIC(24,4),          -- 资本公积金
-    undistr_porfit   NUMERIC(24,4),          -- 未分配利润
-    surplus_rese     NUMERIC(24,4),          -- 盈余公积金
-    special_rese     NUMERIC(24,4),          -- 专项储备
-    money_cap        NUMERIC(24,4),          -- 货币资金
-    trad_asset       NUMERIC(24,4),          -- 交易性金融资产
-    notes_receiv     NUMERIC(24,4),          -- 应收票据
-    accounts_receiv  NUMERIC(24,4),          -- 应收账款
-    oth_receiv       NUMERIC(24,4),          -- 其他应收款
-    prepayment       NUMERIC(24,4),          -- 预付款项
-    invent           NUMERIC(24,4),          -- 存货
-    oth_cur_assets   NUMERIC(24,4),          -- 其他流动资产
-    fix_assets       NUMERIC(24,4),          -- 固定资产
-    cip              NUMERIC(24,4),          -- 在建工程
-    intang_assets    NUMERIC(24,4),          -- 无形资产
-    r_and_d          NUMERIC(24,4),          -- 研发费用(资本化)
-    goodwill         NUMERIC(24,4),          -- 商誉
-    lt_equity_invest NUMERIC(24,4),          -- 长期股权投资
-    oth_eq_invest    NUMERIC(24,4),          -- 其他权益工具投资
-    oth_lt_invest    NUMERIC(24,4),          -- 其他长期投资
-    lt_rec            NUMERIC(24,4),         -- 长期应收款
-    dep_inv          NUMERIC(24,4),          -- 投资性房地产
-    oth_ncur_assets  NUMERIC(24,4),          -- 其他非流动资产
-    total_assets     NUMERIC(24,4),          -- 资产总计
-    st_borr          NUMERIC(24,4),          -- 短期借款
-    notes_payable    NUMERIC(24,4),          -- 应付票据
-    acct_payable     NUMERIC(24,4),          -- 应付账款
-    adv_receipts     NUMERIC(24,4),          -- 预收款项
-    employee_payable NUMERIC(24,4),          -- 应付职工薪酬
-    taxes_payable    NUMERIC(24,4),          -- 应交税费
-    oth_cur_liab     NUMERIC(24,4),          -- 其他流动负债
-    bond_payable     NUMERIC(24,4),          -- 应付债券
-    lt_payable       NUMERIC(24,4),          -- 长期应付款
-    lt_borr          NUMERIC(24,4),          -- 长期借款
-    total_liab       NUMERIC(24,4),          -- 负债合计
-    equity_attr_p    NUMERIC(24,4),          -- 归属于母公司股东权益
-    minority_int     NUMERIC(24,4),          -- 少数股东权益
-    total_hldr_eqy_exc_min_int NUMERIC(24,4), -- 股东权益合计(不含少数股东)
-    total_hldr_eqy_inc_min_int NUMERIC(24,4), -- 股东权益合计(含少数股东)
-    total_liab_hldr_eqy NUMERIC(24,4),       -- 负债和股东权益总计
-    -- 补充关键衍生字段
-    nca_disploss     NUMERIC(24,4),          -- 处置非流动资产损失
-    credit_impa_loss NUMERIC(24,4),          -- 信用减值损失
-    update_flag      VARCHAR(4),
-    created_at       TIMESTAMP DEFAULT now(),
+    ts_code                     VARCHAR(16) NOT NULL,      -- TS股票代码
+    ann_date                    DATE,                      -- 公告日期
+    f_ann_date                  DATE,                      -- 实际公告日期
+    end_date                    DATE NOT NULL,             -- 报告期
+    report_type                 VARCHAR(2) NOT NULL DEFAULT '1', -- 报表类型
+    comp_type                   VARCHAR(2),                -- 公司类型(1一般工商业2银行3保险4证券7多元金融)
+    end_type                    VARCHAR(2),                -- 报告期类型
+    total_share                 NUMERIC(24,4),             -- 期末总股本（股）
+    cap_rese                    NUMERIC(24,4),             -- 资本公积金
+    undistr_porfit              NUMERIC(24,4),             -- 未分配利润
+    surplus_rese                NUMERIC(24,4),             -- 盈余公积金
+    special_rese                NUMERIC(24,4),             -- 专项储备
+    money_cap                   NUMERIC(24,4),             -- 货币资金
+    trad_asset                  NUMERIC(24,4),             -- 交易性金融资产
+    notes_receiv                NUMERIC(24,4),             -- 应收票据
+    accounts_receiv             NUMERIC(24,4),             -- 应收账款
+    oth_receiv                  NUMERIC(24,4),             -- 其他应收款
+    prepayment                  NUMERIC(24,4),             -- 预付款项
+    div_receiv                  NUMERIC(24,4),             -- 应收股利
+    int_receiv                  NUMERIC(24,4),             -- 应收利息
+    inventories                 NUMERIC(24,4),             -- 存货
+    amor_exp                    NUMERIC(24,4),             -- 待摊费用
+    nca_within_1y               NUMERIC(24,4),             -- 一年内到期的非流动资产
+    sett_rsrv                   NUMERIC(24,4),             -- 结算备付金
+    loanto_oth_bank_fi          NUMERIC(24,4),             -- 拆出资金
+    premium_receiv              NUMERIC(24,4),             -- 应收保费
+    reinsur_receiv              NUMERIC(24,4),             -- 应收分保账款
+    reinsur_res_receiv          NUMERIC(24,4),             -- 应收分保合同准备金
+    pur_resale_fa               NUMERIC(24,4),             -- 买入返售金融资产
+    oth_cur_assets              NUMERIC(24,4),             -- 其他流动资产
+    total_cur_assets            NUMERIC(24,4),             -- 流动资产合计
+    fa_avail_for_sale           NUMERIC(24,4),             -- 可供出售金融资产
+    htm_invest                  NUMERIC(24,4),             -- 持有至到期投资
+    lt_eqt_invest               NUMERIC(24,4),             -- 长期股权投资
+    invest_real_estate          NUMERIC(24,4),             -- 投资性房地产
+    time_deposits               NUMERIC(24,4),             -- 定期存款
+    oth_assets                  NUMERIC(24,4),             -- 其他资产
+    lt_rec                      NUMERIC(24,4),             -- 长期应收款
+    fix_assets                  NUMERIC(24,4),             -- 固定资产
+    cip                         NUMERIC(24,4),             -- 在建工程
+    const_materials             NUMERIC(24,4),             -- 工程物资
+    fixed_assets_disp           NUMERIC(24,4),             -- 固定资产清理
+    produc_bio_assets           NUMERIC(24,4),             -- 生产性生物资产
+    oil_and_gas_assets          NUMERIC(24,4),             -- 油气资产
+    intan_assets                NUMERIC(24,4),             -- 无形资产
+    r_and_d                     NUMERIC(24,4),             -- 研发支出
+    goodwill                    NUMERIC(24,4),             -- 商誉
+    lt_amor_exp                 NUMERIC(24,4),             -- 长期待摊费用
+    defer_tax_assets            NUMERIC(24,4),             -- 递延所得税资产
+    decr_in_disbur              NUMERIC(24,4),             -- 发放贷款及垫款
+    oth_nca                     NUMERIC(24,4),             -- 其他非流动资产
+    total_nca                   NUMERIC(24,4),             -- 非流动资产合计
+    cash_reser_cb               NUMERIC(24,4),             -- 现金及存放中央银行款项
+    depos_in_oth_bfi            NUMERIC(24,4),             -- 存放同业和其它金融机构款项
+    prec_metals                 NUMERIC(24,4),             -- 贵金属
+    deriv_assets                NUMERIC(24,4),             -- 衍生金融资产
+    rr_reins_une_prem           NUMERIC(24,4),             -- 应收分保未到期责任准备金
+    rr_reins_outstd_cla         NUMERIC(24,4),             -- 应收分保未决赔款准备金
+    rr_reins_lins_liab          NUMERIC(24,4),             -- 应收分保寿险责任准备金
+    rr_reins_lthins_liab        NUMERIC(24,4),             -- 应收分保长期健康险责任准备金
+    refund_depos                NUMERIC(24,4),             -- 存出保证金
+    ph_pledge_loans             NUMERIC(24,4),             -- 保户质押贷款
+    refund_cap_depos            NUMERIC(24,4),             -- 存出资本保证金
+    indep_acct_assets           NUMERIC(24,4),             -- 独立账户资产
+    client_depos                NUMERIC(24,4),             -- 其中：客户资金存款
+    client_prov                 NUMERIC(24,4),             -- 其中：客户备付金
+    transac_seat_fee            NUMERIC(24,4),             -- 其中:交易席位费
+    invest_as_receiv            NUMERIC(24,4),             -- 应收款项类投资
+    total_assets                NUMERIC(24,4),             -- 资产总计
+    lt_borr                     NUMERIC(24,4),             -- 长期借款
+    st_borr                     NUMERIC(24,4),             -- 短期借款
+    cb_borr                     NUMERIC(24,4),             -- 向中央银行借款
+    depos_ib_deposits           NUMERIC(24,4),             -- 吸收存款及同业存放
+    loan_oth_bank               NUMERIC(24,4),             -- 拆入资金
+    trading_fl                  NUMERIC(24,4),             -- 交易性金融负债
+    notes_payable               NUMERIC(24,4),             -- 应付票据
+    acct_payable                NUMERIC(24,4),             -- 应付账款
+    adv_receipts                NUMERIC(24,4),             -- 预收款项
+    sold_for_repur_fa           NUMERIC(24,4),             -- 卖出回购金融资产款
+    comm_payable                NUMERIC(24,4),             -- 应付手续费及佣金
+    payroll_payable             NUMERIC(24,4),             -- 应付职工薪酬
+    taxes_payable               NUMERIC(24,4),             -- 应交税费
+    int_payable                 NUMERIC(24,4),             -- 应付利息
+    div_payable                 NUMERIC(24,4),             -- 应付股利
+    oth_payable                 NUMERIC(24,4),             -- 其他应付款
+    acc_exp                     NUMERIC(24,4),             -- 预提费用
+    deferred_inc                NUMERIC(24,4),             -- 递延收益
+    st_bonds_payable            NUMERIC(24,4),             -- 应付短期债券
+    payable_to_reinsurer        NUMERIC(24,4),             -- 应付分保账款
+    rsrv_insur_cont             NUMERIC(24,4),             -- 保险合同准备金
+    acting_trading_sec          NUMERIC(24,4),             -- 代理买卖证券款
+    acting_uw_sec               NUMERIC(24,4),             -- 代理承销证券款
+    non_cur_liab_due_1y         NUMERIC(24,4),             -- 一年内到期的非流动负债
+    oth_cur_liab                NUMERIC(24,4),             -- 其他流动负债
+    total_cur_liab              NUMERIC(24,4),             -- 流动负债合计
+    bond_payable                NUMERIC(24,4),             -- 应付债券
+    lt_payable                  NUMERIC(24,4),             -- 长期应付款
+    specific_payables           NUMERIC(24,4),             -- 专项应付款
+    estimated_liab              NUMERIC(24,4),             -- 预计负债
+    defer_tax_liab              NUMERIC(24,4),             -- 递延所得税负债
+    defer_inc_non_cur_liab      NUMERIC(24,4),             -- 递延收益-非流动负债
+    oth_ncl                     NUMERIC(24,4),             -- 其他非流动负债
+    total_ncl                   NUMERIC(24,4),             -- 非流动负债合计
+    depos_oth_bfi               NUMERIC(24,4),             -- 同业和其它金融机构存放款项
+    deriv_liab                  NUMERIC(24,4),             -- 衍生金融负债
+    depos                       NUMERIC(24,4),             -- 吸收存款
+    agency_bus_liab             NUMERIC(24,4),             -- 代理业务负债
+    oth_liab                    NUMERIC(24,4),             -- 其他负债
+    prem_receiv_adva            NUMERIC(24,4),             -- 预收保费
+    depos_received              NUMERIC(24,4),             -- 存入保证金
+    ph_invest                   NUMERIC(24,4),             -- 保户储金及投资款
+    reser_une_prem              NUMERIC(24,4),             -- 未到期责任准备金
+    reser_outstd_claims         NUMERIC(24,4),             -- 未决赔款准备金
+    reser_lins_liab             NUMERIC(24,4),             -- 寿险责任准备金
+    reser_lthins_liab           NUMERIC(24,4),             -- 长期健康险责任准备金
+    indept_acc_liab             NUMERIC(24,4),             -- 独立账户负债
+    pledge_borr                 NUMERIC(24,4),             -- 其中:质押借款
+    indem_payable               NUMERIC(24,4),             -- 应付赔付款
+    policy_div_payable          NUMERIC(24,4),             -- 应付保单红利
+    total_liab                  NUMERIC(24,4),             -- 负债合计
+    treasury_share              NUMERIC(24,4),             -- 减:库存股
+    ordin_risk_reser            NUMERIC(24,4),             -- 一般风险准备
+    forex_differ                NUMERIC(24,4),             -- 外币报表折算差额
+    invest_loss_unconf          NUMERIC(24,4),             -- 未确认的投资损失
+    minority_int                NUMERIC(24,4),             -- 少数股东权益
+    total_hldr_eqy_exc_min_int  NUMERIC(24,4),             -- 股东权益合计(不含少数股东权益)
+    total_hldr_eqy_inc_min_int  NUMERIC(24,4),             -- 股东权益合计(含少数股东权益)
+    total_liab_hldr_eqy         NUMERIC(24,4),             -- 负债及股东权益总计
+    lt_payroll_payable          NUMERIC(24,4),             -- 长期应付职工薪酬
+    oth_comp_income             NUMERIC(24,4),             -- 其他综合收益
+    oth_eqt_tools               NUMERIC(24,4),             -- 其他权益工具
+    oth_eqt_tools_p_shr         NUMERIC(24,4),             -- 其他权益工具(优先股)
+    lending_funds               NUMERIC(24,4),             -- 融出资金
+    acc_receivable              NUMERIC(24,4),             -- 应收款项
+    st_fin_payable              NUMERIC(24,4),             -- 应付短期融资款
+    payables                    NUMERIC(24,4),             -- 应付款项
+    hfs_assets                  NUMERIC(24,4),             -- 持有待售的资产
+    hfs_sales                   NUMERIC(24,4),             -- 持有待售的负债
+    cost_fin_assets             NUMERIC(24,4),             -- 以摊余成本计量的金融资产
+    fair_value_fin_assets       NUMERIC(24,4),             -- 以公允价值计量且其变动计入其他综合收益的金融资产
+    cip_total                   NUMERIC(24,4),             -- 在建工程(合计)(元)
+    oth_pay_total               NUMERIC(24,4),             -- 其他应付款(合计)(元)
+    long_pay_total              NUMERIC(24,4),             -- 长期应付款(合计)(元)
+    debt_invest                 NUMERIC(24,4),             -- 债权投资(元)
+    oth_debt_invest             NUMERIC(24,4),             -- 其他债权投资(元)
+    oth_eq_invest               NUMERIC(24,4),             -- 其他权益工具投资(元)
+    oth_illiq_fin_assets        NUMERIC(24,4),             -- 其他非流动金融资产(元)
+    oth_eq_ppbond               NUMERIC(24,4),             -- 其他权益工具:永续债(元)
+    receiv_financing            NUMERIC(24,4),             -- 应收款项融资
+    use_right_assets            NUMERIC(24,4),             -- 使用权资产
+    lease_liab                  NUMERIC(24,4),             -- 租赁负债
+    contract_assets             NUMERIC(24,4),             -- 合同资产
+    contract_liab               NUMERIC(24,4),             -- 合同负债
+    accounts_receiv_bill        NUMERIC(24,4),             -- 应收票据及应收账款
+    accounts_pay                NUMERIC(24,4),             -- 应付票据及应付账款
+    oth_rcv_total               NUMERIC(24,4),             -- 其他应收款(合计)（元）
+    fix_assets_total            NUMERIC(24,4),             -- 固定资产(合计)(元)
+    update_flag                 VARCHAR(4),
+    created_at                  TIMESTAMP DEFAULT now(),
     PRIMARY KEY (ts_code, end_date, report_type)
 );
-COMMENT ON TABLE fin.balancesheet IS '资产负债表(全字段)';
+COMMENT ON TABLE fin.balancesheet IS '资产负债表(Tushare官方158字段1:1)';
 """
 
-# ---------- 现金流量表 ----------
+# ---------- 现金流量表 (Tushare 官方 97 字段 1:1, 2026-10 官网输出参数表) ----------
 DDL_CASHFLOW = """
 CREATE TABLE IF NOT EXISTS fin.cashflow (
-    ts_code          VARCHAR(16) NOT NULL,
-    ann_date         DATE,
-    f_ann_date       DATE,
-    end_date         DATE NOT NULL,
-    report_type      VARCHAR(2) NOT NULL DEFAULT '1',
-    comp_type        VARCHAR(2),
-    end_type         VARCHAR(2),
-    -- 经营活动现金流
-    n_cashflow_act   NUMERIC(24,4),          -- 经营活动产生的现金流量净额
-    n_cashflow_inv_act NUMERIC(24,4),        -- 投资活动产生的现金流量净额
-    n_cash_flows_fnc_act NUMERIC(24,4),      -- 筹资活动产生的现金流量净额
-    c_fr_sale_sg     NUMERIC(24,4),          -- 销售商品、提供劳务收到的现金
-    recp_tax_rends   NUMERIC(24,4),          -- 收到的税费返还
-    n_depos_incr_fi  NUMERIC(24,4),          -- 客户存款和同业存放款项净增加额
-    n_incr_loans_cb  NUMERIC(24,4),          -- 向中央银行借款净增加额
-    n_inc_borr_oth_fi NUMERIC(24,4),        -- 向其他金融机构借款净增加额
-    n_incr_disp_fiolig NUMERIC(24,4),        -- 处置固定资产等活动净增加额
-    c_paid_gs_for_rtr NUMERIC(24,4),        -- 购买商品、接受劳务支付的现金
-    n_incr_disp_fiolis NUMERIC(24,4),        -- 处置固定资产、无形资产净增加额
-    c_paid_for_intang_invest NUMERIC(24,4),  -- 购建固定资产等活动支付的现金
-    -- 实际字段以 Tushare 返回为准, 核心三大净额已覆盖
-    -- (完整字段过多, 采用通用列并兼容)
-    n_cashflow_act_pre NUMERIC(24,4),        -- 经营活动现金流量净额(上一期)
-    n_invest_income_subsidiary NUMERIC(24,4),-- 取得子公司投资支付
-    free_cashflow    NUMERIC(24,4),          -- 自由现金流(派生)
-    update_flag      VARCHAR(4),
+    ts_code          VARCHAR(16) NOT NULL,     -- TS股票代码
+    ann_date         DATE,                     -- 公告日期
+    f_ann_date       DATE,                     -- 实际公告日期
+    end_date         DATE NOT NULL,            -- 报告期
+    report_type      VARCHAR(2) NOT NULL DEFAULT '1', -- 报表类型
+    comp_type        VARCHAR(2),               -- 公司类型(1一般工商业2银行3保险4证券7多元金融)
+    end_type         VARCHAR(2),               -- 报告期类型
+    net_profit       NUMERIC(24,4),            -- 净利润
+    finan_exp        NUMERIC(24,4),            -- 财务费用
+    c_fr_sale_sg     NUMERIC(24,4),            -- 销售商品、提供劳务收到的现金
+    recp_tax_rends   NUMERIC(24,4),            -- 收到的税费返还
+    n_depos_incr_fi  NUMERIC(24,4),            -- 客户存款和同业存放款项净增加额
+    n_incr_loans_cb  NUMERIC(24,4),            -- 向中央银行借款净增加额
+    n_inc_borr_oth_fi NUMERIC(24,4),           -- 向其他金融机构拆入资金净增加额
+    prem_fr_orig_contr NUMERIC(24,4),          -- 收到原保险合同保费取得的现金
+    n_incr_insured_dep NUMERIC(24,4),          -- 保户储金净增加额
+    n_reinsur_prem   NUMERIC(24,4),            -- 收到再保业务现金净额
+    n_incr_disp_tfa  NUMERIC(24,4),            -- 处置交易性金融资产净增加额
+    ifc_cash_incr    NUMERIC(24,4),            -- 收取利息和手续费净增加额
+    n_incr_disp_faas NUMERIC(24,4),            -- 处置可供出售金融资产净增加额
+    n_incr_loans_oth_bank NUMERIC(24,4),       -- 拆入资金净增加额
+    n_cap_incr_repur NUMERIC(24,4),            -- 回购业务资金净增加额
+    c_fr_oth_operate_a NUMERIC(24,4),          -- 收到其他与经营活动有关的现金
+    c_inf_fr_operate_a NUMERIC(24,4),          -- 经营活动现金流入小计
+    c_paid_goods_s   NUMERIC(24,4),            -- 购买商品、接受劳务支付的现金
+    c_paid_to_for_empl NUMERIC(24,4),          -- 支付给职工以及为职工支付的现金
+    c_paid_for_taxes NUMERIC(24,4),            -- 支付的各项税费
+    n_incr_clt_loan_adv NUMERIC(24,4),         -- 客户贷款及垫款净增加额
+    n_incr_dep_cbob  NUMERIC(24,4),            -- 存放央行和同业款项净增加额
+    c_pay_claims_orig_inco NUMERIC(24,4),      -- 支付原保险合同赔付款项的现金
+    pay_handling_chrg NUMERIC(24,4),           -- 支付手续费的现金
+    pay_comm_insur_plcy NUMERIC(24,4),         -- 支付保单红利的现金
+    oth_cash_pay_oper_act NUMERIC(24,4),       -- 支付其他与经营活动有关的现金
+    st_cash_out_act  NUMERIC(24,4),            -- 经营活动现金流出小计
+    n_cashflow_act   NUMERIC(24,4),            -- 经营活动产生的现金流量净额
+    oth_recp_ral_inv_act NUMERIC(24,4),        -- 收到其他与投资活动有关的现金
+    c_disp_withdrwl_invest NUMERIC(24,4),      -- 收回投资收到的现金
+    c_recp_return_invest NUMERIC(24,4),        -- 取得投资收益收到的现金
+    n_recp_disp_fiolta NUMERIC(24,4),          -- 处置固定资产、无形资产和其他长期资产收回的现金净额
+    n_recp_disp_sobu NUMERIC(24,4),            -- 处置子公司及其他营业单位收到的现金净额
+    stot_inflows_inv_act NUMERIC(24,4),        -- 投资活动现金流入小计
+    c_pay_acq_const_fiolta NUMERIC(24,4),      -- 购建固定资产、无形资产和其他长期资产支付的现金
+    c_paid_invest    NUMERIC(24,4),            -- 投资支付的现金
+    n_disp_subs_oth_biz NUMERIC(24,4),         -- 取得子公司及其他营业单位支付的现金净额
+    oth_pay_ral_inv_act NUMERIC(24,4),         -- 支付其他与投资活动有关的现金
+    n_incr_pledge_loan NUMERIC(24,4),          -- 质押贷款净增加额
+    stot_out_inv_act NUMERIC(24,4),            -- 投资活动现金流出小计
+    n_cashflow_inv_act NUMERIC(24,4),          -- 投资活动产生的现金流量净额
+    c_recp_borrow    NUMERIC(24,4),            -- 取得借款收到的现金
+    proc_issue_bonds NUMERIC(24,4),            -- 发行债券收到的现金
+    oth_cash_recp_ral_fnc_act NUMERIC(24,4),   -- 收到其他与筹资活动有关的现金
+    stot_cash_in_fnc_act NUMERIC(24,4),        -- 筹资活动现金流入小计
+    free_cashflow    NUMERIC(24,4),            -- 企业自由现金流量
+    c_prepay_amt_borr NUMERIC(24,4),           -- 偿还债务支付的现金
+    c_pay_dist_dpcp_int_exp NUMERIC(24,4),     -- 分配股利、利润或偿付利息支付的现金
+    incl_dvd_profit_paid_sc_ms NUMERIC(24,4),  -- 其中:子公司支付给少数股东的股利、利润
+    oth_cashpay_ral_fnc_act NUMERIC(24,4),     -- 支付其他与筹资活动有关的现金
+    stot_cashout_fnc_act NUMERIC(24,4),        -- 筹资活动现金流出小计
+    n_cash_flows_fnc_act NUMERIC(24,4),        -- 筹资活动产生的现金流量净额
+    eff_fx_flu_cash  NUMERIC(24,4),            -- 汇率变动对现金的影响
+    n_incr_cash_cash_equ NUMERIC(24,4),        -- 现金及现金等价物净增加额
+    c_cash_equ_beg_period NUMERIC(24,4),       -- 期初现金及现金等价物余额
+    c_cash_equ_end_period NUMERIC(24,4),       -- 期末现金及现金等价物余额
+    c_recp_cap_contrib NUMERIC(24,4),          -- 吸收投资收到的现金
+    incl_cash_rec_saims NUMERIC(24,4),         -- 其中:子公司吸收少数股东投资收到的现金
+    uncon_invest_loss NUMERIC(24,4),           -- 未确认投资损失
+    prov_depr_assets NUMERIC(24,4),            -- 加:资产减值准备
+    depr_fa_coga_dpba NUMERIC(24,4),           -- 固定资产折旧、油气资产折耗、生产性生物资产折旧
+    amort_intang_assets NUMERIC(24,4),         -- 无形资产摊销
+    lt_amort_deferred_exp NUMERIC(24,4),       -- 长期待摊费用摊销
+    decr_deferred_exp NUMERIC(24,4),           -- 待摊费用减少
+    incr_acc_exp     NUMERIC(24,4),            -- 预提费用增加
+    loss_disp_fiolta NUMERIC(24,4),            -- 处置固定、无形资产和其他长期资产的损失
+    loss_scr_fa      NUMERIC(24,4),            -- 固定资产报废损失
+    loss_fv_chg      NUMERIC(24,4),            -- 公允价值变动损失
+    invest_loss      NUMERIC(24,4),            -- 投资损失
+    decr_def_inc_tax_assets NUMERIC(24,4),     -- 递延所得税资产减少
+    incr_def_inc_tax_liab NUMERIC(24,4),       -- 递延所得税负债增加
+    decr_inventories NUMERIC(24,4),            -- 存货的减少
+    decr_oper_payable NUMERIC(24,4),           -- 经营性应收项目的减少
+    incr_oper_payable NUMERIC(24,4),           -- 经营性应付项目的增加
+    others           NUMERIC(24,4),            -- 其他
+    im_net_cashflow_oper_act NUMERIC(24,4),    -- 经营活动产生的现金流量净额(间接法)
+    conv_debt_into_cap NUMERIC(24,4),          -- 债务转为资本
+    conv_copbonds_due_within_1y NUMERIC(24,4), -- 一年内到期的可转换公司债券
+    fa_fnc_leases    NUMERIC(24,4),            -- 融资租入固定资产
+    im_n_incr_cash_equ NUMERIC(24,4),          -- 现金及现金等价物净增加额(间接法)
+    net_dism_capital_add NUMERIC(24,4),        -- 拆出资金净增加额
+    net_cash_rece_sec NUMERIC(24,4),           -- 代理买卖证券收到的现金净额(元)
+    credit_impa_loss NUMERIC(24,4),            -- 信用减值损失
+    use_right_asset_dep NUMERIC(24,4),         -- 使用权资产折旧
+    oth_loss_asset   NUMERIC(24,4),            -- 其他资产减值损失
+    end_bal_cash     NUMERIC(24,4),            -- 现金的期末余额
+    beg_bal_cash     NUMERIC(24,4),            -- 减:现金的期初余额
+    end_bal_cash_equ NUMERIC(24,4),            -- 加:现金等价物的期末余额
+    beg_bal_cash_equ NUMERIC(24,4),            -- 减:现金等价物的期初余额
+    update_flag      VARCHAR(4),               -- 更新标志(1最新）
     created_at       TIMESTAMP DEFAULT now(),
     PRIMARY KEY (ts_code, end_date, report_type)
 );
-COMMENT ON TABLE fin.cashflow IS '现金流量表(核心字段,按需扩展)';
+COMMENT ON TABLE fin.cashflow IS '现金流量表(Tushare官方97字段1:1)';
 """
 
 # ---------- 财务指标 ----------
@@ -655,10 +834,10 @@ SELECT
     i.rd_exp,
     b.total_assets,
     b.total_liab,
-    b.equity_attr_p,
+    b.total_hldr_eqy_exc_min_int,
     b.money_cap,
     b.accounts_receiv,
-    b.invent,
+    b.inventories,
     b.goodwill,
     c.n_cashflow_act,
     c.n_cashflow_inv_act,

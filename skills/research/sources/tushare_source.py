@@ -65,7 +65,7 @@ _EXTRA_BATCHES = [
     [_m("ocf", "经营活动现金流净额", "亿元", "fin.cashflow.n_cashflow_act",
          yuan=True, query="经营现金流"),
      _m("total_assets", "总资产", "亿元", "fin.balancesheet.total_assets", yuan=True),
-     _m("net_assets", "归母净资产", "亿元", "fin.balancesheet.equity_attr_p",
+     _m("net_assets", "归母净资产", "亿元", "fin.balancesheet.total_hldr_eqy_exc_min_int",
          yuan=True, query="净资产")],
     [_m("eps", "基本每股收益", "元", "fin.income.basic_eps",
          query="每股收益"),
@@ -76,7 +76,7 @@ _EXTRA_BATCHES = [
     [_m("deduct_n_income", "扣非归母净利润", "亿元", "fin.income.net_after_nr_lp_correct",
          yuan=True, query="扣非净利润"),
      _m("operate_profit", "营业利润", "亿元", "fin.income.operate_profit", yuan=True),
-     _m("inventory", "存货", "亿元", "fin.balancesheet.invent", yuan=True)],
+     _m("inventory", "存货", "亿元", "fin.balancesheet.inventories", yuan=True)],
 ]
 _EXTRA_BY_SLUG = {m["slug"]: m for batch in _EXTRA_BATCHES for m in batch}
 
