@@ -162,9 +162,10 @@ def init_schema(pg_client) -> None:
 # ============================================================
 # 财务数据仓库 (schema: fin)
 # ============================================================
-# 三大财务报表+财务指标+分红送股与官方文档全字段 1:1 (income 94 / balancesheet 158 /
-# cashflow 97 / fina_indicator 167+本地report_type / dividend 16, 2026-10 官网输出参数表;
-# 存量库曾为子集+错名列, 已迁齐并删死列)
+# 三大财务报表+财务指标+分红送股+审计意见+披露日期+主营构成与官方文档全字段 1:1
+# (income 94 / balancesheet 158 / cashflow 97 / fina_indicator 167+本地report_type /
+#  dividend 16 / fina_audit 7 / disclosure_date 6 / fina_mainbz 9, 2026-10 官网输出参数表;
+#  存量库曾为子集+错名列, 已迁齐并删死列)
 
 DDL_FIN_SCHEMA = """CREATE SCHEMA IF NOT EXISTS fin"""
 
@@ -751,6 +752,45 @@ CREATE INDEX IF NOT EXISTS idx_dividend_ts_end ON fin.dividend (ts_code, end_dat
 COMMENT ON TABLE fin.dividend IS '分红送股(Tushare官方16字段1:1)';
 """
 
+# ---------- 财务审计意见 (Tushare 官方 7 字段 1:1, 2026-10 官网输出参数表) ----------
+# 官方无唯一键: PK 取 (ts_code, end_date, ann_date) —— 三列官方恒有值;
+# 年报更正/重述会为同一 end_date 再次公告审计意见, ann_date 区分保留意见变更历史;
+# 查最新意见按 (ts_code, end_date) 取 max(ann_date)
+DDL_FINA_AUDIT = """
+CREATE TABLE IF NOT EXISTS fin.fina_audit (
+    ts_code       VARCHAR(16) NOT NULL,   -- TS股票代码
+    ann_date      DATE NOT NULL,          -- 公告日期
+    end_date      DATE NOT NULL,          -- 报告期
+    audit_result  VARCHAR(64),            -- 审计结果
+    audit_fees    NUMERIC(20,4),          -- 审计总费用（元）
+    audit_agency  VARCHAR(128),           -- 会计事务所
+    audit_sign    VARCHAR(128),           -- 签字会计师
+    created_at    TIMESTAMP DEFAULT now(),
+    PRIMARY KEY (ts_code, end_date, ann_date)
+);
+CREATE INDEX IF NOT EXISTS idx_fina_audit_ts_end ON fin.fina_audit (ts_code, end_date);
+COMMENT ON TABLE fin.fina_audit IS '财务审计意见(Tushare官方7字段1:1)';
+"""
+
+# ---------- 财报披露日期 (Tushare 官方 6 字段 1:1, 2026-10 官网输出参数表) ----------
+# 官方无唯一键: PK 取 (ts_code, end_date) —— 一家股票一个报告期一条披露计划(最新状态行);
+# ann_date"最新披露公告日"/modify_date"披露日期修正记录"均为同行覆盖语义(修正不产生新行);
+# ann_date 不能保证恒有值(预约计划可先于公告存在), actual_date 披露前必 NULL, 均不可入 PK
+DDL_DISCLOSURE_DATE = """
+CREATE TABLE IF NOT EXISTS fin.disclosure_date (
+    ts_code       VARCHAR(16) NOT NULL,   -- TS代码
+    ann_date      DATE,                   -- 最新披露公告日
+    end_date      DATE NOT NULL,          -- 报告期
+    pre_date      DATE,                   -- 预计披露日期
+    actual_date   DATE,                   -- 实际披露日期
+    modify_date   DATE,                   -- 披露日期修正记录
+    created_at    TIMESTAMP DEFAULT now(),
+    PRIMARY KEY (ts_code, end_date)
+);
+CREATE INDEX IF NOT EXISTS idx_disclosure_actual ON fin.disclosure_date (actual_date);
+COMMENT ON TABLE fin.disclosure_date IS '财报披露日期(Tushare官方6字段1:1)';
+"""
+
 # ---------- 财务同步元表 ----------
 DDL_FIN_SYNC_META = """
 CREATE TABLE IF NOT EXISTS fin.sync_meta (
@@ -762,29 +802,30 @@ CREATE TABLE IF NOT EXISTS fin.sync_meta (
 COMMENT ON TABLE fin.sync_meta IS '财务数据同步水位线(按股票续传)';
 """
 
-# ---------- 主营构成 (fina_mainbz) ----------
+# ---------- 主营构成 (fina_mainbz, Tushare 官方 9 字段 1:1, 2026-10 官网输出参数表) ----------
 DDL_FINA_MAINBZ = """
 CREATE TABLE IF NOT EXISTS fin.fina_mainbz (
     ts_code       VARCHAR(16) NOT NULL,
     end_date      DATE NOT NULL,               -- 报告期
-    biz_type      VARCHAR(16) NOT NULL,        -- 构成维度 bz_code: P产品/D地区/I行业; 其他编码(如455006000)=销售模式等补充维度
     bz_item       VARCHAR(512) NOT NULL,       -- 主营构成项目 (产品/地区/行业名)
+    bz_code       VARCHAR(16) NOT NULL,        -- 主营业务来源类型: P-按产品 D-按地区 I-按行业 (S-销售模式; 存量另含 455006000/F 等补充维度编码, 原样保留)
     bz_sales      NUMERIC(24,4),               -- 主营业务收入 (元)
-    bz_cost       NUMERIC(24,4),               -- 主营业务成本 (元)
     bz_profit     NUMERIC(24,4),               -- 主营业务利润 (元)
-    curr_type     VARCHAR(8),                  -- 货币
+    bz_cost       NUMERIC(24,4),               -- 主营业务成本 (元)
+    curr_type     VARCHAR(8),                  -- 货币代码 (CNY)
+    update_flag   VARCHAR(4),                  -- 是否更新 (官方输出字段; 当前接口不返回, 恒为NULL)
     created_at    TIMESTAMP DEFAULT now(),
-    PRIMARY KEY (ts_code, end_date, biz_type, bz_item)
+    PRIMARY KEY (ts_code, end_date, bz_code, bz_item)
 );
 CREATE INDEX IF NOT EXISTS idx_fina_mainbz_end_date ON fin.fina_mainbz (end_date);
-COMMENT ON TABLE fin.fina_mainbz IS '主营构成原始表 (公司x报告期x维度x项目, 金额单位:元; 一次调用返回全部维度, bz_code 即维度标签)';
+COMMENT ON TABLE fin.fina_mainbz IS '主营业务构成原始表 (Tushare官方9字段1:1; 公司x报告期x维度x项目, 金额单位:元; 一次调用返回全部维度, bz_code 即维度标签)';
 """
 
 # 主营构成清洗视图: 剔除维度表头行(产品/行业/地区)与合计, "其中"/冒号分层子项不计入占比分母, 派生收入占比与毛利率
 DDL_VIEW_MAIN_BIZ = """
 CREATE OR REPLACE VIEW fin.v_main_biz AS
 WITH cleaned AS (
-    SELECT ts_code, end_date, biz_type,
+    SELECT ts_code, end_date, bz_code,
            regexp_replace(bz_item, '[（(]产品[)）]$', '') AS bz_item,
            bz_sales, bz_cost, bz_profit, curr_type,
            (bz_item LIKE '其中%' OR bz_item LIKE '%:%' OR bz_item LIKE '%：%')
@@ -797,12 +838,12 @@ WITH cleaned AS (
       AND bz_item <> '-'
 ),
 denom AS (
-    SELECT ts_code, end_date, biz_type, SUM(bz_sales) AS group_sales
+    SELECT ts_code, end_date, bz_code, SUM(bz_sales) AS group_sales
     FROM cleaned
     WHERE NOT is_sub_item AND bz_sales > 0
-    GROUP BY ts_code, end_date, biz_type
+    GROUP BY ts_code, end_date, bz_code
 )
-SELECT c.ts_code, c.end_date, c.biz_type, c.bz_item,
+SELECT c.ts_code, c.end_date, c.bz_code, c.bz_item,
        c.bz_sales,
        c.bz_cost,
        c.bz_profit,
@@ -812,7 +853,7 @@ SELECT c.ts_code, c.end_date, c.biz_type, c.bz_item,
        c.curr_type,
        c.is_sub_item
 FROM cleaned c
-LEFT JOIN denom d USING (ts_code, end_date, biz_type);
+LEFT JOIN denom d USING (ts_code, end_date, bz_code);
 """
 
 # ---------- 巨潮公告 (cninfo) ----------
@@ -832,6 +873,8 @@ FIN_ALL_DDL = [
     DDL_CASHFLOW,
     DDL_FINA_INDICATOR,
     DDL_DIVIDEND,
+    DDL_FINA_AUDIT,
+    DDL_DISCLOSURE_DATE,
     DDL_FINA_MAINBZ,
     DDL_VIEW_MAIN_BIZ,
     DDL_FIN_SYNC_META,
@@ -843,6 +886,8 @@ T_BALANCESHEET = "fin.balancesheet"
 T_CASHFLOW = "fin.cashflow"
 T_FINA_INDICATOR = "fin.fina_indicator"
 T_DIVIDEND = "fin.dividend"
+T_FINA_AUDIT = "fin.fina_audit"
+T_DISCLOSURE_DATE = "fin.disclosure_date"
 T_FINA_MAINBZ = "fin.fina_mainbz"
 T_FIN_SYNC_META = "fin.sync_meta"
 

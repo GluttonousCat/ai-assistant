@@ -177,7 +177,7 @@ def _facts_mainbiz(sections: Dict[str, Any]) -> List[Fact]:
         return []
     label = _period_label(end_date)
     # 同画像摘要口径: 优先产品维度(P), 避免与地区/行业维度重复计口径
-    prod = [r for r in rows if r.get("biz_type") == "P"] or rows
+    prod = [r for r in rows if r.get("bz_code") == "P"] or rows
     out = []
     for i, r in enumerate(prod[:5], 1):
         item = r.get("bz_item")
@@ -186,7 +186,7 @@ def _facts_mainbiz(sections: Dict[str, Any]) -> List[Fact]:
         sales = _fnum(r.get("bz_sales"))
         share = _fnum(r.get("sales_share_pct"))
         gm = _fnum(r.get("gross_margin_pct"))
-        biz_cn = _BIZ_CN.get(str(r.get("biz_type") or ""), str(r.get("biz_type")))
+        biz_cn = _BIZ_CN.get(str(r.get("bz_code") or ""), str(r.get("bz_code")))
         parts = [f"{item} (主营构成·{biz_cn}维度)"]
         if sales is not None:
             parts.append(f"收入 {sales / 1e8:.2f} 亿元")

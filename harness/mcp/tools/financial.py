@@ -185,13 +185,13 @@ def query_financials(mode: str = "single", stocks: List[str] = None,
         "数据来自财务报告披露的主营构成, 按最新报告期返回。"),
     params_schema=obj_schema({
         "stock": param("股票名或代码", "string"),
-        "biz_type": param("维度过滤: P=产品 D=地区 I=行业; 缺省全部", "string",
-                          enum=["P", "D", "I"]),
+        "bz_code": param("维度过滤: P=产品 D=地区 I=行业; 缺省全部", "string",
+                         enum=["P", "D", "I"]),
         "top_n": param("每个维度返回条数", "integer", default=8),
     }, ["stock"]),
     examples=["贵州茅台靠什么赚钱", "中际旭创的收入结构", "宁德时代哪个业务占比最大"],
 )
-def query_main_business(stock: str, biz_type: str = "",
+def query_main_business(stock: str, bz_code: str = "",
                         top_n: int = 8) -> Dict[str, Any]:
     hit = resolve_one(stock)
     from storage.pg import PgClient
@@ -201,12 +201,12 @@ def query_main_business(stock: str, biz_type: str = "",
             (hit["ts_code"],))
         if not latest or not latest["d"]:
             raise ToolError(f"{hit['name']} 无主营构成数据")
-        cond = "AND biz_type=%s" if biz_type else ""
+        cond = "AND bz_code=%s" if bz_code else ""
         args: tuple = (hit["ts_code"], latest["d"])
-        if biz_type:
-            args = args + (biz_type,)
+        if bz_code:
+            args = args + (bz_code,)
         df = pg.fetch_df(
-            f"SELECT biz_type, bz_item, bz_sales, sales_share_pct, "
+            f"SELECT bz_code, bz_item, bz_sales, sales_share_pct, "
             f"       gross_margin_pct "
             f"FROM fin.v_main_biz "
             f"WHERE ts_code=%s AND end_date=%s AND NOT is_sub_item {cond} "
@@ -214,7 +214,7 @@ def query_main_business(stock: str, biz_type: str = "",
     out = df_payload(df, max_rows=int(top_n) * 3)
     out["stock"] = hit
     out["end_date"] = latest["d"].isoformat()
-    out["biz_type_meaning"] = {"P": "产品", "D": "地区", "I": "行业"}
+    out["bz_code_meaning"] = {"P": "产品", "D": "地区", "I": "行业"}
     return out
 
 

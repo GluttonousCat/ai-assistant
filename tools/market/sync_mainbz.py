@@ -42,7 +42,7 @@ logger = get_logger("sync_mainbz")
 
 API_SLEEP = 0.35          # 与 sync_financial 相同节流
 TABLE = "fina_mainbz"     # fin.sync_meta 水位线键名
-PK_COLS = ["ts_code", "end_date", "biz_type", "bz_item"]
+PK_COLS = ["ts_code", "end_date", "bz_code", "bz_item"]
 
 # 接口实际输出字段 (无 ann_date/update_flag, bz_code 为维度标签)
 MAINBZ_FIELDS = [
@@ -79,8 +79,8 @@ def sync_one_stock(pro, ts_code: str) -> int:
     if df is None or df.empty:
         return 0
     df = df.copy()
-    # bz_code -> biz_type (维度标签原样保留, 455006000 等为销售模式等补充维度)
-    df["biz_type"] = df["bz_code"].astype(str).str.strip()
+    # bz_code 维度标签清洗 (455006000 等为销售模式等补充维度, 原样保留)
+    df["bz_code"] = df["bz_code"].astype(str).str.strip()
     df["end_date"] = df["end_date"].map(_to_date)
     df = df[df["bz_item"].notna() & df["end_date"].notna()]
     df["bz_item"] = df["bz_item"].astype(str).str.strip().str.slice(0, 512)

@@ -47,6 +47,12 @@ def _run_dividend_daily(days: int) -> int:
     return run_dividend_daily(days=days)
 
 
+def _run_disclosure_daily(days: int) -> int:
+    """线程池入口: 财报披露日期按日增量 (2通道 x days 天)"""
+    from tools.market.sync_financial import run_disclosure_daily
+    return run_disclosure_daily(days=days)
+
+
 class DailySyncScheduler:
     """每日增量同步调度器"""
 
@@ -119,6 +125,17 @@ class DailySyncScheduler:
                 logger.error(f"分红增量同步异常: {e}")
                 if isinstance(result, dict):
                     result["dividend"] = {"error": str(e)}
+
+            # 财报披露日期增量: 按日双通道 (ann_date 计划公告/变更, actual_date 实际披露)
+            try:
+                dis_rows = await asyncio.to_thread(
+                    _run_disclosure_daily, 2)
+                if isinstance(result, dict):
+                    result["disclosure_date"] = dis_rows
+            except Exception as e:
+                logger.error(f"披露日期增量同步异常: {e}")
+                if isinstance(result, dict):
+                    result["disclosure_date"] = {"error": str(e)}
 
         self.last_run = datetime.now()
         self.last_result = result

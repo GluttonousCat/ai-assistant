@@ -172,13 +172,13 @@ def _load_latest_mainbz() -> Dict[str, Dict]:
     sql = """
         WITH latest AS (
             SELECT ts_code, max(end_date) AS end_date
-            FROM fin.fina_mainbz WHERE biz_type = 'P'
+            FROM fin.fina_mainbz WHERE bz_code = 'P'
             GROUP BY ts_code
         )
         SELECT m.ts_code, l.end_date, m.bz_item, m.bz_sales
         FROM fin.fina_mainbz m
         JOIN latest l ON l.ts_code = m.ts_code AND m.end_date = l.end_date
-        WHERE m.biz_type = 'P'
+        WHERE m.bz_code = 'P'
           AND m.bz_sales IS NOT NULL AND m.bz_sales <> 0
           AND m.bz_item NOT IN ('产品', '行业', '地区')
           AND m.bz_item NOT LIKE '%合计%'

@@ -66,7 +66,7 @@ MCP 工具 (mcp/tools/content.py): `build_company_profile`(只读, 全循环可�
 | 文章生成崩溃 `int('32,768')` | config.yaml 的 max_tokens 写了千分位逗号 | client 层容错解析 (去逗号); 同时解释了画像「最近N年」失效之谜——NL2SQL 同因静默回落规则引擎 |
 | digest 财务全 None | digest 取中文列名, SQL 返回字段原名 (revenue/n_income_attr_p) | 按字段原名取数 + 按年聚合 (优先年报行) + 元转亿 |
 | digest 打印 20 行季报 | 未按年聚合, 5 年窗口季度行全量输出 | 按年分组: 优先 12-31 年报行, 缺则当年最新期 |
-| 主营构成混维度重复 | 产品/地区/行业三维度条目混排 | digest 只取产品维度 (biz_type=P) top4 |
+| 主营构成混维度重复 | 产品/地区/行业三维度条目混排 | digest 只取产品维度 (bz_code=P) top4 |
 | `python -m skills.content` 不可执行 | 缺 __main__.py | 补入口调用 cli.main |
 
 ## 四、验证记录

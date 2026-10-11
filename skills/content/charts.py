@@ -83,7 +83,7 @@ def _slug(ts_code: str) -> str:
 def mainbiz_chart(mainbiz: Dict[str, Any], ts_code: str) -> Optional[Path]:
     """主营构成水平条形图: 占比条 + 毛利率右标注"""
     rows = [r for r in (mainbiz.get("data") or [])
-            if r.get("biz_type") == "P" and r.get("bz_item")][:5]
+            if r.get("bz_code") == "P" and r.get("bz_item")][:5]
     if not rows:
         rows = [r for r in (mainbiz.get("data") or []) if r.get("bz_item")][:5]
     if not rows:

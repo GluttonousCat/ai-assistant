@@ -61,7 +61,7 @@ FIELD_DESCRIPTIONS: Dict[str, Dict[str, str]] = {
         "circ_mv": "流通市值(万元)", "dv_ratio": "股息率(%)",
     },
     "fina_mainbz": {
-        "biz_type": "构成维度(P按产品/D按地区/I按行业, 其他编码如455006000为销售模式等)",
+        "bz_code": "构成维度(P按产品/D按地区/I按行业, 其他编码如455006000为销售模式等)",
         "bz_item": "主营构成项目名称(产品/地区/行业)",
         "bz_sales": "该业务收入(元)",
         "bz_cost": "该业务成本(元)",
@@ -69,7 +69,7 @@ FIELD_DESCRIPTIONS: Dict[str, Dict[str, str]] = {
         "end_date": "报告期(年报1231/半年0630/一季0331/三季0930)",
     },
     "v_main_biz": {
-        "biz_type": "构成维度(P按产品/D按地区/I按行业)",
+        "bz_code": "构成维度(P按产品/D按地区/I按行业)",
         "bz_item": "业务/产品名称",
         "bz_sales": "该业务收入(元)",
         "sales_share_pct": "收入占比(%), 分母已剔除维度表头/合计/其中子项",

@@ -133,13 +133,13 @@ def fake_profile():
             "main_business": {
                 "end_date": "2025-12-31",
                 "data": [
-                    {"biz_type": "P", "bz_item": "茅台酒", "bz_sales": 145800000000.0,
+                    {"bz_code": "P", "bz_item": "茅台酒", "bz_sales": 145800000000.0,
                      "sales_share_pct": 83.9, "gross_margin_pct": 94.3},
-                    {"biz_type": "P", "bz_item": "系列酒", "bz_sales": 24500000000.0,
+                    {"bz_code": "P", "bz_item": "系列酒", "bz_sales": 24500000000.0,
                      "sales_share_pct": 14.1, "gross_margin_pct": 79.8},
-                    {"biz_type": "P", "bz_item": "其他业务", "bz_sales": 3400000000.0,
+                    {"bz_code": "P", "bz_item": "其他业务", "bz_sales": 3400000000.0,
                      "sales_share_pct": 2.0, "gross_margin_pct": None},
-                    {"biz_type": "D", "bz_item": "国内", "bz_sales": 170000000000.0,
+                    {"bz_code": "D", "bz_item": "国内", "bz_sales": 170000000000.0,
                      "sales_share_pct": 97.9, "gross_margin_pct": None},
                 ]},
             "financials": {"data": _base_rows()},

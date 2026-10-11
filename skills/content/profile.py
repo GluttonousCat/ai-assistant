@@ -151,7 +151,7 @@ def profile_digest(profile: Dict[str, Any], max_chars: int = 6000) -> str:
     mb = s.get("main_business") or {}
     if mb.get("data"):
         # 优先产品维度(P), 避免混入地区/行业维度的重复口径
-        prod = [r for r in mb["data"] if r.get("biz_type") == "P"] or mb["data"]
+        prod = [r for r in mb["data"] if r.get("bz_code") == "P"] or mb["data"]
         items = [f"{r.get('bz_item')} 占比{r.get('sales_share_pct')}%"
                  f"(毛利率{r.get('gross_margin_pct')}%)"
                  for r in prod[:4] if r.get("bz_item")]

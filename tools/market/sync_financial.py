@@ -41,24 +41,29 @@ API_SLEEP = 0.35  # 200次/分钟 -> 0.35s 间隔留余量
 # PG 断连/服务端重启: 每股独立连接, 单股重试即重连 (坑表: 长批任务按工作单元续跑)
 PG_DOWN = (psycopg2.OperationalError, psycopg2.InterfaceError)
 
-# 各表对应的 Tushare 接口名 (表名 == 接口名); 拉取字段见 table_fields() 反射
+# 各表对应的 Tushare 接口名 (表名 == 接口名); 拉取字段见 table_fields() 反射。
+# disclosure_date 不在此列: 接口不支持 start_date 逐股骨架参数, 走按报告期批量(见 backfill_disclosure_periods)
 FIN_TABLE_APIS = {
     "income": "income",
     "balancesheet": "balancesheet",
     "cashflow": "cashflow",
     "fina_indicator": "fina_indicator",
     "dividend": "dividend",
+    "fina_audit": "fina_audit",
 }
 
 # upsert 冲突键: 缺省为三大财报表主键, 其他表按表覆盖
 FIN_CONFLICT_KEYS = {
     "dividend": ["ts_code", "end_date", "ann_date", "div_proc"],
+    "fina_audit": ["ts_code", "end_date", "ann_date"],
+    "disclosure_date": ["ts_code", "end_date"],
 }
 
-# 日期规范化: 基础三列之外按表追加 (dividend 有 7 个额外日期列)
+# 日期规范化: 基础三列之外按表追加
 DATE_NORM_EXTRA = {
     "dividend": ("record_date", "ex_date", "pay_date",
                  "div_listdate", "imp_ann_date", "base_date"),
+    "disclosure_date": ("pre_date", "actual_date", "modify_date"),
 }
 
 _warned_dropped: set = set()
@@ -299,6 +304,117 @@ def run_dividend_daily(days: int = 2) -> int:
     return sync_dividend_daily(pro, days)
 
 
+# ---- disclosure_date 财报披露日期: 按报告期批量回填 + 按日双通道增量 (dividend 模式变体) ----
+# 一家股票一个报告期一条披露计划(最新状态), modify_date 是同行修正标记非新行
+
+DISCLOSURE_DATE_COLS = ("ann_date", "end_date", "pre_date", "actual_date", "modify_date")
+
+
+def _fetch_disclosure_by(pro, param: str, value: str,
+                         fields: List[str]) -> pd.DataFrame:
+    """按单参数(报告期 end_date 或单日 ann_date/actual_date)拉全市场披露计划, API 失败重试 3 次"""
+    for attempt in range(1, 4):
+        try:
+            return pro.disclosure_date(**{param: value}, fields=",".join(fields))
+        except Exception as e:
+            logger.warning(f"disclosure_date {param}={value} 抓取失败 "
+                           f"({attempt}/3): {e}")
+            time.sleep(2 * attempt)
+    return pd.DataFrame()
+
+
+def _upsert_disclosure(df: pd.DataFrame, table_cols: set, label: str) -> int:
+    """单批 规范化+PK空值防御+入库 工作单元 (返回入库行数); PG 断连批内重试"""
+    if df is None or df.empty:
+        return 0
+    for c in DISCLOSURE_DATE_COLS:
+        _normalize_date_col(df, c)
+    bad = df[["ts_code", "end_date"]].isna().any(axis=1)
+    if bad.any():
+        logger.warning(f"disclosure_date {label}: {int(bad.sum())} 行 PK 列含空值, 已跳过")
+        df = df[~bad]
+        if df.empty:
+            return 0
+    df = _filter_to_table(df, "disclosure_date", table_cols)
+    for attempt in range(1, 4):
+        try:
+            with PgClient() as pg:
+                pg.upsert_df(df, "fin", "disclosure_date",
+                             conflict_keys=FIN_CONFLICT_KEYS["disclosure_date"])
+            return len(df)
+        except PG_DOWN as e:
+            logger.warning(f"disclosure_date {label} PG 断连 "
+                           f"({attempt}/3): {str(e)[:80]}")
+            time.sleep(10 * attempt)
+    return 0
+
+
+def backfill_disclosure_periods(pro, start_year: int = 1998,
+                                end_year: Optional[int] = None) -> int:
+    """
+    回填: 按报告期整期批量 (全市场一次调用; 幂等可反复执行).
+    历史起点官方未标注, 空期 df.empty 自然跳过; 全程约 111 次调用数分钟跑完, 无需断点。
+    """
+    fields = table_fields("disclosure_date")
+    with PgClient() as pg:
+        table_cols = {c["name"] for c in pg.get_columns("fin", "disclosure_date")}
+    end_year = end_year or date.today().year
+    today_s = date.today().strftime("%Y%m%d")
+    total = 0
+    for year in range(start_year, end_year + 1):
+        for md in ("0331", "0630", "0930", "1231"):
+            period = f"{year}{md}"
+            if period > today_s:
+                continue  # 未到的报告期尚无预约计划
+            df = _fetch_disclosure_by(pro, "end_date", period, fields)
+            if df is None or df.empty:
+                continue
+            if len(df) >= 6000:
+                logger.warning(f"disclosure_date end_date={period} 返回 {len(df)} 行"
+                               f"触及单次上限 6000, 可能截断")
+            rows = _upsert_disclosure(df, table_cols, f"end_date={period}")
+            total += rows
+            logger.info(f"[回填] disclosure_date {period}: {rows} 行 upsert")
+            time.sleep(API_SLEEP)
+    logger.info(f"[回填] disclosure_date 完成: {start_year}-{end_year} 共 {total} 行")
+    return total
+
+
+def sync_disclosure_daily(pro, days: int = 2) -> int:
+    """
+    增量: 按日双通道拉全市场 (ann_date 新计划公告/计划变更, actual_date 实际披露落地).
+    upsert 幂等, 通道间与日间重复行安全; 返回累计处理行数 (含幂等重复)。
+    """
+    fields = table_fields("disclosure_date")
+    with PgClient() as pg:
+        table_cols = {c["name"] for c in pg.get_columns("fin", "disclosure_date")}
+    today = date.today()
+    total = 0
+    for back in range(days):
+        d = (today - timedelta(days=back)).strftime("%Y%m%d")
+        for param in ("ann_date", "actual_date"):
+            df = _fetch_disclosure_by(pro, param, d, fields)
+            if df is None or df.empty:
+                continue
+            rows = _upsert_disclosure(df, table_cols, f"{param}={d}")
+            if rows:
+                total += rows
+                logger.info(f"[增量] disclosure_date {param}={d}: {rows} 行 upsert")
+            time.sleep(API_SLEEP)
+    logger.info(f"[增量] disclosure_date 完成: {days} 天 x 2 通道, 共 {total} 行 (upsert 幂等含重复)")
+    return total
+
+
+def run_disclosure_daily(days: int = 2) -> int:
+    """调度入口: 建表兜底 + 按日增量"""
+    import tushare as ts
+    config = get_config()
+    pro = ts.pro_api(config.tushare_token)
+    with PgClient() as pg:
+        init_fin_schema(pg)
+    return sync_disclosure_daily(pro, days)
+
+
 def backfill_fin_table(pro, table: str, codes: List[str],
                        limit: Optional[int] = None,
                        force_full: bool = False) -> int:
@@ -383,14 +499,23 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Tushare 财务数据回填 PostgreSQL")
     parser.add_argument("--tables", type=str,
                         default="income,balancesheet,cashflow,fina_indicator",
-                        help="要同步的表 (income/balancesheet/cashflow/fina_indicator/dividend)")
+                        help="要同步的表 (income/balancesheet/cashflow/fina_indicator/dividend/fina_audit)")
     parser.add_argument("--start", type=str, default=None,
                         help="起始 ts_code (断点续传)")
     parser.add_argument("--limit", type=int, default=None,
                         help="限制处理股票数 (测试用)")
     parser.add_argument("--full", action="store_true",
                         help="强制全量回填 (忽略断点)")
+    parser.add_argument("--backfill-disclosure", action="store_true",
+                        help="disclosure_date 按报告期整期批量回填 (不走逐股骨架)")
     args = parser.parse_args()
+
+    if args.backfill_disclosure:
+        import tushare as ts
+        print("开始 disclosure_date 按报告期回填")
+        n = backfill_disclosure_periods(ts.pro_api(get_config().tushare_token))
+        print(f"disclosure_date 回填完成: {n} 行")
+        raise SystemExit(0)
 
     tbls = [t.strip() for t in args.tables.split(",") if t.strip()]
     print(f"开始财务回填: tables={tbls}, limit={args.limit}, full={args.full}")
