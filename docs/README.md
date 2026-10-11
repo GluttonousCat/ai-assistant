@@ -20,6 +20,7 @@ docs/
 |   +-- llm_models.md            模型路由（deepseek 文本/qwen 视觉/用途体系/关思考坑）
 |   +-- scanned_report_agent.md  扫描件研报分析（PDF->PNG->视觉OCR 三层解耦）
 |   +-- chain_beta_skill.md      产业链Beta/个股Alpha Skill（种子链/三源映射/环节指数/预期差四象限）
+|   +-- annual_storage.md        年报存储与双路召回设计（PG真相源+Milvus语义索引/锚点/单写路/定稿待实现）
 +-- ops/                运维与数据
 |   +-- domain_setup.md      域名与 Tunnel 部署/桌面入口(启动器+日志查看器)/运维手册
 |   +-- security.md          安全分层/外部访问事件审计/PG 加固清单
@@ -45,6 +46,7 @@ docs/
 | 处理扫描件 PDF | [agents/scanned_report_agent.md](agents/scanned_report_agent.md) |
 | 加/改产业链Beta、个股Alpha Skill | [agents/chain_beta_skill.md](agents/chain_beta_skill.md) |
 | 改年报披露项提取 (items/sections) | [agents/profile_extraction_handoff.md](agents/profile_extraction_handoff.md) |
+| 实现年报存储/向量召回 | [agents/annual_storage.md](agents/annual_storage.md) |
 | 改主题/品牌 | [frontend/framework_theme.md](frontend/framework_theme.md) |
 | 域名/启动/看日志 | [ops/domain_setup.md](ops/domain_setup.md) |
 | 安全与加固 | [ops/security.md](ops/security.md) |

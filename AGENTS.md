@@ -151,6 +151,7 @@ vision=qwen3.8-flash（deepseek 不收图片）。**思考开关由 `llm.enable_
 | dsh 客户端接入 | [docs/agents/dsh_client.md](docs/agents/dsh_client.md) | 外部 harness(dsh/Claude Desktop)连 MCP server；stdio 握手冒烟 jobs/smoke_mcp_stdio.py |
 | 研究生产线 | [docs/research/tasks/T00_总纲_契约与分工.md](docs/research/tasks/T00_总纲_契约与分工.md) | 三Agent流水线(证据→草稿→成稿)/并行任务分派/契约 skills/research/contracts.py；方法论源 docs/research/company_industry_guide.md |
 | 内容资产管线 | [docs/agents/content_pipeline.md](docs/agents/content_pipeline.md) | 上市公司画像/公众号文章/pptgen出片；`python -m skills.content` |
+| 年报存储设计 | [docs/agents/annual_storage.md](docs/agents/annual_storage.md) | PG真相源+Milvus annual_chunks/锚点/单写路/双路召回；定稿待实现 |
 | Beta/Alpha Skill | [docs/agents/chain_beta_skill.md](docs/agents/chain_beta_skill.md) | 产业链种子链/三源映射/环节指数/预期差四象限；Agent 会话入口在 `.agents/skills/beta-skill`、`.agents/skills/alpha-skill` |
 | 安全 | [docs/ops/security.md](docs/ops/security.md) | 分层防护/事件审计/加固清单 |
 | 数据处理 | [docs/ops/data_process.md](docs/ops/data_process.md) | 历史：同步全流程 |
