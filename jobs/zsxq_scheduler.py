@@ -126,6 +126,15 @@ class ZSXQScheduleScheduler:
             logger.error(f"研报 LLM 提取失败: {e}")
             result["extract"] = {"error": str(e)}
 
+        # 5: 早间轮末生成每日研报晨报 (output/daily_digest/YYYY-MM-DD.md; 失败不影响主轮)
+        if hour == self.run_hours[0]:
+            try:
+                from jobs.daily_digest import generate
+                result["digest"] = str(generate())
+            except Exception as e:
+                logger.error(f"每日研报晨报生成失败: {e}")
+                result["digest"] = {"error": str(e)}
+
         self.last_run = datetime.now()
         self.last_result = result
         return result
