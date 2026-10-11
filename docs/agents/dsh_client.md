@@ -1,7 +1,7 @@
 # dsh (DeepSeek Harness) 作为 MCP 客户端接入
 
 > 更新:2026-09-14 · 一次性验证记录, 非依赖项 — 本项目**不引入 dsh 框架**,
-> 仅把平台的 22 工具 MCP server (`python -m harness.mcp.server`) 当作外部 harness
+> 仅把平台的 34 工具 MCP server (`python -m harness.mcp.server`) 当作外部 harness
 > 的数据后端试用/评测。
 
 ## 一、系统设计(为什么这样接)
@@ -12,7 +12,7 @@ dsh 这类 MCP 客户端 harness 直接连我们的 stdio MCP server, 复用平�
 只读数据能力(A 股财务/行情/研报/产业链/量化扫描)。
 
 ```
-dsh (TS, 插件化 harness)  ──stdio JSON-RPC──>  python -m harness.mcp.server (22 工具)
+dsh (TS, 插件化 harness)  ──stdio JSON-RPC──>  python -m harness.mcp.server (34 工具)
                                                     └─> skills/tools/storage (PG/SQLite)
 ```
 

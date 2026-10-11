@@ -1,9 +1,10 @@
 # -*- encoding: utf-8 -*-
 """
-研报域工具 (6个):
+研报域工具 (7个):
 - search_reports       研报检索 (关键词/标的/行业/商品/评级)
 - read_report          读研报 (元数据+正文节选; 带 question 时对单篇做问答)
 - get_forecasts        券商盈利预测 + 分歧度统计
+- summarize_sell_side  卖方观点汇总 (覆盖机构/预测聚合/目标价区间)
 - fetch_annual_report  巨潮定期报告拉取 (写类: 入库+下载 PDF)
 - extract_document     本地文档解析 (PDF/DOCX/TXT; 扫描件走视觉OCR)
 - extract_pdf_tables   PDF 线框表格提取 (pdfplumber, 不调模型)
@@ -337,3 +338,72 @@ def extract_pdf_tables(file_path: str, max_pages: int = 20,
                       "rows": len(t["rows"]),
                       "preview": t["rows"][:6]} for t in tables],
             "full": tables}
+
+
+# ============================================================
+# 7. summarize_sell_side 卖方观点汇总
+# ============================================================
+
+@REGISTRY.tool(
+    name="summarize_sell_side",
+    domain="report",
+    description=(
+        "卖方观点汇总: 近一年覆盖该股的券商数量、各家盈利预测/目标价聚合(均值与区间)、"
+        "最新预测明细。用户问 '券商怎么看XX'/'XX的目标价是多少'/'卖方一致预期' 时调用。"),
+    params_schema=obj_schema({
+        "stock": param("股票名或代码", "string"),
+        "days": param("回看天数", "integer", default=365),
+    }, ["stock"]),
+    examples=["券商怎么看中际旭创", "贵州茅台目标价一致预期"],
+)
+def summarize_sell_side(stock: str, days: int = 365) -> Dict[str, Any]:
+    hit = resolve_one(stock)
+    from storage.pg import PgClient
+    with PgClient() as pg:
+        rows = pg.fetch_all(
+            "SELECT r.org_name, r.publish_date, r.title, "
+            "       f.forecast_type, f.forecast_period, f.forecast_value, "
+            "       f.forecast_unit, f.confidence "
+            "FROM fin.report_forecast f "
+            "JOIN fin.report_meta r ON r.report_id = f.report_id "
+            "WHERE f.ts_code=%s AND r.publish_date >= current_date - %s "
+            "ORDER BY r.publish_date DESC LIMIT 300",
+            (hit["ts_code"], int(days)))
+    if not rows:
+        raise ToolError(f"{hit['name']} 近{days}天无卖方盈利预测")
+
+    def _f(v):
+        return float(v) if v is not None and hasattr(v, "quantize") else v
+
+    orgs = sorted({r["org_name"] for r in rows if r["org_name"]})
+    groups: Dict[str, Dict[str, list]] = {}
+    for r in rows:
+        if not r["forecast_period"] or not r["forecast_type"]:
+            continue
+        key = f"{r['forecast_period']}.{r['forecast_type']}"
+        groups.setdefault(key, {"vals": [], "units": set()}).setdefault(
+            "units", set()).add(r["forecast_unit"] or "")
+        groups[key]["vals"].append(_f(r["forecast_value"]))
+    summary = []
+    for key, g in groups.items():
+        vals = [v for v in g["vals"] if isinstance(v, (int, float))]
+        if not vals:
+            continue
+        summary.append({
+            "period_type": key, "n_forecasts": len(vals),
+            "mean": round(sum(vals) / len(vals), 2),
+            "min": round(min(vals), 2), "max": round(max(vals), 2),
+            "unit": (list(g["units"]) or [""])[0]})
+    summary.sort(key=lambda s: (-s["n_forecasts"], s["period_type"]))
+    detail = []
+    for r in rows[:12]:
+        detail.append({
+            "org": r["org_name"],
+            "date": r["publish_date"].isoformat()
+            if hasattr(r["publish_date"], "isoformat") else r["publish_date"],
+            "title": (r["title"] or "")[:40],
+            "forecast": f"{r['forecast_period']} {r['forecast_type']} "
+                        f"{_f(r['forecast_value'])} {r['forecast_unit'] or ''}".strip()})
+    return {"stock": hit, "days": days, "org_count": len(orgs),
+            "orgs": orgs[:20], "forecast_summary": summary,
+            "latest_detail": detail}

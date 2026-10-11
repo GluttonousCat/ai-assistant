@@ -1,4 +1,4 @@
-# mcp/ — MCP 工具层 (19 只读 + 3 写类 = 22 个投研能力)
+# mcp/ — MCP 工具层 (31 只读 + 3 写类 = 34 个投研能力)
 
 > 2026-09-07 首版。目标: 把平台散落在 skills/tools/beta_alpha/range_trading 的原子能力
 > 统一包成 **带 JSON Schema 的标准工具**, 同时服务两条消费链路:

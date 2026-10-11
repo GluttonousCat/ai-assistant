@@ -47,7 +47,8 @@ def test_domain_defs_well_formed():
     registered = {s.name for s in registry.specs()}
     for key, d in DOMAIN_DEFS.items():
         assert d["label"] and d["prompt"] and d["keywords"]
-        assert 2 <= len(d["tools"]) <= 4, f"{key} 域工具数应 2~4"
+        assert 2 <= len(d["tools"]) <= 8, \
+            f"{key} 域工具数应 2~8 (subagent._load_domain_defs 校验上限)"
         for t in d["tools"]:
             assert t in registered, f"{key} 引用未注册工具 {t}"
             assert registry.get(t).read_only, f"{key} 引用非只读工具 {t}"
@@ -55,7 +56,7 @@ def test_domain_defs_well_formed():
 
 
 def test_domains_cover_most_tools():
-    """6 域工具并集应覆盖 17 个只读工具的绝大多数 (未覆盖的应是合理的)"""
+    """6 域工具并集应覆盖绝大多数只读工具 (未覆盖的应是合理的)"""
     from harness.mcp import get_registry
     covered = {t for d in DOMAIN_DEFS.values() for t in d["tools"]}
     uncovered = ({s.name for s in get_registry().specs()
@@ -69,7 +70,9 @@ def test_domains_cover_most_tools():
 def test_domain_manifest_includes_escalate():
     tools = domain_manifest("report")
     names = [t["function"]["name"] for t in tools]
-    assert names == DOMAIN_DEFS["report"]["tools"] + [ESCALATE_TOOL]
+    # manifest 顺序=注册顺序, 与 config 清单顺序无关, 集合比对
+    assert set(names) == set(DOMAIN_DEFS["report"]["tools"]) | {ESCALATE_TOOL}
+    assert names[-1] == ESCALATE_TOOL  # escalate 恒追加在末尾
     # escalate 不进全局注册表 (它只是循环内的伪工具)
     from harness.mcp import get_registry
     assert get_registry().get(ESCALATE_TOOL) is None

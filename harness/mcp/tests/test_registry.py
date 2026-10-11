@@ -14,11 +14,11 @@ from harness.mcp.spec import ToolError
 REGISTRY = get_registry()
 
 
-def test_22_tools_registered():
+def test_34_tools_registered():
     specs = REGISTRY.specs()
-    assert len(specs) == 22      # 19 只读 + 3 写类 (forge_chain/fetch_annual_report/write_article)
+    assert len(specs) == 34      # 31 只读 + 3 写类 (forge_chain/fetch_annual_report/write_article)
     names = [s.name for s in specs]
-    assert len(set(names)) == 22  # 无重名
+    assert len(set(names)) == 34  # 无重名
 
 
 def test_domains_cover_six_groups():
@@ -83,8 +83,8 @@ def test_manifests_consistent():
     openai_manifest = REGISTRY.openai_manifest()
     assert len(mcp_manifest) == len(REGISTRY.specs())
     assert len(openai_manifest) == len(REGISTRY.specs())
-    # 只读过滤: 19 个只读 (3 写类被排除)
-    assert len(REGISTRY.openai_manifest(include_write=False)) == 19
+    # 只读过滤: 31 个只读 (3 写类被排除)
+    assert len(REGISTRY.openai_manifest(include_write=False)) == 31
     for entry in mcp_manifest:
         assert set(entry) == {"name", "description", "inputSchema"}
     for entry in openai_manifest:

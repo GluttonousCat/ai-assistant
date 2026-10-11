@@ -1,10 +1,11 @@
 # -*- encoding: utf-8 -*-
 """
-产业链 + Alpha 域工具 (4个):
+产业链 + Alpha 域工具 (5个):
 - list_chains     种子链清单 (支持哪些产业链)
 - analyze_chain   链条量化分析 (环节->标的映射 + 环节指数超额收益)
 - forge_chain     LLM 生成新种子链模板 (写文件, 需审核)
 - analyze_alpha   个股预期差四象限 (预测分歧x财务动量x估值分位x研报观点)
+- industry_peers  同行业比对 (申万二级成分股 估值x成长x盈利 横向排名)
 """
 from __future__ import annotations
 
@@ -150,3 +151,79 @@ def analyze_alpha(stock: str) -> Dict[str, Any]:
             "table": {"columns": cols, "rows": len(data),
                       "data": [{k: _jsonable(v) for k, v in r.items()}
                                for r in data]}}
+
+
+# ============================================================
+# 15. industry_peers 同行业比对
+# ============================================================
+
+@REGISTRY.tool(
+    name="industry_peers",
+    domain="chain",
+    description=(
+        "同行业比对: 该股申万二级行业的成分股横向对比(市值/PE/PB/ROE/净利同比/毛利率), "
+        "并给出目标股各项指标的行业排名。用户问 'XX和同行业比怎么样'/'行业里谁最便宜'/"
+        "'XX在行业内什么水平' 时调用。"),
+    params_schema=obj_schema({
+        "stock": param("股票名或代码", "string"),
+        "limit": param("返回同行数量 (按市值)", "integer", default=10),
+    }, ["stock"]),
+    examples=["中际旭创和同行比估值", "白酒行业里谁ROE最高"],
+)
+def industry_peers(stock: str, limit: int = 10) -> Dict[str, Any]:
+    hit = resolve_one(stock)
+    from storage.pg import PgClient
+    with PgClient() as pg:
+        base = pg.fetch_one(
+            "SELECT industry_l2 FROM stock.stock_basic WHERE ts_code=%s",
+            (hit["ts_code"],))
+        if not base or not base["industry_l2"]:
+            raise ToolError(f"{hit['name']} 无申万行业数据")
+        rows = pg.fetch_all(
+            "WITH peers AS ( "
+            "  SELECT ts_code, name FROM stock.stock_basic "
+            "  WHERE industry_l2=%s ), "
+            "mv AS (SELECT DISTINCT ON (ts_code) ts_code, pe_ttm, pb, total_mv "
+            "       FROM stock.daily_basic "
+            "       WHERE ts_code IN (SELECT ts_code FROM peers) "
+            "       ORDER BY ts_code, trade_date DESC), "
+            "fi AS (SELECT DISTINCT ON (ts_code) ts_code, roe, netprofit_yoy, "
+            "              grossprofit_margin "
+            "       FROM fin.fina_indicator "
+            "       WHERE ts_code IN (SELECT ts_code FROM peers) "
+            "             AND report_type='1' "
+            "       ORDER BY ts_code, end_date DESC) "
+            "SELECT p.ts_code, p.name, mv.pe_ttm, mv.pb, mv.total_mv, "
+            "       fi.roe, fi.netprofit_yoy, fi.grossprofit_margin "
+            "FROM peers p LEFT JOIN mv ON mv.ts_code=p.ts_code "
+            "             LEFT JOIN fi ON fi.ts_code=p.ts_code",
+            (base["industry_l2"],))
+    if not rows:
+        raise ToolError(f"{hit['name']} 所在行业 {base['industry_l2']} 无成分数据")
+
+    def _f(v):
+        return (round(float(v), 2) if v is not None
+                and hasattr(v, "quantize") else v)
+
+    data = [{k: _f(v) for k, v in r.items()} for r in rows]
+    data.sort(key=lambda r: (r["total_mv"] is None,
+                             -(r["total_mv"] or 0)))
+
+    def _rank(metric: str, higher_is_better: bool = True):
+        vals = [(d[metric], d["ts_code"]) for d in data
+                if isinstance(d.get(metric), (int, float))]
+        if hit["ts_code"] not in {c for _, c in vals}:
+            return None
+        vals.sort(key=lambda x: x[0], reverse=higher_is_better)
+        for i, (_, c) in enumerate(vals, 1):
+            if c == hit["ts_code"]:
+                return {"rank": i, "of": len(vals)}
+
+    return {"stock": hit, "sw_l2": base["industry_l2"],
+            "peers_total": len(data), "total_mv_unit": "万元",
+            "data": data[:int(limit)],
+            "target_ranks": {"total_mv": _rank("total_mv"),
+                             "pe_ttm": _rank("pe_ttm", higher_is_better=False),
+                             "pb": _rank("pb", higher_is_better=False),
+                             "roe": _rank("roe"),
+                             "netprofit_yoy": _rank("netprofit_yoy")}}
