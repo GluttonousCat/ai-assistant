@@ -162,9 +162,9 @@ def init_schema(pg_client) -> None:
 # ============================================================
 # 财务数据仓库 (schema: fin)
 # ============================================================
-# 三大财务报表与官方文档全字段 1:1 (income 94 / balancesheet 158 / cashflow 97,
-# 2026-10 官网输出参数表; 存量库曾为子集+错名列, 已迁齐并删死列);
-# 财务指标 fina_indicator 为表内子集 (111/167, 未补全)
+# 三大财务报表+财务指标+分红送股与官方文档全字段 1:1 (income 94 / balancesheet 158 /
+# cashflow 97 / fina_indicator 167+本地report_type / dividend 16, 2026-10 官网输出参数表;
+# 存量库曾为子集+错名列, 已迁齐并删死列)
 
 DDL_FIN_SCHEMA = """CREATE SCHEMA IF NOT EXISTS fin"""
 
@@ -545,124 +545,210 @@ CREATE TABLE IF NOT EXISTS fin.cashflow (
 COMMENT ON TABLE fin.cashflow IS '现金流量表(Tushare官方97字段1:1)';
 """
 
-# ---------- 财务指标 ----------
+# ---------- 财务指标 (Tushare 官方 167 字段 1:1 + 本地 report_type 主键列, 2026-10 官网) ----------
 DDL_FINA_INDICATOR = """
 CREATE TABLE IF NOT EXISTS fin.fina_indicator (
-    ts_code          VARCHAR(16) NOT NULL,
-    ann_date         DATE,
-    end_date         DATE NOT NULL,
-    report_type      VARCHAR(2) NOT NULL DEFAULT '1',
-    comp_type        VARCHAR(2),
-    eps                              NUMERIC(20,6),
-    dt_eps                           NUMERIC(20,6),
-    total_revenue_ps                 NUMERIC(20,6),
-    revenue_ps                       NUMERIC(20,6),
-    capital_rese_ps                  NUMERIC(20,6),
-    surplus_rese_ps                  NUMERIC(20,6),
-    undist_profit_ps                 NUMERIC(20,6),
-    extra_item                       NUMERIC(20,6),
-    profit_dedt                      NUMERIC(20,6),
-    gross_margin                     NUMERIC(20,6),
-    current_ratio                    NUMERIC(20,6),
-    quick_ratio                      NUMERIC(20,6),
-    cash_ratio                       NUMERIC(20,6),
-    ar_turn                          NUMERIC(20,6),
-    ca_turn                          NUMERIC(20,6),
-    fa_turn                          NUMERIC(20,6),
-    assets_turn                      NUMERIC(20,6),
-    op_income                        NUMERIC(20,6),
-    ebit                             NUMERIC(20,6),
-    ebitda                           NUMERIC(20,6),
-    fcff                             NUMERIC(20,6),
-    fcfe                             NUMERIC(20,6),
-    current_exint                    NUMERIC(20,6),
-    noncurrent_exint                 NUMERIC(20,6),
-    interestdebt                     NUMERIC(20,6),
-    netdebt                          NUMERIC(20,6),
-    tangible_asset                   NUMERIC(20,6),
-    working_capital                  NUMERIC(20,6),
-    networking_capital               NUMERIC(20,6),
-    invest_capital                   NUMERIC(20,6),
-    retained_earnings                NUMERIC(20,6),
-    diluted2_eps                     NUMERIC(20,6),
-    bps                              NUMERIC(20,6),
-    ocfps                            NUMERIC(20,6),
-    retainedps                       NUMERIC(20,6),
-    cfps                             NUMERIC(20,6),
-    ebit_ps                          NUMERIC(20,6),
-    fcff_ps                          NUMERIC(20,6),
-    fcfe_ps                          NUMERIC(20,6),
-    netprofit_margin                 NUMERIC(20,6),
-    grossprofit_margin               NUMERIC(20,6),
-    cogs_of_sales                    NUMERIC(20,6),
-    expense_of_sales                 NUMERIC(20,6),
-    profit_to_gr                     NUMERIC(20,6),
-    saleexp_to_gr                    NUMERIC(20,6),
-    adminexp_of_gr                   NUMERIC(20,6),
-    finaexp_of_gr                    NUMERIC(20,6),
-    impai_ttm                        NUMERIC(20,6),
-    gc_of_gr                         NUMERIC(20,6),
-    op_of_gr                         NUMERIC(20,6),
-    ebit_of_gr                       NUMERIC(20,6),
-    roe                              NUMERIC(20,6),
-    roe_waa                          NUMERIC(20,6),
-    roe_dt                           NUMERIC(20,6),
-    roa                              NUMERIC(20,6),
-    npta                             NUMERIC(20,6),
-    roic                             NUMERIC(20,6),
-    roe_yearly                       NUMERIC(20,6),
-    roa2_yearly                      NUMERIC(20,6),
-    debt_to_assets                   NUMERIC(20,6),
-    assets_to_eqt                    NUMERIC(20,6),
-    dp_assets_to_eqt                 NUMERIC(20,6),
-    ca_to_assets                     NUMERIC(20,6),
-    nca_to_assets                    NUMERIC(20,6),
-    tbassets_to_totalassets          NUMERIC(20,6),
-    int_to_talcap                    NUMERIC(20,6),
-    eqt_to_talcapital                NUMERIC(20,6),
-    currentdebt_to_debt              NUMERIC(20,6),
-    longdeb_to_debt                  NUMERIC(20,6),
-    ocf_to_shortdebt                 NUMERIC(20,6),
-    debt_to_eqt                      NUMERIC(20,6),
-    eqt_to_debt                      NUMERIC(20,6),
-    eqt_to_interestdebt              NUMERIC(20,6),
-    tangibleasset_to_debt            NUMERIC(20,6),
-    tangasset_to_intdebt             NUMERIC(20,6),
-    tangibleasset_to_netdebt         NUMERIC(20,6),
-    ocf_to_debt                      NUMERIC(20,6),
-    turn_days                        NUMERIC(20,6),
-    roa_yearly                       NUMERIC(20,6),
-    roa_dp                           NUMERIC(20,6),
-    fixed_assets                     NUMERIC(20,6),
-    profit_to_op                     NUMERIC(20,6),
-    q_saleexp_to_gr                  NUMERIC(20,6),
-    q_gc_to_gr                       NUMERIC(20,6),
-    q_roe                            NUMERIC(20,6),
-    q_dt_roe                         NUMERIC(20,6),
-    q_npta                           NUMERIC(20,6),
-    q_ocf_to_sales                   NUMERIC(20,6),
-    basic_eps_yoy                    NUMERIC(20,6),
-    dt_eps_yoy                       NUMERIC(20,6),
-    cfps_yoy                         NUMERIC(20,6),
-    op_yoy                           NUMERIC(20,6),
-    ebt_yoy                          NUMERIC(20,6),
-    netprofit_yoy                    NUMERIC(20,6),
-    dt_netprofit_yoy                 NUMERIC(20,6),
-    ocf_yoy                          NUMERIC(20,6),
-    roe_yoy                          NUMERIC(20,6),
-    bps_yoy                          NUMERIC(20,6),
-    assets_yoy                       NUMERIC(20,6),
-    eqt_yoy                          NUMERIC(20,6),
-    tr_yoy                           NUMERIC(20,6),
-    or_yoy                           NUMERIC(20,6),
-    q_sales_yoy                      NUMERIC(20,6),
-    q_op_qoq                         NUMERIC(20,6),
-    equity_yoy                       NUMERIC(20,6),
-    update_flag      VARCHAR(4),
-    created_at       TIMESTAMP DEFAULT now(),
+    ts_code                       VARCHAR(16) NOT NULL,       -- TS代码
+    ann_date                      DATE,                       -- 公告日期
+    end_date                      DATE NOT NULL,              -- 报告期
+    report_type                   VARCHAR(2) NOT NULL DEFAULT '1', -- 本地主键列(官方无此输出, 勿删)
+    eps                           NUMERIC(20,6),              -- 基本每股收益
+    dt_eps                        NUMERIC(20,6),              -- 稀释每股收益
+    total_revenue_ps              NUMERIC(20,6),              -- 每股营业总收入
+    revenue_ps                    NUMERIC(20,6),              -- 每股营业收入
+    capital_rese_ps               NUMERIC(20,6),              -- 每股资本公积
+    surplus_rese_ps               NUMERIC(20,6),              -- 每股盈余公积
+    undist_profit_ps              NUMERIC(20,6),              -- 每股未分配利润
+    extra_item                    NUMERIC(20,6),              -- 非经常性损益
+    profit_dedt                   NUMERIC(20,6),              -- 扣除非经常性损益后的净利润（扣非净利润）
+    gross_margin                  NUMERIC(20,6),              -- 毛利
+    current_ratio                 NUMERIC(20,6),              -- 流动比率
+    quick_ratio                   NUMERIC(20,6),              -- 速动比率
+    cash_ratio                    NUMERIC(20,6),              -- 保守速动比率
+    invturn_days                  NUMERIC(20,6),              -- 存货周转天数
+    arturn_days                   NUMERIC(20,6),              -- 应收账款周转天数
+    inv_turn                      NUMERIC(20,6),              -- 存货周转率
+    ar_turn                       NUMERIC(20,6),              -- 应收账款周转率
+    ca_turn                       NUMERIC(20,6),              -- 流动资产周转率
+    fa_turn                       NUMERIC(20,6),              -- 固定资产周转率
+    assets_turn                   NUMERIC(20,6),              -- 总资产周转率
+    op_income                     NUMERIC(20,6),              -- 经营活动净收益
+    valuechange_income            NUMERIC(20,6),              -- 价值变动净收益
+    interst_income                NUMERIC(20,6),              -- 利息费用
+    daa                           NUMERIC(20,6),              -- 折旧与摊销
+    ebit                          NUMERIC(20,6),              -- 息税前利润
+    ebitda                        NUMERIC(20,6),              -- 息税折旧摊销前利润
+    fcff                          NUMERIC(20,6),              -- 企业自由现金流量
+    fcfe                          NUMERIC(20,6),              -- 股权自由现金流量
+    current_exint                 NUMERIC(20,6),              -- 无息流动负债
+    noncurrent_exint              NUMERIC(20,6),              -- 无息非流动负债
+    interestdebt                  NUMERIC(20,6),              -- 带息债务
+    netdebt                       NUMERIC(20,6),              -- 净债务
+    tangible_asset                NUMERIC(20,6),              -- 有形资产
+    working_capital               NUMERIC(20,6),              -- 营运资金
+    networking_capital            NUMERIC(20,6),              -- 营运流动资本
+    invest_capital                NUMERIC(20,6),              -- 全部投入资本
+    retained_earnings             NUMERIC(20,6),              -- 留存收益
+    diluted2_eps                  NUMERIC(20,6),              -- 期末摊薄每股收益
+    bps                           NUMERIC(20,6),              -- 每股净资产
+    ocfps                         NUMERIC(20,6),              -- 每股经营活动产生的现金流量净额
+    retainedps                    NUMERIC(20,6),              -- 每股留存收益
+    cfps                          NUMERIC(20,6),              -- 每股现金流量净额
+    ebit_ps                       NUMERIC(20,6),              -- 每股息税前利润
+    fcff_ps                       NUMERIC(20,6),              -- 每股企业自由现金流量
+    fcfe_ps                       NUMERIC(20,6),              -- 每股股东自由现金流量
+    netprofit_margin              NUMERIC(20,6),              -- 销售净利率
+    grossprofit_margin            NUMERIC(20,6),              -- 销售毛利率
+    cogs_of_sales                 NUMERIC(20,6),              -- 销售成本率
+    expense_of_sales              NUMERIC(20,6),              -- 销售期间费用率
+    profit_to_gr                  NUMERIC(20,6),              -- 净利润/营业总收入
+    saleexp_to_gr                 NUMERIC(20,6),              -- 销售费用/营业总收入
+    adminexp_of_gr                NUMERIC(20,6),              -- 管理费用/营业总收入
+    finaexp_of_gr                 NUMERIC(20,6),              -- 财务费用/营业总收入
+    impai_ttm                     NUMERIC(20,6),              -- 资产减值损失/营业总收入
+    gc_of_gr                      NUMERIC(20,6),              -- 营业总成本/营业总收入
+    op_of_gr                      NUMERIC(20,6),              -- 营业利润/营业总收入
+    ebit_of_gr                    NUMERIC(20,6),              -- 息税前利润/营业总收入
+    roe                           NUMERIC(20,6),              -- 净资产收益率
+    roe_waa                       NUMERIC(20,6),              -- 加权平均净资产收益率
+    roe_dt                        NUMERIC(20,6),              -- 净资产收益率(扣除非经常损益)
+    roa                           NUMERIC(20,6),              -- 总资产报酬率
+    npta                          NUMERIC(20,6),              -- 总资产净利润
+    roic                          NUMERIC(20,6),              -- 投入资本回报率
+    roe_yearly                    NUMERIC(20,6),              -- 年化净资产收益率
+    roa2_yearly                   NUMERIC(20,6),              -- 年化总资产报酬率
+    roe_avg                       NUMERIC(20,6),              -- 平均净资产收益率(增发条件)
+    opincome_of_ebt               NUMERIC(20,6),              -- 经营活动净收益/利润总额
+    investincome_of_ebt           NUMERIC(20,6),              -- 价值变动净收益/利润总额
+    n_op_profit_of_ebt            NUMERIC(20,6),              -- 营业外收支净额/利润总额
+    tax_to_ebt                    NUMERIC(20,6),              -- 所得税/利润总额
+    dtprofit_to_profit            NUMERIC(20,6),              -- 扣除非经常损益后的净利润/净利润
+    salescash_to_or               NUMERIC(20,6),              -- 销售商品提供劳务收到的现金/营业收入
+    ocf_to_or                     NUMERIC(20,6),              -- 经营活动产生的现金流量净额/营业收入
+    ocf_to_opincome               NUMERIC(20,6),              -- 经营活动产生的现金流量净额/经营活动净收益
+    capitalized_to_da             NUMERIC(20,6),              -- 资本支出/折旧和摊销
+    debt_to_assets                NUMERIC(20,6),              -- 资产负债率
+    assets_to_eqt                 NUMERIC(20,6),              -- 权益乘数
+    dp_assets_to_eqt              NUMERIC(20,6),              -- 权益乘数(杜邦分析)
+    ca_to_assets                  NUMERIC(20,6),              -- 流动资产/总资产
+    nca_to_assets                 NUMERIC(20,6),              -- 非流动资产/总资产
+    tbassets_to_totalassets       NUMERIC(20,6),              -- 有形资产/总资产
+    int_to_talcap                 NUMERIC(20,6),              -- 带息债务/全部投入资本
+    eqt_to_talcapital             NUMERIC(20,6),              -- 归属于母公司的股东权益/全部投入资本
+    currentdebt_to_debt           NUMERIC(20,6),              -- 流动负债/负债合计
+    longdeb_to_debt               NUMERIC(20,6),              -- 非流动负债/负债合计
+    ocf_to_shortdebt              NUMERIC(20,6),              -- 经营活动产生的现金流量净额/流动负债
+    debt_to_eqt                   NUMERIC(20,6),              -- 产权比率
+    eqt_to_debt                   NUMERIC(20,6),              -- 归属于母公司的股东权益/负债合计
+    eqt_to_interestdebt           NUMERIC(20,6),              -- 归属于母公司的股东权益/带息债务
+    tangibleasset_to_debt         NUMERIC(20,6),              -- 有形资产/负债合计
+    tangasset_to_intdebt          NUMERIC(20,6),              -- 有形资产/带息债务
+    tangibleasset_to_netdebt      NUMERIC(20,6),              -- 有形资产/净债务
+    ocf_to_debt                   NUMERIC(20,6),              -- 经营活动产生的现金流量净额/负债合计
+    ocf_to_interestdebt           NUMERIC(20,6),              -- 经营活动产生的现金流量净额/带息债务
+    ocf_to_netdebt                NUMERIC(20,6),              -- 经营活动产生的现金流量净额/净债务
+    ebit_to_interest              NUMERIC(20,6),              -- 已获利息倍数(EBIT/利息费用)
+    longdebt_to_workingcapital    NUMERIC(20,6),              -- 长期债务与营运资金比率
+    ebitda_to_debt                NUMERIC(20,6),              -- 息税折旧摊销前利润/负债合计
+    turn_days                     NUMERIC(20,6),              -- 营业周期
+    roa_yearly                    NUMERIC(20,6),              -- 年化总资产净利率
+    roa_dp                        NUMERIC(20,6),              -- 总资产净利率(杜邦分析)
+    fixed_assets                  NUMERIC(20,6),              -- 固定资产合计
+    profit_prefin_exp             NUMERIC(20,6),              -- 扣除财务费用前营业利润
+    non_op_profit                 NUMERIC(20,6),              -- 非营业利润
+    op_to_ebt                     NUMERIC(20,6),              -- 营业利润／利润总额
+    nop_to_ebt                    NUMERIC(20,6),              -- 非营业利润／利润总额
+    ocf_to_profit                 NUMERIC(20,6),              -- 经营活动产生的现金流量净额／营业利润
+    cash_to_liqdebt               NUMERIC(20,6),              -- 货币资金／流动负债
+    cash_to_liqdebt_withinterest  NUMERIC(20,6),              -- 货币资金／带息流动负债
+    op_to_liqdebt                 NUMERIC(20,6),              -- 营业利润／流动负债
+    op_to_debt                    NUMERIC(20,6),              -- 营业利润／负债合计
+    roic_yearly                   NUMERIC(20,6),              -- 年化投入资本回报率
+    total_fa_trun                 NUMERIC(20,6),              -- 固定资产合计周转率
+    profit_to_op                  NUMERIC(20,6),              -- 利润总额／营业收入
+    q_opincome                    NUMERIC(20,6),              -- 经营活动单季度净收益
+    q_investincome                NUMERIC(20,6),              -- 价值变动单季度净收益
+    q_dtprofit                    NUMERIC(20,6),              -- 扣除非经常损益后的单季度净利润
+    q_eps                         NUMERIC(20,6),              -- 每股收益(单季度)
+    q_netprofit_margin            NUMERIC(20,6),              -- 销售净利率(单季度)
+    q_gsprofit_margin             NUMERIC(20,6),              -- 销售毛利率(单季度)
+    q_exp_to_sales                NUMERIC(20,6),              -- 销售期间费用率(单季度)
+    q_profit_to_gr                NUMERIC(20,6),              -- 净利润／营业总收入(单季度)
+    q_saleexp_to_gr               NUMERIC(20,6),              -- 销售费用／营业总收入 (单季度)
+    q_adminexp_to_gr              NUMERIC(20,6),              -- 管理费用／营业总收入 (单季度)
+    q_finaexp_to_gr               NUMERIC(20,6),              -- 财务费用／营业总收入 (单季度)
+    q_impair_to_gr_ttm            NUMERIC(20,6),              -- 资产减值损失／营业总收入(单季度)
+    q_gc_to_gr                    NUMERIC(20,6),              -- 营业总成本／营业总收入 (单季度)
+    q_op_to_gr                    NUMERIC(20,6),              -- 营业利润／营业总收入(单季度)
+    q_roe                         NUMERIC(20,6),              -- 净资产收益率(单季度)
+    q_dt_roe                      NUMERIC(20,6),              -- 净资产单季度收益率(扣除非经常损益)
+    q_npta                        NUMERIC(20,6),              -- 总资产净利润(单季度)
+    q_opincome_to_ebt             NUMERIC(20,6),              -- 经营活动净收益／利润总额(单季度)
+    q_investincome_to_ebt         NUMERIC(20,6),              -- 价值变动净收益／利润总额(单季度)
+    q_dtprofit_to_profit          NUMERIC(20,6),              -- 扣除非经常损益后的净利润／净利润(单季度)
+    q_salescash_to_or             NUMERIC(20,6),              -- 销售商品提供劳务收到的现金／营业收入(单季度)
+    q_ocf_to_sales                NUMERIC(20,6),              -- 经营活动产生的现金流量净额／营业收入(单季度)
+    q_ocf_to_or                   NUMERIC(20,6),              -- 经营活动产生的现金流量净额／经营活动净收益(单季度)
+    basic_eps_yoy                 NUMERIC(20,6),              -- 基本每股收益同比增长率(%)
+    dt_eps_yoy                    NUMERIC(20,6),              -- 稀释每股收益同比增长率(%)
+    cfps_yoy                      NUMERIC(20,6),              -- 每股经营活动产生的现金流量净额同比增长率(%)
+    op_yoy                        NUMERIC(20,6),              -- 营业利润同比增长率(%)
+    ebt_yoy                       NUMERIC(20,6),              -- 利润总额同比增长率(%)
+    netprofit_yoy                 NUMERIC(20,6),              -- 归属母公司股东的净利润同比增长率(%)
+    dt_netprofit_yoy              NUMERIC(20,6),              -- 归属母公司股东的净利润-扣除非经常损益同比增长率(%)
+    ocf_yoy                       NUMERIC(20,6),              -- 经营活动产生的现金流量净额同比增长率(%)
+    roe_yoy                       NUMERIC(20,6),              -- 净资产收益率(摊薄)同比增长率(%)
+    bps_yoy                       NUMERIC(20,6),              -- 每股净资产相对年初增长率(%)
+    assets_yoy                    NUMERIC(20,6),              -- 资产总计相对年初增长率(%)
+    eqt_yoy                       NUMERIC(20,6),              -- 归属母公司的股东权益相对年初增长率(%)
+    tr_yoy                        NUMERIC(20,6),              -- 营业总收入同比增长率(%)
+    or_yoy                        NUMERIC(20,6),              -- 营业收入同比增长率(%)
+    q_gr_yoy                      NUMERIC(20,6),              -- 营业总收入同比增长率(%)(单季度)
+    q_gr_qoq                      NUMERIC(20,6),              -- 营业总收入环比增长率(%)(单季度)
+    q_sales_yoy                   NUMERIC(20,6),              -- 营业收入同比增长率(%)(单季度)
+    q_sales_qoq                   NUMERIC(20,6),              -- 营业收入环比增长率(%)(单季度)
+    q_op_yoy                      NUMERIC(20,6),              -- 营业利润同比增长率(%)(单季度)
+    q_op_qoq                      NUMERIC(20,6),              -- 营业利润环比增长率(%)(单季度)
+    q_profit_yoy                  NUMERIC(20,6),              -- 净利润同比增长率(%)(单季度)
+    q_profit_qoq                  NUMERIC(20,6),              -- 净利润环比增长率(%)(单季度)
+    q_netprofit_yoy               NUMERIC(20,6),              -- 归属母公司股东的净利润同比增长率(%)(单季度)
+    q_netprofit_qoq               NUMERIC(20,6),              -- 归属母公司股东的净利润环比增长率(%)(单季度)
+    equity_yoy                    NUMERIC(20,6),              -- 净资产同比增长率
+    rd_exp                        NUMERIC(20,6),              -- 研发投入合计
+    update_flag                   VARCHAR(4),                 -- 更新标识
+    created_at                    TIMESTAMP DEFAULT now(),
     PRIMARY KEY (ts_code, end_date, report_type)
 );
-COMMENT ON TABLE fin.fina_indicator IS '财务指标 (108字段全量: 每股/成长/盈利/偿债/营运/现金流)';
+COMMENT ON TABLE fin.fina_indicator IS '财务指标(Tushare官方167字段1:1, 另含本地report_type主键列)';
+"""
+
+# ---------- 分红送股 (Tushare 官方 16 字段 1:1, 2026-10 官网输出参数表) ----------
+# 官方无唯一键: PK 取 (ts_code, end_date, ann_date, div_proc) —— 四列官方恒有值;
+# 多阶段行(预案/决案/实施)由 div_proc 区分, 同年多次分红由 ann_date 区分;
+# 实施类日期列(ex_date 等)在预案阶段必 NULL, 不可入 PK
+DDL_DIVIDEND = """
+CREATE TABLE IF NOT EXISTS fin.dividend (
+    ts_code       VARCHAR(16) NOT NULL,   -- TS代码
+    end_date      DATE NOT NULL,          -- 分红年度
+    ann_date      DATE NOT NULL,          -- 公告日(预案，决案)
+    div_proc      VARCHAR(16) NOT NULL,   -- 实施进度
+    stk_div       NUMERIC(12,6),          -- 每股送转
+    stk_bo_rate   NUMERIC(12,6),          -- 每股送股比例
+    stk_co_rate   NUMERIC(12,6),          -- 每股转增比例
+    cash_div      NUMERIC(12,6),          -- 每股分红（税后）
+    cash_div_tax  NUMERIC(12,6),          -- 每股分红（税前）
+    record_date   DATE,                   -- 股权登记日
+    ex_date       DATE,                   -- 除权除息日
+    pay_date      DATE,                   -- 派息日
+    div_listdate  DATE,                   -- 红股上市日
+    imp_ann_date  DATE,                   -- 实施公告日
+    base_date     DATE,                   -- 基准日
+    base_share    NUMERIC(20,4),          -- 基准股本（万）
+    created_at    TIMESTAMP DEFAULT now(),
+    PRIMARY KEY (ts_code, end_date, ann_date, div_proc)
+);
+CREATE INDEX IF NOT EXISTS idx_dividend_ts_end ON fin.dividend (ts_code, end_date);
+COMMENT ON TABLE fin.dividend IS '分红送股(Tushare官方16字段1:1)';
 """
 
 # ---------- 财务同步元表 ----------
@@ -745,6 +831,7 @@ FIN_ALL_DDL = [
     DDL_BALANCESHEET,
     DDL_CASHFLOW,
     DDL_FINA_INDICATOR,
+    DDL_DIVIDEND,
     DDL_FINA_MAINBZ,
     DDL_VIEW_MAIN_BIZ,
     DDL_FIN_SYNC_META,
@@ -755,6 +842,7 @@ T_INCOME = "fin.income"
 T_BALANCESHEET = "fin.balancesheet"
 T_CASHFLOW = "fin.cashflow"
 T_FINA_INDICATOR = "fin.fina_indicator"
+T_DIVIDEND = "fin.dividend"
 T_FINA_MAINBZ = "fin.fina_mainbz"
 T_FIN_SYNC_META = "fin.sync_meta"
 

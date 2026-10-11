@@ -2,10 +2,13 @@
 Tushare 财务数据 -> PostgreSQL 同步模块
 
 功能:
-- 全量回填: income(利润表) / balancesheet(资产负债表) / cashflow(现金流量表) / fina_indicator(财务指标)
-- 三大表列结构与 Tushare 官方输出参数 1:1 (income 94 / balancesheet 158 / cashflow 97 字段)
+- 全量回填: income(利润表) / balancesheet(资产负债表) / cashflow(现金流量表) /
+  fina_indicator(财务指标) / dividend(分红送股)
+- 四大财报表列结构与 Tushare 官方输出参数 1:1 (income 94 / balancesheet 158 /
+  cashflow 97 / fina_indicator 167 字段; dividend 16 字段)
 - 拉取字段不手工维护: 直接反射实表列(information_schema), 表结构即单一事实源
   (旧版 DDL 与请求字段双清单手工维护, 曾漂移出 10+16 个错名字段, API 静默不返回 -> 整列全 NULL)
+- dividend 每日增量走 run_dividend_daily 按日批量三通道 (不逐股)
 - 数据源: 单只股票拉取 (income 等接口 2000积分可用, income_vip 需5000积分)
 - report_type=1 (合并报表, 最新)
 - 断点续传: 按 ts_code 逐只, sync_meta 记录进度, 可反复执行
@@ -44,6 +47,18 @@ FIN_TABLE_APIS = {
     "balancesheet": "balancesheet",
     "cashflow": "cashflow",
     "fina_indicator": "fina_indicator",
+    "dividend": "dividend",
+}
+
+# upsert 冲突键: 缺省为三大财报表主键, 其他表按表覆盖
+FIN_CONFLICT_KEYS = {
+    "dividend": ["ts_code", "end_date", "ann_date", "div_proc"],
+}
+
+# 日期规范化: 基础三列之外按表追加 (dividend 有 7 个额外日期列)
+DATE_NORM_EXTRA = {
+    "dividend": ("record_date", "ex_date", "pay_date",
+                 "div_listdate", "imp_ann_date", "base_date"),
 }
 
 _warned_dropped: set = set()
@@ -141,7 +156,7 @@ def _upsert_stock_fin(pro, table: str, api_name: str, fields: List[str],
     df = fetch_stock_fin(pro, api_name, ts_code, fields, start=start)
     if df is None or df.empty:
         return 0
-    for c in ("ann_date", "f_ann_date", "end_date"):
+    for c in ("ann_date", "f_ann_date", "end_date") + DATE_NORM_EXTRA.get(table, ()):
         _normalize_date_col(df, c)
     with PgClient() as pg:
         table_cols = {c["name"] for c in pg.get_columns("fin", table)}
@@ -149,7 +164,8 @@ def _upsert_stock_fin(pro, table: str, api_name: str, fields: List[str],
     with PgClient() as pg:
         pg.upsert_df(
             df, "fin", table,
-            conflict_keys=["ts_code", "end_date", "report_type"],
+            conflict_keys=FIN_CONFLICT_KEYS.get(
+                table, ["ts_code", "end_date", "report_type"]),
         )
     return len(df)
 
@@ -204,6 +220,83 @@ def run_financial_incremental(days: int = 10) -> Dict[str, int]:
     for t in FIN_TABLE_APIS:
         result[t] = fetch_recent_financial(pro, t, codes, start)
     return result
+
+
+# ---- dividend 每日增量: 按日批量三通道事件级拉取 (对比逐股 5000 次调用; 事件稀疏) ----
+
+DIVIDEND_DATE_COLS = ("ann_date", "end_date", "record_date", "ex_date",
+                      "pay_date", "div_listdate", "imp_ann_date", "base_date")
+
+
+def _fetch_dividend_by_date(pro, param: str, d: str,
+                            fields: List[str]) -> pd.DataFrame:
+    """按单日参数拉全市场分红 (ann_date/imp_ann_date/ex_date 之一), API 失败重试 3 次"""
+    for attempt in range(1, 4):
+        try:
+            return pro.dividend(**{param: d}, fields=",".join(fields))
+        except Exception as e:
+            logger.warning(f"dividend {param}={d} 抓取失败 ({attempt}/3): {e}")
+            time.sleep(2 * attempt)
+    return pd.DataFrame()
+
+
+def sync_dividend_daily(pro, days: int = 2) -> int:
+    """
+    dividend 每日增量: 按日批量拉全市场, 三通道 (ann_date 新公告 / imp_ann_date 实施公告 /
+    ex_date 除权除息兜底). upsert 幂等, 通道间与日间重复行安全.
+    单日全市场分红事件 << 2000 行无翻页; 返回累计处理行数 (含幂等重复).
+    """
+    fields = table_fields("dividend")
+    conflict = FIN_CONFLICT_KEYS["dividend"]
+    today = date.today()
+    total = 0
+    with PgClient() as pg:
+        table_cols = {c["name"] for c in pg.get_columns("fin", "dividend")}
+    for back in range(days):
+        d = (today - timedelta(days=back)).strftime("%Y%m%d")
+        for param in ("ann_date", "imp_ann_date", "ex_date"):
+            df = _fetch_dividend_by_date(pro, param, d, fields)
+            if df is None or df.empty:
+                continue
+            if len(df) >= 2000:
+                logger.warning(f"dividend {param}={d} 返回 {len(df)} 行触及单次上限, 可能截断")
+            for c in DIVIDEND_DATE_COLS:
+                _normalize_date_col(df, c)
+            # PK 列空值行 (理论上不应有, 防御 NOT NULL 违例中断整批)
+            bad = df[["ts_code", "end_date", "ann_date", "div_proc"]].isna().any(axis=1)
+            if bad.any():
+                logger.warning(f"dividend {param}={d}: {int(bad.sum())} 行 PK 列含空值, 已跳过")
+                df = df[~bad]
+                if df.empty:
+                    continue
+            df = _filter_to_table(df, "dividend", table_cols)
+            done = False
+            for attempt in range(1, 4):
+                try:
+                    with PgClient() as pg:
+                        pg.upsert_df(df, "fin", "dividend", conflict_keys=conflict)
+                    done = True
+                    break
+                except PG_DOWN as e:
+                    logger.warning(f"dividend {param}={d} PG 断连 "
+                                   f"({attempt}/3): {str(e)[:80]}")
+                    time.sleep(10 * attempt)
+            if done:
+                total += len(df)
+                logger.info(f"[增量] dividend {param}={d}: {len(df)} 行 upsert")
+            time.sleep(API_SLEEP)
+    logger.info(f"[增量] dividend 完成: {days} 天 x 3 通道, 共 {total} 行 (upsert 幂等含重复)")
+    return total
+
+
+def run_dividend_daily(days: int = 2) -> int:
+    """调度入口: 建表兜底 + 按日增量"""
+    import tushare as ts
+    config = get_config()
+    pro = ts.pro_api(config.tushare_token)
+    with PgClient() as pg:
+        init_fin_schema(pg)
+    return sync_dividend_daily(pro, days)
 
 
 def backfill_fin_table(pro, table: str, codes: List[str],
@@ -290,7 +383,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Tushare 财务数据回填 PostgreSQL")
     parser.add_argument("--tables", type=str,
                         default="income,balancesheet,cashflow,fina_indicator",
-                        help="要同步的表 (income/balancesheet/cashflow/fina_indicator)")
+                        help="要同步的表 (income/balancesheet/cashflow/fina_indicator/dividend)")
     parser.add_argument("--start", type=str, default=None,
                         help="起始 ts_code (断点续传)")
     parser.add_argument("--limit", type=int, default=None,
