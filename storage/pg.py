@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import pandas as pd
 import psycopg2
 import psycopg2.extras
-from psycopg2.pool import SimpleConnectionPool
+from psycopg2.pool import ThreadedConnectionPool
 
 logger = logging.getLogger(__name__)
 
@@ -45,10 +45,10 @@ def check_pg_config(cfg: Dict[str, Any]) -> List[str]:
 
 
 class PgPool:
-    """PG 连接池 (单例)"""
+    """PG 连接池 (单例; ThreadedConnectionPool + 类锁, 多线程/asyncio.to_thread 并发安全)"""
     _instance: Optional["PgPool"] = None
     _lock = threading.Lock()
-    _pool: Optional[SimpleConnectionPool] = None
+    _pool: Optional[ThreadedConnectionPool] = None
     _config: Dict[str, Any] = {}
 
     def __new__(cls):
@@ -60,48 +60,59 @@ class PgPool:
 
     @classmethod
     def init(cls, config: Optional[Dict[str, Any]] = None,
-             minconn: int = 1, maxconn: int = 10) -> None:
-        """初始化连接池 (可重复调用, 仅首次生效)"""
+             minconn: int = 2, maxconn: int = 32) -> None:
+        """初始化连接池 (可重复调用, 仅首次生效; 并发安全)"""
         cfg = config or pg_config()
         for problem in check_pg_config(cfg):
             logger.warning(f"PG 配置异常: {problem}")
-        if cls._pool is not None:
-            # 连接串变化时重建
-            if cls._config == cfg:
-                return
-            cls.close()
-
-        cls._config = dict(cfg)
-        try:
-            # search_path: 让无 schema 前缀的表名可解析 (LLM 生成 SQL 常省略 schema)
-            conn_options = "-c search_path=stock,fin,public"
-            cls._pool = SimpleConnectionPool(
-                minconn=minconn,
-                maxconn=maxconn,
-                connect_timeout=10,
-                options=conn_options,
-                **_CONN_KW,
-                **cfg,
-            )
-            logger.info(
-                f"PG 连接池已初始化: {cfg['user']}@{cfg['host']}:{cfg['port']}/{cfg['database']}"
-            )
-        except Exception as e:
-            cls._pool = None
-            logger.error(f"PG 连接池初始化失败: {e}")
-            raise
+        with cls._lock:
+            if cls._pool is not None:
+                # 连接串变化时重建
+                if cls._config == cfg:
+                    return
+                cls._close_locked()
+            cls._config = dict(cfg)
+            try:
+                # search_path: 让无 schema 前缀的表名可解析 (LLM 生成 SQL 常省略 schema)
+                conn_options = "-c search_path=stock,fin,public"
+                cls._pool = ThreadedConnectionPool(
+                    minconn=minconn,
+                    maxconn=maxconn,
+                    connect_timeout=10,
+                    options=conn_options,
+                    **_CONN_KW,
+                    **cfg,
+                )
+                logger.info(
+                    f"PG 连接池已初始化: {cfg['user']}@{cfg['host']}:{cfg['port']}/{cfg['database']}"
+                )
+            except Exception as e:
+                cls._pool = None
+                logger.error(f"PG 连接池初始化失败: {e}")
+                raise
 
     @classmethod
-    def get_conn(cls):
+    def get_conn(cls, pool_wait_retries: int = 60, pool_wait_sec: float = 0.1):
+        """借连接; 池耗尽时短退避等待 (并发尖峰), 连接级故障才整池重建"""
         assert cls._pool is not None, "PG 连接池未初始化, 请先调用 PgPool.init()"
-        try:
-            return cls._pool.getconn()
-        except Exception as e:
-            # 连接耗尽或失效时尝试重建
-            logger.warning(f"获取 PG 连接失败, 尝试重建连接池: {e}")
-            cls.close()
-            cls.init()
-            return cls._pool.getconn()
+        import time
+        from psycopg2.pool import PoolError
+        last: Optional[Exception] = None
+        for attempt in range(pool_wait_retries + 1):
+            try:
+                return cls._pool.getconn()
+            except PoolError as e:
+                # 池耗尽 ≠ 池坏了: 等待归还, 绝不触发重建 (重建会让等待者雪崩)
+                last = e
+                time.sleep(pool_wait_sec)
+            except Exception as e:
+                # 连接级失败才重建 (锁内串行, 防多线程重复重建; init 自带锁须在锁外调)
+                logger.warning(f"获取 PG 连接失败, 尝试重建连接池: {e}")
+                with cls._lock:
+                    cls._close_locked()
+                cls.init()
+                return cls._pool.getconn()
+        raise PoolError(f"连接池持续耗尽 (等待 {pool_wait_retries} 次仍无可用连接): {last}")
 
     @classmethod
     def put_conn(cls, conn, close: bool = False) -> None:
@@ -110,9 +121,17 @@ class PgPool:
 
     @classmethod
     def close(cls) -> None:
+        with cls._lock:
+            cls._close_locked()
+
+    @classmethod
+    def _close_locked(cls) -> None:
+        """关闭池 (调用方须持 _lock)"""
         if cls._pool is not None:
-            cls._pool.closeall()
-            cls._pool = None
+            try:
+                cls._pool.closeall()
+            finally:
+                cls._pool = None
             logger.info("PG 连接池已关闭")
 
 
@@ -140,7 +159,7 @@ class PgClient:
                 self.conn.close()
             except Exception:
                 pass
-            PgPool.put_conn(self.conn)  # 归还坏连接 (pool 会丢弃)
+            PgPool.put_conn(self.conn, close=True)  # 坏连接显式剔除, 不回可用池
             self.conn = PgPool.get_conn()
         self.conn.autocommit = False
         self.cur = self.conn.cursor()
