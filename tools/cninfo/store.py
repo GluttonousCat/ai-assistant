@@ -1,16 +1,5 @@
 # -*- encoding: utf-8 -*-
-"""
-巨潮元数据/进度存储 (纯文件, 无数据库)
 
-组织 (output/cninfo/):
-- meta/org_map.json     sec_code -> orgId 持久映射 (每股只真正解析一次,
-                        免重复打限流敏感的 topSearch)
-- meta/<ts_code>.json   单股公告元数据 + 批量爬取断点状态
-- downloads/<ts_code>/  PDF 产物 (文件在盘即已下载)
-
-条目字段沿用历史 PG 表 fin.cninfo_announcement (2026-10 前版本, DDL 曾在
-storage/pg_schema.py); 存量表保留历史数据未迁移, 文件为增量事实源。
-"""
 from __future__ import annotations
 
 import json

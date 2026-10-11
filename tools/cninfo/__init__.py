@@ -8,14 +8,15 @@
 — 下载与元数据四类全覆盖; 解析当前覆盖 AR/H1 (同构), Q1/Q3 待后续规则。
 
 结构 (分层: client 纯网络 / filters 纯函数 / store 文件存储 /
-        downloader·batch 获取编排 / parse 解析 / evidence 证据抽取内核):
+        downloader 获取编排(单股+批量) / parse 解析 / evidence 证据抽取内核):
 - client.py     HTTP 客户端: orgId 解析 / 公告检索 / 全市场清单 / PDF 下载
                 (直连+重试+断点续传+魔数校验)
 - filters.py    公告筛选纯函数: 年报全文识别 / 报告年度解析 / 代码归一化
 - store.py      文件存储: 公告元数据 / orgId 映射 / 断点状态 (output/cninfo/meta/)
-- downloader.py 获取编排+CLI: 代码解析→查询→筛选→落盘→下载 (存在性幂等)
-                python -m tools.cninfo.downloader --stock 300308 --years 2024
-- batch.py      全市场批量: 限流熔断/断点续传/时间预算/--index 指数成分
+- downloader.py 获取编排+CLI 单入口 (2026-10 batch.py 并入):
+                单股 CninfoDownloader (--stock 300308 --years 2024) /
+                批量 BatchCrawler (断点续传/限流熔断/时间预算/--index 指数成分,
+                无 --stock 即批量)
 - parse.py      报告解析+CLI: PDF→MD→{items,sections} JSON (AR/H1);
                 annual_corpus 确定性语料提炼 (kpi3y+mdna 经营/风险)
                 python -m tools.cninfo.parse 300308 --year 2024 [--audit]

@@ -682,7 +682,7 @@ def build_items(stock: str, year: Optional[int] = None,
 
 def build_for_index(index_code: str, year: Optional[int] = None) -> Dict[str, int]:
     """指数成分股批量 → 每股 items.json (tushare 最新成分, 逐股重提)。"""
-    from .batch import _load_index_universe
+    from .downloader import _load_index_universe
     codes = [s["ts_code"] for s in _load_index_universe(index_code)]
     logger.info(f"披露项批量: {index_code} {len(codes)} 只")
     stats = {"ok": 0, "err": 0}
