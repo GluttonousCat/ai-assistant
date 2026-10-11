@@ -49,7 +49,6 @@ CREATE TABLE IF NOT EXISTS stock.{TRACK_TABLE} (
     updated_at    TIMESTAMP DEFAULT now(),
     PRIMARY KEY (signal_date, symbol, horizon)
 );
-CREATE INDEX IF NOT EXISTS idx_tst_date ON stock.{TRACK_TABLE} (signal_date);
 CREATE INDEX IF NOT EXISTS idx_tst_matured ON stock.{TRACK_TABLE} (matured);
 """
 
