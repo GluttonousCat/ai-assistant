@@ -53,16 +53,10 @@ CREATE TABLE IF NOT EXISTS stock.daily (
     pct_chg     NUMERIC(8,3),       -- 涨跌幅%
     vol         NUMERIC(18,2),      -- 成交量(手)
     amount      NUMERIC(20,2),      -- 成交额(千元)
-    adj_factor  NUMERIC(12,5),      -- 复权因子
-    close_adj   NUMERIC(20,5),      -- 前复权收盘
-    high_adj    NUMERIC(20,5),      -- 前复权最高
-    low_adj     NUMERIC(20,5),      -- 前复权最低
-    open_adj    NUMERIC(20,5),      -- 前复权开盘
     PRIMARY KEY (trade_date, ts_code)
 );
 CREATE INDEX IF NOT EXISTS idx_daily_ts_code ON stock.daily (ts_code, trade_date);
-CREATE INDEX IF NOT EXISTS idx_daily_trade_date ON stock.daily (trade_date);
-COMMENT ON TABLE stock.daily IS '日K主表(含前复权价格)';
+COMMENT ON TABLE stock.daily IS '日K主表(未复权; 复权因子在 stock.adj_factor)';
 """
 
 DDL_ADJ_FACTOR = """
@@ -98,7 +92,6 @@ CREATE TABLE IF NOT EXISTS stock.daily_basic (
     PRIMARY KEY (trade_date, ts_code)
 );
 CREATE INDEX IF NOT EXISTS idx_daily_basic_ts_code ON stock.daily_basic (ts_code, trade_date);
-CREATE INDEX IF NOT EXISTS idx_daily_basic_trade_date ON stock.daily_basic (trade_date);
 COMMENT ON TABLE stock.daily_basic IS '每日估值与市场指标';
 """
 
@@ -127,8 +120,6 @@ CREATE TABLE IF NOT EXISTS stock.top10_holders (
     updated_at       TIMESTAMPTZ DEFAULT now(),
     PRIMARY KEY (ts_code, end_date, holder_name, holder_type)
 );
-CREATE INDEX IF NOT EXISTS idx_top10_holders_lookup
-    ON stock.top10_holders (ts_code, end_date);
 """
 
 # 建表顺序 (依赖关系: stock_basic 无依赖, daily_basic 独立, 均可并行)
@@ -748,7 +739,6 @@ CREATE TABLE IF NOT EXISTS fin.dividend (
     created_at    TIMESTAMP DEFAULT now(),
     PRIMARY KEY (ts_code, end_date, ann_date, div_proc)
 );
-CREATE INDEX IF NOT EXISTS idx_dividend_ts_end ON fin.dividend (ts_code, end_date);
 COMMENT ON TABLE fin.dividend IS '分红送股(Tushare官方16字段1:1)';
 """
 
@@ -768,7 +758,6 @@ CREATE TABLE IF NOT EXISTS fin.fina_audit (
     created_at    TIMESTAMP DEFAULT now(),
     PRIMARY KEY (ts_code, end_date, ann_date)
 );
-CREATE INDEX IF NOT EXISTS idx_fina_audit_ts_end ON fin.fina_audit (ts_code, end_date);
 COMMENT ON TABLE fin.fina_audit IS '财务审计意见(Tushare官方7字段1:1)';
 """
 

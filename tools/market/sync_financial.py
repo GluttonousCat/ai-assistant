@@ -451,8 +451,11 @@ def backfill_fin_table(pro, table: str, codes: List[str],
                 time.sleep(10 * attempt)
         total += rows
         if rows:
-            # 每只股票更新进度 (崩溃可从该股票续)
-            set_fin_progress(table, ts_code, total)
+            # 每只股票更新进度 (崩溃可从该股票续); 断连只丢本次水位线, 下一股重试自愈
+            try:
+                set_fin_progress(table, ts_code, total)
+            except PG_DOWN as e:
+                logger.warning(f"{table} {ts_code} 水位线写入遇断连(忽略): {str(e)[:60]}")
 
         if i % 50 == 0:
             logger.info(f"  {table}: 已处理 {i}/{len(codes)} 只, 累计 {total} 行")

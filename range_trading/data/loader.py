@@ -1,10 +1,10 @@
 """
 日K数据加载层: universe 筛选 + 前复权行情批量拉取
 
-数据来源: stock.daily。表内 adj_factor / close_adj 预计算列当前尚未回填 (全 NULL),
-因此前复权价格用 pct_chg 累计收益重构 (与 tushare qfq 数学等价):
+数据来源: stock.daily (未复权行情)。前复权价格用 pct_chg 累计收益重构 (与 tushare qfq 数学等价):
     ratio[t] = cumprod(1 + pct_chg)[:t] / cumprod[-1]   (以窗口最后一日为基准, 末位=1)
-除权除息跳空被 pct_chg (基于除权后昨收) 正确吸收; 待 adj_factor 回填后可切换实现。
+除权除息跳空被 pct_chg (基于除权后昨收) 正确吸收;
+如需逐日精确复权因子, 独立表 stock.adj_factor 可按 (ts_code, trade_date) 关联获取。
 
 SQL 内显式 ::float8 转换, 避免 NUMERIC -> Decimal 在 pandas 中退化为 object 列。
 全市场约 5000 只 / 千万行, 因此扫描一律按批次拉取 (batch_size), 不整表加载。

@@ -317,7 +317,7 @@ def _batch_metrics(codes_by_node: Dict[str, List[str]]) -> Dict[str, Dict]:
         with PgClient() as pg:
             daily = pg.fetch_all(
                 "SELECT d.ts_code, d.trade_date, d.close, "
-                "COALESCE(d.adj_factor, a.adj_factor, 1) AS adj_factor "
+                "COALESCE(a.adj_factor, 1) AS adj_factor "
                 "FROM stock.daily d "
                 "LEFT JOIN stock.adj_factor a "
                 "  ON a.ts_code = d.ts_code AND a.trade_date = d.trade_date "
@@ -348,7 +348,7 @@ def _batch_metrics(codes_by_node: Dict[str, List[str]]) -> Dict[str, Dict]:
     if not daily or not bench:
         return {}
 
-    # PG NUMERIC -> Decimal, 统一转 float; close_adj 预计算列可能未回填, 现算后复权价
+    # PG NUMERIC -> Decimal, 统一转 float; 复权因子取自 stock.adj_factor, 现算后复权价
     df = pd.DataFrame(daily)
     df["price"] = (df["close"].astype(float) * df["adj_factor"].astype(float))
     wide_all = df.pivot(index="trade_date", columns="ts_code", values="price").sort_index()
