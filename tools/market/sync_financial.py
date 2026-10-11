@@ -23,6 +23,7 @@ from datetime import date, datetime, timedelta
 from typing import Dict, Iterable, List, Optional
 
 import pandas as pd
+import psycopg2
 
 from core.config import get_config
 from core.logger import get_logger
@@ -33,6 +34,9 @@ import core.net  # noqa: F401  (强制直连, 绕过不稳定代理)
 logger = get_logger(__name__)
 
 API_SLEEP = 0.35  # 200次/分钟 -> 0.35s 间隔留余量
+
+# PG 断连/服务端重启: 每股独立连接, 单股重试即重连 (坑表: 长批任务按工作单元续跑)
+PG_DOWN = (psycopg2.OperationalError, psycopg2.InterfaceError)
 
 # 各表对应的 Tushare 接口名 (表名 == 接口名); 拉取字段见 table_fields() 反射
 FIN_TABLE_APIS = {
@@ -131,6 +135,25 @@ def fetch_stock_fin(pro, api_name: str, ts_code: str, fields: List[str],
         return pd.DataFrame()
 
 
+def _upsert_stock_fin(pro, table: str, api_name: str, fields: List[str],
+                      ts_code: str, start: str = "19900101") -> int:
+    """单只股票 拉取+入库 工作单元 (返回入库行数); PG 断连由调用方按股重试"""
+    df = fetch_stock_fin(pro, api_name, ts_code, fields, start=start)
+    if df is None or df.empty:
+        return 0
+    for c in ("ann_date", "f_ann_date", "end_date"):
+        _normalize_date_col(df, c)
+    with PgClient() as pg:
+        table_cols = {c["name"] for c in pg.get_columns("fin", table)}
+    df = _filter_to_table(df, table, table_cols)
+    with PgClient() as pg:
+        pg.upsert_df(
+            df, "fin", table,
+            conflict_keys=["ts_code", "end_date", "report_type"],
+        )
+    return len(df)
+
+
 def fetch_recent_financial(pro, table: str, codes: List[str],
                            start: str) -> int:
     """
@@ -142,20 +165,17 @@ def fetch_recent_financial(pro, table: str, codes: List[str],
     fields = table_fields(table)
     total = 0
     for i, ts_code in enumerate(codes, 1):
-        df = fetch_stock_fin(pro, api_name, ts_code, fields, start=start)
-        if df is None or df.empty:
-            continue
-        for c in ("ann_date", "f_ann_date", "end_date"):
-            _normalize_date_col(df, c)
-        with PgClient() as pg:
-            table_cols = {c["name"] for c in pg.get_columns("fin", table)}
-        df = _filter_to_table(df, table, table_cols)
-        with PgClient() as pg:
-            pg.upsert_df(
-                df, "fin", table,
-                conflict_keys=["ts_code", "end_date", "report_type"],
-            )
-            total += len(df)
+        rows = 0
+        for attempt in range(1, 4):
+            try:
+                rows = _upsert_stock_fin(pro, table, api_name, fields,
+                                         ts_code, start=start)
+                break
+            except PG_DOWN as e:
+                logger.warning(f"{table} {ts_code} PG 断连 "
+                               f"({attempt}/3): {str(e)[:80]}")
+                time.sleep(10 * attempt)
+        total += rows
         if i % 200 == 0:
             logger.info(f"  [增量] {table}: 已处理 {i}/{len(codes)} 只, 新增 {total} 行")
         time.sleep(API_SLEEP)
@@ -211,28 +231,19 @@ def backfill_fin_table(pro, table: str, codes: List[str],
 
     total = 0
     for i, ts_code in enumerate(codes, 1):
-        df = fetch_stock_fin(pro, api_name, ts_code, fields)
-        if df is None or df.empty:
-            continue
-
-        # 归一化日期列
-        for c in ("ann_date", "f_ann_date", "end_date"):
-            _normalize_date_col(df, c)
-
-        # 只保留表内存在的列 (schema 定义之外的忽略并告警)
-        with PgClient() as pg:
-            table_cols = {c["name"] for c in pg.get_columns("fin", table)}
-        df = _filter_to_table(df, table, table_cols)
-
-        with PgClient() as pg:
-            pg.upsert_df(
-                df, "fin", table,
-                conflict_keys=["ts_code", "end_date", "report_type"],
-            )
-            total += len(df)
-
-        # 每只股票更新进度 (崩溃可从该股票续)
-        set_fin_progress(table, ts_code, total)
+        rows = 0
+        for attempt in range(1, 4):
+            try:
+                rows = _upsert_stock_fin(pro, table, api_name, fields, ts_code)
+                break
+            except PG_DOWN as e:
+                logger.warning(f"{table} {ts_code} PG 断连 "
+                               f"({attempt}/3): {str(e)[:80]}")
+                time.sleep(10 * attempt)
+        total += rows
+        if rows:
+            # 每只股票更新进度 (崩溃可从该股票续)
+            set_fin_progress(table, ts_code, total)
 
         if i % 50 == 0:
             logger.info(f"  {table}: 已处理 {i}/{len(codes)} 只, 累计 {total} 行")
