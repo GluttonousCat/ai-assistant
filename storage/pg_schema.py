@@ -729,52 +729,11 @@ FROM cleaned c
 LEFT JOIN denom d USING (ts_code, end_date, biz_type);
 """
 
-# ---------- 巨潮公告元数据 (年报/定期报告 PDF 来源, 交叉核验用) ----------
-# 幂等: announcement_id (巨潮原生) 主键; 下载存在性检查按 file_path + 文件是否在盘
-DDL_CNINFO_ANNOUNCEMENT = """
-CREATE TABLE IF NOT EXISTS fin.cninfo_announcement (
-    announcement_id  VARCHAR(128) PRIMARY KEY,   -- 巨潮公告 ID
-    ts_code          VARCHAR(16) NOT NULL,       -- 关联 stock.stock_basic
-    sec_code         VARCHAR(12),                -- 巨潮证券代码 (6位)
-    sec_name         VARCHAR(64),                -- 公告时证券简称
-    title            VARCHAR(256) NOT NULL,      -- 公告标题
-    category         VARCHAR(24),                -- ndbg年报/bndbg半年报/yjdbg一季报/sjdbg三季报/other
-    report_year      SMALLINT,                   -- 报告年度 (标题解析)
-    announce_date    DATE,                       -- 公告日期
-    adjunct_url      VARCHAR(512),               -- PDF 相对路径 (static.cninfo.com.cn 前缀)
-    file_path        VARCHAR(1024),              -- 本地路径 (下载后回填)
-    file_size        BIGINT,
-    download_status  VARCHAR(12) DEFAULT 'pending',  -- pending/done/failed
-    error_msg        VARCHAR(512),
-    downloaded_at    TIMESTAMPTZ,
-    created_at       TIMESTAMPTZ DEFAULT now(),
-    updated_at       TIMESTAMPTZ DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS idx_cninfo_ann_lookup
-    ON fin.cninfo_announcement (ts_code, category, report_year);
-"""
-
-# ---------- 巨潮全量爬取进度 (按股票断点续传; 股票枚举天然有序, 股票级状态非水位线坑) ----------
-DDL_CNINFO_SYNC_STATE = """
-CREATE TABLE IF NOT EXISTS fin.cninfo_sync_state (
-    ts_code        VARCHAR(16) PRIMARY KEY,
-    meta_status    VARCHAR(12) DEFAULT 'pending',  -- pending/done/error
-    dl_status      VARCHAR(12) DEFAULT 'skip',     -- skip/done/partial/error
-    last_error     VARCHAR(512),
-    updated_at     TIMESTAMPTZ DEFAULT now()
-);
-"""
-
-# ---------- 巨潮 orgId 持久映射 (sec_code -> orgId; 每股只解析一次, 免重复打脆弱的 topSearch) ----------
-DDL_CNINFO_ORG_MAP = """
-CREATE TABLE IF NOT EXISTS fin.cninfo_org_map (
-    sec_code    VARCHAR(12) PRIMARY KEY,   -- 6 位证券代码
-    org_id      VARCHAR(32) NOT NULL,      -- 巨潮 orgId
-    sec_name    VARCHAR(64),
-    source      VARCHAR(16),               -- bulk/topSearch/derived
-    updated_at  TIMESTAMPTZ DEFAULT now()
-);
-"""
+# ---------- 巨潮公告 (cninfo) ----------
+# 2026-10 起 tools/cninfo 解耦为自包含模块 (零项目依赖), 元数据/进度/orgId 映射
+# 改为文件产物 output/cninfo/meta/ (tools/cninfo/store.py), 不再写库。
+# 存量表 fin.cninfo_announcement / fin.cninfo_sync_state / fin.cninfo_org_map
+# 保留历史数据未迁移, 仅作历史查询用途。
 
 
 
@@ -789,9 +748,6 @@ FIN_ALL_DDL = [
     DDL_FINA_MAINBZ,
     DDL_VIEW_MAIN_BIZ,
     DDL_FIN_SYNC_META,
-    DDL_CNINFO_ANNOUNCEMENT,
-    DDL_CNINFO_SYNC_STATE,
-    DDL_CNINFO_ORG_MAP,
 ]
 
 # 财务表名常量
@@ -801,7 +757,6 @@ T_CASHFLOW = "fin.cashflow"
 T_FINA_INDICATOR = "fin.fina_indicator"
 T_FINA_MAINBZ = "fin.fina_mainbz"
 T_FIN_SYNC_META = "fin.sync_meta"
-T_CNINFO_ANNOUNCEMENT = "fin.cninfo_announcement"
 
 # 产业链图谱表 fin.chain_extract 的 DDL 已外迁至 beta_alpha/schema.py
 # (模块内 ensure 函数, 随 beta_alpha 子系统自治)

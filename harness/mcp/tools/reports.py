@@ -222,39 +222,33 @@ def get_forecasts(stock: str, limit: int = 6) -> Dict[str, Any]:
           "需 openai_tools(include_write=True) 或 ALPHA_MCP_READ_ONLY=0 放开",
 )
 def fetch_annual_report(stock: str, year: int, category: str = "ndbg") -> Dict[str, Any]:
-    from tools.cninfo.downloader import CninfoDownloader
+    from tools.cninfo import store
+    from tools.cninfo.downloader import CninfoDownloader, DOWNLOAD_ROOT
+
+    ts_code = resolve_one(stock)["ts_code"]   # 名称→代码解析归 agent 侧
     dl = CninfoDownloader()
-    stats = dl.sync_stock(stock, [int(year)], download=True,
+    stats = dl.sync_stock(ts_code, [int(year)], download=True,
                           categories=(category,))
     if stats.get("failed"):
-        raise ToolError(f"巨潮拉取失败: {stock} {year} (站点限流时稍后重试)")
-    from storage.pg import PgClient
-    with PgClient() as pg:
-        ts_code = None
-        try:
-            from harness.mcp.tools._common import resolve_one
-            ts_code = resolve_one(stock)["ts_code"]
-        except ToolError:
-            pass
-        if ts_code:
-            row = pg.fetch_one(
-                "SELECT title, announce_date, file_path, file_size "
-                "FROM fin.cninfo_announcement "
-                "WHERE ts_code=%s AND category=%s AND report_year=%s "
-                "AND download_status='done' LIMIT 1",
-                (ts_code, category, int(year)))
-            if row:
-                return {"stock": stock, "year": int(year),
-                        "category": category, "title": row["title"],
-                        "announce_date": _jsonable(row["announce_date"]),
-                        "file_path": row["file_path"],
-                        "file_size_mb": round((row["file_size"] or 0) / 1e6, 1),
-                        "stats": stats,
-                        "next_hint": "可用 extract_document(file_path) 解析全文后提问"}
-    return {"stock": stock, "year": int(year), "category": category,
-            "stats": stats,
-            "note": "元数据已入库, PDF 可能未就绪 (站点限流/无该期报告), "
-                    "可稍后重试或查 fin.cninfo_announcement"}
+        raise ToolError(f"巨潮拉取失败: {stock} ({ts_code}) {year} "
+                        f"(站点限流时稍后重试)")
+    dest = (DOWNLOAD_ROOT / ts_code / f"{int(year)}_{category}.pdf").resolve()
+    if dest.exists():
+        entry = next((e for e in store.load_stock_meta(ts_code)
+                      ["announcements"].values()
+                      if e.get("category") == category
+                      and e.get("report_year") == int(year)), {})
+        return {"stock": stock, "ts_code": ts_code, "year": int(year),
+                "category": category, "title": entry.get("title"),
+                "announce_date": entry.get("announce_date"),
+                "file_path": str(dest),
+                "file_size_mb": round(dest.stat().st_size / 1e6, 1),
+                "stats": stats,
+                "next_hint": "可用 extract_document(file_path) 解析全文后提问"}
+    return {"stock": stock, "ts_code": ts_code, "year": int(year),
+            "category": category, "stats": stats,
+            "note": "元数据已查询, PDF 可能未就绪 (站点限流/无该期报告), "
+                    "可稍后重试"}
 
 
 # ============================================================

@@ -11,9 +11,12 @@
 - 直连: trust_env=False 绕过系统代理 (国内站, 走代理反而超时)
 - 每请求随机间隔 min~max 秒; 失败指数退避重试
 - PDF 下载校验 %PDF 魔数 (防错误页存成假 PDF)
+
+自包含: 仅依赖 requests + 标准库, 可脱离项目独立使用。
 """
 from __future__ import annotations
 
+import logging
 import random
 import time
 from pathlib import Path
@@ -21,9 +24,7 @@ from typing import Dict, List, Optional, Tuple
 
 import requests
 
-from core.logger import get_logger
-
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 SEARCH_URL = "http://www.cninfo.com.cn/new/information/topSearch/query"
 QUERY_URL = "http://www.cninfo.com.cn/new/hisAnnouncement/query"
@@ -36,6 +37,15 @@ _HEADERS = {
     "Referer": "http://www.cninfo.com.cn/",
     "Accept": "application/json, text/plain, */*",
 }
+
+
+def is_pdf_file(path) -> bool:
+    """%PDF 魔数校验 (防错误页/HTML 存成假 PDF; 落盘后校验)"""
+    try:
+        with open(path, "rb") as f:
+            return f.read(4) == b"%PDF"
+    except OSError:
+        return False
 
 
 class CninfoClient:
@@ -51,6 +61,7 @@ class CninfoClient:
         self.timeout = timeout
         self.retries = retries
         self._org_id_cache: Dict[str, str] = {}   # sec_code -> orgId (免重复打 topSearch)
+        self._stock_list: Optional[List[Dict]] = None   # szse_stock.json 全市场清单
 
     # ---------- 基础 ----------
 
@@ -73,27 +84,33 @@ class CninfoClient:
 
     # ---------- 公开能力 ----------
 
-    def fetch_org_map_bulk(self) -> Dict[str, str]:
-        """全市场 orgId 一次拿全 (szse_stock.json, 巨潮前端搜索下拉的数据源)。
+    def fetch_stock_list(self) -> List[Dict]:
+        """全市场证券清单一次拿全 (szse_stock.json, 巨潮前端搜索下拉的数据源)。
 
-        进程内只拉一次, 结果并入内存缓存; 站点不可达返回空 dict (调用方走降级)。
+        条目含 code/orgId/zwjc(简称)/pinyin。进程内只拉一次, orgId 并入内存缓存;
+        站点不可达返回空 list (调用方走降级)。
         """
-        if getattr(self, "_bulk_loaded", False):
-            return {}
-        self._bulk_loaded = True
+        if getattr(self, "_stock_list", None):
+            return self._stock_list
         try:
             self._sleep()
             resp = self.session.get(BULK_STOCK_URL, timeout=30)
             resp.raise_for_status()
             items = resp.json().get("stockList") or []
-            got = {it["code"]: it.get("orgId", "") for it in items
-                   if it.get("code") and it.get("orgId")}
-            self._org_id_cache.update(got)
-            logger.info(f"orgId 批量源加载: {len(got)} 只 (szse_stock.json)")
-            return got
+            self._stock_list = items
+            self._org_id_cache.update(
+                {it["code"]: it.get("orgId", "") for it in items
+                 if it.get("code") and it.get("orgId")})
+            logger.info(f"巨潮全市场清单加载: {len(items)} 只 (szse_stock.json)")
+            return items
         except Exception as e:  # noqa: BLE001 限流/不可达时静默降级
-            logger.warning(f"orgId 批量源不可达: {type(e).__name__}")
-            return {}
+            logger.warning(f"巨潮全市场清单不可达: {type(e).__name__}")
+            return []
+
+    def fetch_org_map_bulk(self) -> Dict[str, str]:
+        """全市场 {code: orgId} (基于 fetch_stock_list, 兼容旧调用)"""
+        return {it["code"]: it.get("orgId", "") for it in self.fetch_stock_list()
+                if it.get("code") and it.get("orgId")}
 
     def resolve_org_id(self, sec_code: str) -> Optional[str]:
         """6 位证券代码 -> 巨潮 orgId。
@@ -186,8 +203,7 @@ class CninfoClient:
                         for chunk in r.iter_content(chunk_size=1 << 16):
                             f.write(chunk)
                 size = tmp.stat().st_size
-                from tools.pdf import is_pdf_file
-                if not is_pdf_file(str(tmp)):
+                if not is_pdf_file(tmp):
                     logger.warning(f"cninfo 下载非 PDF 内容: {adjunct_url}")
                     tmp.unlink(missing_ok=True)
                     return False, 0

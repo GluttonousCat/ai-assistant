@@ -1,29 +1,34 @@
 # -*- encoding: utf-8 -*-
 """
-巨潮公告下载编排: 股票解析 -> 公告查询 -> 筛选 -> 元数据入库 -> PDF 下载
+巨潮公告下载编排: 代码解析 -> 公告查询 -> 筛选 -> 元数据落盘 -> PDF 下载
 
 幂等 (重跑安全):
-- 元数据: announcement_id (巨潮原生) 主键 upsert
+- 元数据: announcement_id (巨潮原生) 为键 upsert (output/cninfo/meta/<ts_code>.json)
 - 下载:   file_path 已回填且文件在盘且未 --force -> 跳过
-          (存在性检查而非水位线 — 下载完成顺序无序, 见 AGENTS.md 踩坑表)
+          (存在性检查而非水位线 — 下载完成顺序无序)
+
+只认证券代码 (6 位或 ts_code); 股票名称解析是调用方 (agent 词表) 的职责。
 
 用法:
-    python -m tools.cninfo.downloader --stock 中际旭创 --years 2023,2024,2025
-    python -m tools.cninfo.downloader --stock 300308,600519 --no-download
-    python -m tools.cninfo.downloader --stock 中际旭创 --all-periodic   # 含半年报/季报
+    python -m tools.cninfo.downloader --stock 300308,600519 --years 2023,2024,2025
+    python -m tools.cninfo.downloader --stock 300308 --no-download
+    python -m tools.cninfo.downloader --stock 300308 --all-periodic   # 含半年报/季报
 """
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from core.logger import get_logger
-from tools.cninfo.client import CninfoClient
-from tools.cninfo.filters import classify_category, parse_report_year, pick_full_report
+from . import store
+from .client import CninfoClient
+from .filters import (classify_category, normalize_ts_code, parse_report_year,
+                      pick_full_report)
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 DOWNLOAD_ROOT = Path("output/cninfo/downloads")
 
@@ -35,10 +40,8 @@ _PERIODIC_CATEGORIES = {
     "sjdbg": "category_sjdbg_szsh",  # 三季报: 当年 10 月
 }
 
-
-def _resolve_ts_code(stock: str) -> Optional[str]:
-    from skills.fin_query.skill import lookup_ts_code
-    return lookup_ts_code(stock.strip())
+# 元数据条目里保留下载回填的字段 (upsert 公告时不覆盖)
+_DL_FIELDS = ("file_path", "file_size", "download_status", "downloaded_at")
 
 
 class CninfoDownloader:
@@ -48,151 +51,159 @@ class CninfoDownloader:
     # ---------- 元数据 ----------
 
     @staticmethod
-    def _upsert_announcement(pg, ann: Dict, ts_code: str) -> None:
-        """巨潮原始条目"""
-        from datetime import datetime
+    def _upsert_announcement(meta: Dict, ann: Dict, ts_code: str) -> None:
+        """巨潮原始条目 -> 清洗投影, 以 announcement_id 为键合并 (保留下载回填字段)"""
         title = ann.get("announcementTitle") or ""
         aid = str(ann.get("announcementId") or ann.get("adjunctUrl", ""))
         ts = ann.get("announcementTime")
-        announce_date = (datetime.fromtimestamp(ts / 1000).date().isoformat()
-                         if ts else None)
-        pg.execute(
-            """
-            INSERT INTO fin.cninfo_announcement
-                (announcement_id, ts_code, sec_code, sec_name, title, category,
-                 report_year, announce_date, adjunct_url, updated_at)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s, now())
-            ON CONFLICT (announcement_id) DO UPDATE SET
-                title = EXCLUDED.title,
-                category = EXCLUDED.category,
-                report_year = EXCLUDED.report_year,
-                announce_date = EXCLUDED.announce_date,
-                updated_at = now()
-            """,
-            (aid, ts_code, ann.get("secCode"), ann.get("secName"), title,
-             classify_category(title), parse_report_year(title),
-             announce_date, ann.get("adjunctUrl")))
+        entry = {
+            "ts_code": ts_code,
+            "sec_code": ann.get("secCode"),
+            "sec_name": ann.get("secName"),
+            "title": title,
+            "category": classify_category(title),
+            "report_year": parse_report_year(title),
+            "announce_date": (datetime.fromtimestamp(ts / 1000).date().isoformat()
+                              if ts else None),
+            "announce_ts": ts,          # 原始毫秒, 全文挑选的排序键
+            "adjunct_url": ann.get("adjunctUrl"),
+        }
+        entry.update({k: v for k, v in (meta["announcements"].get(aid) or {}).items()
+                      if k in _DL_FIELDS})
+        meta["announcements"][aid] = entry
 
-    # ---------- 主流程 ----------
+    # ---------- orgId ----------
 
-    def _resolve_org_id_db(self, pg, sec_code: str) -> Optional[str]:
-        """orgId 解析 (持久层): DB 映射表 → client 四级策略 → 回写 DB。
-
-        每只股票一生只真正解析一次 — topSearch 限流时代重复解析是主要失败源。
-        """
-        from storage.pg_schema import DDL_CNINFO_ORG_MAP
-        pg.execute(DDL_CNINFO_ORG_MAP)
-        row = pg.fetch_one(
-            "SELECT org_id FROM fin.cninfo_org_map WHERE sec_code=%s",
-            (sec_code,))
-        if row:
-            return row["org_id"]
-
+    def _resolve_org_id(self, sec_code: str) -> Optional[str]:
+        """orgId 解析: 文件映射 (org_map.json) -> client 四级策略 -> 回写文件。
+        每只股票一生只真正解析一次 — topSearch 限流时代重复解析是主要失败源。"""
+        org_map = store.load_org_map()
+        if sec_code in org_map:
+            return org_map[sec_code]
         org_id = self.client.resolve_org_id(sec_code)
         if org_id:
-            pg.execute(
-                "INSERT INTO fin.cninfo_org_map (sec_code, org_id, updated_at) "
-                "VALUES (%s, %s, now()) "
-                "ON CONFLICT (sec_code) DO UPDATE SET "
-                "org_id = EXCLUDED.org_id, updated_at = now()",
-                (sec_code, org_id))
-            pg.conn.commit()
+            org_map[sec_code] = org_id
+            store.save_org_map(org_map)
         return org_id
+
+    # ---------- 主流程 ----------
 
     def sync_stock(self, stock: str, years: List[int], download: bool = True,
                    force: bool = False, categories: Tuple[str, ...] = ("ndbg",)
                    ) -> Dict[str, int]:
-        """同步一只股票的定期报告: 查询->筛选->入库->(可选)下载。返回统计。"""
-        from storage.pg import PgClient
+        """同步一只股票的定期报告: 查询->筛选->落盘->(可选)下载。返回统计。"""
         stats = {"queried": 0, "saved": 0, "downloaded": 0,
                  "skipped": 0, "failed": 0}
-        ts_code = _resolve_ts_code(stock)
+        ts_code = normalize_ts_code(stock)
         if not ts_code:
-            logger.error(f"未识别股票: {stock}")
+            logger.error(f"未识别证券代码: {stock} (只认 6 位代码或 ts_code, "
+                         f"名称解析归调用方)")
             stats["failed"] += 1
             return stats
         sec_code = ts_code.split(".")[0]
 
-        from storage.pg_schema import DDL_CNINFO_ANNOUNCEMENT
-        with PgClient() as pg:
-            pg.execute(DDL_CNINFO_ANNOUNCEMENT)   # 幂等建表 (独立于业务事务)
-            pg.conn.commit()
-            org_id = self._resolve_org_id_db(pg, sec_code)
-            if not org_id:
-                logger.error(f"巨潮未找到 orgId: {sec_code} ({stock})")
-                stats["failed"] += 1
-                return stats
-            logger.info(f"{stock} -> {ts_code} (orgId={org_id}), 年份 {years}")
-            # 每类别一次宽窗查询 (覆盖全部年份, 5年4类=4次请求而非20次;
-            # 分号多类别参数实测不可用), 入库全部, 下载按 (year,cat) 挑全文
-            se_date = (f"{min(years)}-01-01~{max(years) + 1}-12-31"
-                       if years else "2020-01-01~2026-12-31")
-            anns_by_cat: Dict[str, List[Dict]] = {}
-            for cat in categories:
-                anns = self.client.query_announcements(
-                    sec_code, org_id, _PERIODIC_CATEGORIES[cat], se_date)
-                anns_by_cat[cat] = anns
-                stats["queried"] += len(anns)
-                for a in anns:
-                    self._upsert_announcement(pg, a, ts_code)
-                    stats["saved"] += 1
-                pg.conn.commit()
+        org_id = self._resolve_org_id(sec_code)
+        if not org_id:
+            logger.error(f"巨潮未找到 orgId: {sec_code} ({stock})")
+            stats["failed"] += 1
+            return stats
+        logger.info(f"{ts_code} (orgId={org_id}), 年份 {years}")
+        meta = store.load_stock_meta(ts_code)
 
-            if not download:
-                return stats
-            for year in years:
-                for cat in categories:
-                    full_by_year = [
-                        a for a in anns_by_cat.get(cat, [])
-                        if parse_report_year(
-                            a.get("announcementTitle", "")) == year]
-                    best = pick_full_report(full_by_year)
-                    if not best:
-                        logger.warning(f"{ts_code} {year} {cat}: 无全文公告")
-                        continue
-                    stats.update(self._download_one(pg, ts_code, year, cat,
-                                                    best, force))
+        # 每类别一次宽窗查询 (覆盖全部年份, 5年4类=4次请求而非20次;
+        # 分号多类别参数实测不可用), 落盘全部, 下载按 (year,cat) 挑全文
+        se_date = (f"{min(years)}-01-01~{max(years) + 1}-12-31"
+                   if years else "2020-01-01~2026-12-31")
+        anns_by_cat: Dict[str, List[Dict]] = {}
+        for cat in categories:
+            anns = self.client.query_announcements(
+                sec_code, org_id, _PERIODIC_CATEGORIES[cat], se_date)
+            anns_by_cat[cat] = anns
+            stats["queried"] += len(anns)
+            for a in anns:
+                self._upsert_announcement(meta, a, ts_code)
+                stats["saved"] += 1
+        store.save_stock_meta(ts_code, meta)
+
+        if not download:
+            return stats
+        for year in years:
+            for cat in categories:
+                full_by_year = [
+                    a for a in anns_by_cat.get(cat, [])
+                    if parse_report_year(
+                        a.get("announcementTitle", "")) == year]
+                best = pick_full_report(full_by_year)
+                if not best:
+                    logger.warning(f"{ts_code} {year} {cat}: 无全文公告")
+                    continue
+                for k, v in self._download_one(meta, ts_code, year, cat,
+                                               best, force).items():
+                    stats[k] = stats.get(k, 0) + v
+        store.save_stock_meta(ts_code, meta)
         return stats
 
-    def _download_one(self, pg, ts_code: str, year: int, cat: str,
+    def download_from_meta(self, ts_code: str, years: List[int],
+                           categories: Tuple[str, ...] = ("ndbg",),
+                           force: bool = False) -> Dict[str, int]:
+        """元数据已在盘: 按 (年,类) 挑全文直接下载, 零查询接口调用
+        (查询接口限流敏感; PDF 链接来自 meta 落盘元数据)。"""
+        stats = {"downloaded": 0, "skipped": 0, "failed": 0}
+        meta = store.load_stock_meta(ts_code)
+        for year in years:
+            for cat in categories:
+                cands = [dict(e, announcementId=aid,
+                              announcementTitle=e.get("title") or "",
+                              announcementTime=e.get("announce_ts"))
+                         for aid, e in meta["announcements"].items()
+                         if e.get("category") == cat
+                         and e.get("report_year") == year
+                         and e.get("adjunct_url")]
+                best = pick_full_report(cands)
+                if not best:
+                    continue
+                for k, v in self._download_one(meta, ts_code, year, cat,
+                                               best, force).items():
+                    stats[k] = stats.get(k, 0) + v
+        store.save_stock_meta(ts_code, meta)
+        return stats
+
+    def _download_one(self, meta: Dict, ts_code: str, year: int, cat: str,
                       ann: Dict, force: bool) -> Dict[str, int]:
-        """下载单份全文并回填状态。存在性检查: 已 done 且文件在盘且未 force -> 跳过"""
+        """下载单份全文并回填状态。存在性检查: 文件在盘且未 force -> 跳过
+        (文件即真相; PG 时代的存量 PDF 借此自愈回填 meta 状态)"""
         aid = str(ann.get("announcementId") or ann.get("adjunctUrl", ""))
-        row = pg.fetch_one(
-            "SELECT file_path, download_status FROM fin.cninfo_announcement "
-            "WHERE announcement_id = %s", (aid,))
+        entry = meta["announcements"].get(aid) or {}
         dest = DOWNLOAD_ROOT / ts_code / f"{year}_{cat}.pdf"
-        if (row and row["download_status"] == "done" and row["file_path"]
-                and Path(row["file_path"]).exists() and not force):
+        if dest.exists() and not force:
             logger.info(f"跳过 (已下载): {dest}")
+            if entry.get("download_status") != "done":
+                entry.update(download_status="done",
+                             file_path=str(dest.resolve()),
+                             file_size=dest.stat().st_size)
+                meta["announcements"][aid] = entry
             return {"skipped": 1}
 
         ok, size = self.client.download_pdf(ann["adjunctUrl"], dest)
-        from datetime import datetime
         if ok:
-            pg.execute(
-                "UPDATE fin.cninfo_announcement SET file_path=%s, file_size=%s, "
-                "download_status='done', error_msg=NULL, downloaded_at=%s, "
-                "updated_at=now() WHERE announcement_id=%s",
-                (str(dest.resolve()), size, datetime.now(), aid))
-            pg.conn.commit()
+            entry.update(download_status="done", file_path=str(dest.resolve()),
+                         file_size=size,
+                         downloaded_at=datetime.now().isoformat())
+            meta["announcements"][aid] = entry
             logger.info(f"已下载: {dest} ({size / 1e6:.1f}MB)")
             return {"downloaded": 1}
-        pg.execute(
-            "UPDATE fin.cninfo_announcement SET download_status='failed', "
-            "error_msg='download failed', updated_at=now() WHERE announcement_id=%s",
-            (aid,))
-        pg.conn.commit()
+        entry.update(download_status="failed")
+        meta["announcements"][aid] = entry
         return {"failed": 1}
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="巨潮定期报告下载")
     parser.add_argument("--stock", required=True,
-                        help="股票名或代码, 逗号分隔多只 (如 中际旭创 或 300308,600519)")
+                        help="证券代码, 逗号分隔多只 (如 300308 或 300308,600519.SH)")
     parser.add_argument("--years", default="",
                         help="报告年度, 逗号分隔 (如 2023,2024,2025); 缺省最近3年)")
-    parser.add_argument("--no-download", action="store_true", help="只入库元数据不下载")
+    parser.add_argument("--no-download", action="store_true", help="只落盘元数据不下载")
     parser.add_argument("--all-periodic", action="store_true",
                         help="年报+半年报+一/三季报 (缺省仅年报)")
     parser.add_argument("--force", action="store_true", help="强制重新下载")
@@ -201,8 +212,7 @@ def main() -> int:
     if args.years:
         years = [int(y) for y in args.years.split(",") if y.strip()]
     else:
-        from datetime import date
-        y = date.today().year
+        y = datetime.now().year
         years = [y - 2, y - 1, y]   # 报告年度; 跨年披露由宽窗覆盖
     cats = tuple(_PERIODIC_CATEGORIES) if args.all_periodic else ("ndbg",)
 

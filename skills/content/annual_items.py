@@ -33,22 +33,25 @@ logger = get_logger(__name__)
 def _locate_report_pdfs(ts_code: str,
                         year: Optional[int] = None) -> list:
     """年报+半年报候选 (报告期新→旧, 同期年报优先)。半年报与年报同构
-    (管理层讨论与分析/风险章节), 年报为图片版无文本层时以半年报顶上。"""
-    from storage.pg import PgClient
-    try:
-        with PgClient() as pg:
-            return pg.fetch_all(
-                """
-                SELECT announcement_id, report_year, file_path, category
-                FROM fin.cninfo_announcement
-                WHERE ts_code=%s AND category=ANY('{ndbg,bndbg}')
-                  AND download_status='done' AND file_path IS NOT NULL
-                  AND (%s::int IS NULL OR report_year=%s)
-                ORDER BY report_year DESC, category DESC
-                """, (ts_code, year, year))
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"报告定位查询失败: {e}")
+    (管理层讨论与分析/风险章节), 年报为图片版无文本层时以半年报顶上。
+
+    下载目录即真相 (cninfo 2026-10 起纯文件产物): output/cninfo/downloads/
+    <ts_code>/<year>_<cat>.pdf, 文件在盘即已下载; 排序与旧 PG 查询一致
+    (report_year DESC, category DESC — 'ndbg' > 'bndbg' 同期年报优先)。"""
+    root = Path("output/cninfo/downloads") / ts_code
+    if not root.is_dir():
         return []
+    cands = []
+    for p in root.glob("*_ndbg.pdf"):
+        cands.append(p)
+    for p in root.glob("*_bndbg.pdf"):
+        cands.append(p)
+    out = [{"report_year": int(p.stem.split("_")[0]),
+            "category": p.stem.split("_", 1)[1], "file_path": str(p)}
+           for p in cands]
+    out = [c for c in out if year is None or c["report_year"] == year]
+    out.sort(key=lambda c: (c["report_year"], c["category"]), reverse=True)
+    return out
 
 
 MD_ROOT = Path("output/cninfo/md")

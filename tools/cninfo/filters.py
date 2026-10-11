@@ -71,3 +71,27 @@ def pick_full_report(announcements: List[Dict]) -> Optional[Dict]:
         order.get(classify_category(a.get("announcementTitle", "")), 9),
         -(a.get("announcementTime") or 0)))
     return full[0]
+
+
+# 6 位代码前缀 -> 交易所后缀 (沪深北市场规则; 沪B 900/深B 200 一并覆盖)
+_TS_SUFFIX_RULES = (
+    (("60", "68", "90"), "SH"),              # 沪主板 / 科创板 / 沪B
+    (("00", "30", "20"), "SZ"),              # 深主板 / 创业板 / 深B
+    (("43", "83", "87", "88", "92"), "BJ"),  # 北交所
+)
+
+
+def normalize_ts_code(stock: str) -> Optional[str]:
+    """'600519' / '600519.SH' -> '600519.SH'; 非 6 位代码或推不出后缀返回 None。
+
+    本模块只认证券代码 — 股票名称解析 (如 '中际旭创') 是调用方的词表职责。
+    """
+    s = (stock or "").strip().upper()
+    if re.match(r"^\d{6}\.(SH|SZ|BJ)$", s):
+        return s
+    if not re.match(r"^\d{6}$", s):
+        return None
+    for prefixes, suffix in _TS_SUFFIX_RULES:
+        if s.startswith(prefixes):
+            return f"{s}.{suffix}"
+    return None

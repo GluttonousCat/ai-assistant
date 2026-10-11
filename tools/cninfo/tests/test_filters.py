@@ -3,7 +3,24 @@
 from __future__ import annotations
 
 from tools.cninfo.filters import (classify_category, is_full_periodic_report,
-                                  parse_report_year, pick_full_report)
+                                  normalize_ts_code, parse_report_year,
+                                  pick_full_report)
+
+
+def test_normalize_ts_code():
+    # ts_code 原样 (大小写归一)
+    assert normalize_ts_code("600519.SH") == "600519.SH"
+    assert normalize_ts_code("000001.sz") == "000001.SZ"
+    # 6 位代码按交易所规则补后缀
+    assert normalize_ts_code("600519") == "600519.SH"   # 沪主板
+    assert normalize_ts_code("688981") == "688981.SH"   # 科创板
+    assert normalize_ts_code("300308") == "300308.SZ"   # 创业板
+    assert normalize_ts_code("000006") == "000006.SZ"   # 深主板
+    assert normalize_ts_code("833533") == "833533.BJ"   # 北交所
+    # 名称/非法输入不认 (名称解析归调用方)
+    assert normalize_ts_code("中际旭创") is None
+    assert normalize_ts_code("") is None
+    assert normalize_ts_code("300308.SS") is None
 
 
 def test_classify_category():
