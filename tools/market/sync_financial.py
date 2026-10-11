@@ -203,6 +203,14 @@ def _upsert_stock_fin(pro, table: str, api_name: str, fields: List[str],
         return 0
     for c in ("ann_date", "f_ann_date", "end_date") + DATE_NORM_EXTRA.get(table, ()):
         _normalize_date_col(df, c)
+    # PK 列空值行跳过 (实测: dividend 个别早期阶段行如"股东提议" ann_date 为 NULL)
+    keys = FIN_CONFLICT_KEYS.get(table, ["ts_code", "end_date", "report_type"])
+    bad = df[[k for k in keys if k in df.columns]].isna().any(axis=1)
+    if bad.any():
+        logger.warning(f"{table} {ts_code}: {int(bad.sum())} 行 PK 列含空值, 已跳过")
+        df = df[~bad]
+        if df.empty:
+            return 0
     with PgClient() as pg:
         table_cols = {c["name"] for c in pg.get_columns("fin", table)}
     df = _filter_to_table(df, table, table_cols)

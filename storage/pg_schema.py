@@ -715,9 +715,10 @@ COMMENT ON TABLE fin.fina_indicator IS '财务指标(Tushare官方167字段1:1, 
 """
 
 # ---------- 分红送股 (Tushare 官方 16 字段 1:1, 2026-10 官网输出参数表) ----------
-# 官方无唯一键: PK 取 (ts_code, end_date, ann_date, div_proc) —— 四列官方恒有值;
+# 官方无唯一键: PK 取 (ts_code, end_date, ann_date, div_proc) —— 四列官方"默认显示 Y";
 # 多阶段行(预案/决案/实施)由 div_proc 区分, 同年多次分红由 ann_date 区分;
-# 实施类日期列(ex_date 等)在预案阶段必 NULL, 不可入 PK
+# 实施类日期列(ex_date 等)在预案阶段必 NULL, 不可入 PK。
+# 实测注: 个别早期阶段行(如"股东提议") ann_date 实为 NULL, 同步层跳过该类行(PK 列不可空)
 DDL_DIVIDEND = """
 CREATE TABLE IF NOT EXISTS fin.dividend (
     ts_code       VARCHAR(16) NOT NULL,   -- TS代码
