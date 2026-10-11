@@ -421,10 +421,13 @@ async def _decision_loop(llm, tools, messages: List[Dict[str, Any]],
             batch.append((tc, fname, fargs, None))
 
         # ---- stage 事件 + 重复调用防护 ----
+        # batch/batch_size: 同轮并行标记, 前端按轮分组展示并正确匹配耗时
+        batch_size = len(batch)
         for i, (tc, fname, fargs, _) in enumerate(batch):
             key = f"{fname}|{json.dumps(fargs, ensure_ascii=False, sort_keys=True)}"
             call_counts[key] = call_counts.get(key, 0) + 1
             yield sse("stage", {"stage": "tool",
+                                "batch": round_no, "batch_size": batch_size,
                                 "message": f"调用 {fname}({_fmt_tool_args(fargs)})…"})
             if call_counts[key] >= REPEAT_LIMIT:
                 batch[i] = (tc, fname, fargs, {
@@ -466,6 +469,7 @@ async def _decision_loop(llm, tools, messages: List[Dict[str, Any]],
 
             yield sse("tool_call", {
                 "tool": fname, "args": fargs,
+                "batch": round_no,
                 "ok": env.get("ok", False),
                 "elapsed_ms": env.get("elapsed_ms", 0), "rows": rows})
             if table:

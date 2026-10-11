@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { platformApi } from './platformApi'
 import ResultChart, { buildChartSpec, COL_LABELS, parseNum, fmtDateCol } from './ResultChart'
 import Markdownish from './Markdownish'
@@ -126,21 +126,28 @@ export default function AgentChat() {
           updateLast((msg) => {
             // 首个 stage "意图识别: X" 提前确定回答类型 (徽章即时显示)
             const im = /^意图识别:\s*(\w+)/.exec(ev.message || '')
-            // 步骤卡片: 已有步骤标 ok, 新步骤 active
+            // 步骤卡片: 已有步骤标 ok, 新步骤 active; batch=决策轮号(并行分组用)
             const stages = [
               ...(msg.stages || []).map((s) => ({ ...s, ok: true })),
-              { message: ev.message, ok: false },
+              { message: ev.message, batch: ev.batch, batchSize: ev.batch_size, ok: false },
             ]
             return { ...msg, stage: ev.message, stages, intent: im ? im[1] : msg.intent }
           })
         } else if (ev.type === 'tool_call') {
-          // 工具执行完: 给最后一个步骤补上耗时/行数, 失败标红
+          // 工具执行完: 按 同轮+同名 匹配步骤补耗时/行数, 失败标红
           updateLast((msg) => {
-            const stages = (msg.stages || []).map((s, j, arr) => (
-              j === arr.length - 1
-                ? { ...s, done: true, meta: ev.ok ? `${ev.elapsed_ms}ms${ev.rows ? ` · ${ev.rows}行` : ''}` : '失败', failed: !ev.ok }
-                : s
-            ))
+            const stages = (msg.stages || []).slice()
+            const prefix = `调用 ${ev.tool}(`
+            let idx = stages.findIndex((s) => !s.done && s.batch === ev.batch && (s.message || '').startsWith(prefix))
+            if (idx === -1) idx = stages.findIndex((s) => !s.done && (s.message || '').startsWith(prefix))
+            if (idx === -1) idx = stages.length - 1
+            if (stages[idx]) {
+              stages[idx] = {
+                ...stages[idx], done: true,
+                meta: ev.ok ? `${ev.elapsed_ms}ms${ev.rows ? ` · ${ev.rows}行` : ''}` : '失败',
+                failed: !ev.ok,
+              }
+            }
             return { ...msg, stages }
           })
         } else if (ev.type === 'data') {
@@ -220,12 +227,21 @@ export default function AgentChat() {
                     )}
                     {m.stages?.length > 0 ? (
                       <div className="agent-steps">
-                        {m.stages.map((s, j) => (
-                          <div key={j} className={`agent-step ${s.failed ? 'failed' : s.ok ? 'ok' : 'active'}`}>
-                            <span className="agent-dot">{s.ok ? '✓' : s.failed ? '⚠' : ''}</span>
-                            {s.message}{s.meta ? ` (${s.meta})` : ''}
-                          </div>
-                        ))}
+                        {m.stages.map((s, j) => {
+                          // 同轮(>1个调用)为并行批: 首条前加 ⚡并行×N 标签, 批内缩进
+                          const prev = m.stages[j - 1]
+                          const parallel = s.batch != null && s.batchSize > 1
+                          const firstOfBatch = parallel && (!prev || prev.batch !== s.batch)
+                          return (
+                            <Fragment key={j}>
+                              {firstOfBatch && <div className="agent-batch-label">⚡ 并行 ×{s.batchSize}</div>}
+                              <div className={`agent-step ${parallel ? 'batched' : ''} ${s.failed ? 'failed' : s.ok ? 'ok' : 'active'}`}>
+                                <span className="agent-dot">{s.ok ? '✓' : s.failed ? '⚠' : ''}</span>
+                                {s.message}{s.meta ? ` (${s.meta})` : ''}
+                              </div>
+                            </Fragment>
+                          )
+                        })}
                       </div>
                     ) : (m.stage && (
                       <div className="chat-stage">

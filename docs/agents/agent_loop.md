@@ -59,8 +59,8 @@ AgentChat.jsx (session_id 每页生成一次, 全程携带)
 
 | event | data | 说明 |
 |-------|------|------|
-| `stage` | `{stage:"tool", message:"调用 query_financials(stocks=中际旭创)…"}` | 工具执行进度（步骤卡片） |
-| `tool_call` | `{tool, args, ok, elapsed_ms, rows}` | 工具结果元信息（新事件；步骤补耗时/行数/失败标记） |
+| `stage` | `{stage:"tool", batch:轮号, batch_size:本轮调用数, message:"调用 query_financials(stocks=中际旭创)…"}` | 工具执行进度（步骤卡片）；batch>1 的步骤前端渲染为「⚡ 并行 ×N」分组 |
+| `tool_call` | `{tool, args, batch, ok, elapsed_ms, rows}` | 工具结果元信息（前端按 同轮+同名 匹配步骤补耗时/行数/失败标记） |
 | `data` | `{intent:"agent", tool, data, columns, rows}` | 表格型工具结果 → 图表渲染（多个时前端显示最后一个） |
 | `delta` | `{text}` | 最终回答 80 字符分块（打字机效果） |
 | `done` / `error` | `{}` / `{message}` | 同旧链路 |
