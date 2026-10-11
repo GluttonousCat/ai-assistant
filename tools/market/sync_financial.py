@@ -21,9 +21,10 @@ Tushare 财务数据 -> PostgreSQL 同步模块
 from __future__ import annotations
 
 import argparse
+import threading
 import time
 from datetime import date, datetime, timedelta
-from typing import Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 import pandas as pd
 import psycopg2
@@ -40,6 +41,47 @@ API_SLEEP = 0.35  # 200次/分钟 -> 0.35s 间隔留余量
 
 # PG 断连/服务端重启: 每股独立连接, 单股重试即重连 (坑表: 长批任务按工作单元续跑)
 PG_DOWN = (psycopg2.OperationalError, psycopg2.InterfaceError)
+
+
+class TushareHangError(RuntimeError):
+    """API 调用挂死 (DNS/半开连接等 requests 超时覆盖不到的阻塞): 连续多次判定断网, 快速终止本轮"""
+
+
+_hang_streak = 0
+
+
+def _api_call(pro, api_name: str, timeout: int = 90, **params) -> pd.DataFrame:
+    """
+    Tushare API 硬墙钟调用: 守护线程 + join 超时。
+    SDK 自带 timeout=30 只覆盖 socket 读写, DNS 解析(getaddrinfo)等阻塞调用不受其约束,
+    网络波动会永久挂死 (2026-10-11 cashflow 回填实挂 10+ 分钟无报错)。
+    挂死线程 daemon 弃置不回收; 连续 5 次挂死视为断网, 抛 TushareHangError 终止本轮
+    (断点已存于 fin.sync_meta, 网络恢复后重跑即可)。
+    """
+    global _hang_streak
+    box: Dict[str, Any] = {}
+
+    def _call():
+        try:
+            box["df"] = getattr(pro, api_name)(**params)
+        except Exception as e:  # noqa: BLE001  快速失败异常带回主线程
+            box["err"] = e
+
+    t = threading.Thread(target=_call, daemon=True)
+    t.start()
+    t.join(timeout)
+    if t.is_alive():
+        _hang_streak += 1
+        if _hang_streak >= 5:
+            raise TushareHangError(
+                f"{api_name} 连续 {_hang_streak} 次拉取挂死(疑似断网), 终止本轮同步 —— 断点已保存")
+        logger.warning(f"{api_name} {params} 拉取挂死 {timeout}s, 弃置 "
+                       f"(连击 {_hang_streak}/5)")
+        return pd.DataFrame()
+    _hang_streak = 0
+    if "err" in box:
+        raise box["err"]
+    return box.get("df", pd.DataFrame())
 
 # 各表对应的 Tushare 接口名 (表名 == 接口名); 拉取字段见 table_fields() 反射。
 # disclosure_date 不在此列: 接口不支持 start_date 逐股骨架参数, 走按报告期批量(见 backfill_disclosure_periods)
@@ -141,14 +183,12 @@ def _to_date(v) -> Optional[date]:
 
 def fetch_stock_fin(pro, api_name: str, ts_code: str, fields: List[str],
                     start: str = "19900101") -> pd.DataFrame:
-    """拉取单只股票单个接口的历史财报数据"""
+    """拉取单只股票单个接口的历史财报数据 (挂死由 _api_call 墙钟兜底)"""
     try:
-        df = getattr(pro, api_name)(
-            ts_code=ts_code,
-            start_date=start,
-            fields=",".join(fields),
-        )
-        return df
+        return _api_call(pro, api_name, ts_code=ts_code,
+                         start_date=start, fields=",".join(fields))
+    except TushareHangError:
+        raise
     except Exception as e:
         logger.warning(f"  {api_name} {ts_code} 抓取失败: {e}")
         time.sleep(2)
@@ -238,7 +278,10 @@ def _fetch_dividend_by_date(pro, param: str, d: str,
     """按单日参数拉全市场分红 (ann_date/imp_ann_date/ex_date 之一), API 失败重试 3 次"""
     for attempt in range(1, 4):
         try:
-            return pro.dividend(**{param: d}, fields=",".join(fields))
+            return _api_call(pro, "dividend", **{param: d},
+                             fields=",".join(fields))
+        except TushareHangError:
+            raise
         except Exception as e:
             logger.warning(f"dividend {param}={d} 抓取失败 ({attempt}/3): {e}")
             time.sleep(2 * attempt)
@@ -315,7 +358,10 @@ def _fetch_disclosure_by(pro, param: str, value: str,
     """按单参数(报告期 end_date 或单日 ann_date/actual_date)拉全市场披露计划, API 失败重试 3 次"""
     for attempt in range(1, 4):
         try:
-            return pro.disclosure_date(**{param: value}, fields=",".join(fields))
+            return _api_call(pro, "disclosure_date", **{param: value},
+                             fields=",".join(fields))
+        except TushareHangError:
+            raise
         except Exception as e:
             logger.warning(f"disclosure_date {param}={value} 抓取失败 "
                            f"({attempt}/3): {e}")
