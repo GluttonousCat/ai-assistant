@@ -50,7 +50,7 @@
 │   fin.report_meta      研报元数据 + 提取文本 (F4 校验数据源)        │
 │   fin.report_forecast  研报预测抽取 (M4 待做)                      │
 │   fin.report_sync_meta 同步水位线 (last_topic_id / last_file_id)   │
-│   fin.v_report_ready  已提取且有标的股票的研报视图                  │
+│   (v_report_ready 视图已删 2026-10-11, 零消费; 等价直查 report_meta) │
 └───────────────────────────────────────────────────────────────────┘
 ```
 
@@ -393,10 +393,10 @@ curl "http://localhost:8208/reports"  # 或直接用 Python 请求群组接口
 
 ## 13. 与 F4 研报校验的衔接
 
-`fin.v_report_ready` 输出可直接喂给研报校验链路:
+(原 v_report_ready 视图已删, 等价条件直查 report_meta) 研报校验链路取数:
 
 ```sql
-SELECT * FROM fin.v_report_ready WHERE ts_code = '600519.SH' ORDER BY publish_date DESC;
+SELECT report_id, title, file_path, publish_date FROM fin.report_meta WHERE ts_code = '600519.SH' AND extraction_status = 'extracted' AND content_chars > 0 ORDER BY publish_date DESC;
 ```
 
 后续 M4: `ReportVerifySkill` 读取 `report_forecast` 预测项 (营收/净利/目标价), 与 `fin.income` / `fin.fina_indicator` 实际值比对计算偏差。

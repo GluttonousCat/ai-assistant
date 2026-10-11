@@ -31,7 +31,6 @@ from core.config import get_config
 from storage.pg import PgClient
 from storage.pg_schema import (
     init_report_schema,
-    init_report_views,
     T_REPORT_META,
     T_REPORT_FORECAST,
     T_REPORT_SYNC_META,
@@ -82,7 +81,6 @@ class ZSXQ2PGSync:
         # 部署 PG 表
         with PgClient() as pg:
             init_report_schema(pg)
-            init_report_views(pg)
 
         self._new_ids = []
         if os.path.exists(self.db_path):

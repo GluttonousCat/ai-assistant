@@ -1142,36 +1142,9 @@ def init_report_schema(pg_client) -> None:
     pg_client.conn.commit()
 
 
-DDL_VIEW_REPORT_FILES = """
-CREATE OR REPLACE VIEW fin.v_report_ready AS
-SELECT
-    r.report_id,
-    r.ts_code,
-    r.title,
-    r.file_name,
-    r.file_size,
-    r.file_path,
-    r.report_type,
-    r.source,
-    r.extraction_status,
-    r.content_chars,
-    r.publish_date,
-    r.created_at
-FROM fin.report_meta r
-WHERE r.extraction_status = 'extracted'
-  AND r.ts_code IS NOT NULL
-  AND r.content_chars > 0;
-COMMENT ON VIEW fin.v_report_ready IS '已提取且含标的股票的研报(可直接用于F4校验)';
-"""
-
-REPORT_VIEW_DDL = [DDL_VIEW_REPORT_FILES]
-
-
-def init_report_views(pg_client) -> None:
-    """部署研报视图 (幂等)"""
-    for ddl in REPORT_VIEW_DDL:
-        pg_client.execute(ddl)
-    pg_client.conn.commit()
+# (v_report_ready 视图已删, 2026-10-11: 全库零查询消费、未进 LLM 数据字典, 纯遗留;
+#  需要时等价查询: SELECT ... FROM fin.report_meta WHERE extraction_status='extracted'
+#  AND ts_code IS NOT NULL AND content_chars > 0)
 
 
 # ============================================================
