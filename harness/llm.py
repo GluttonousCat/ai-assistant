@@ -27,11 +27,13 @@ config.yaml 结构:
 """
 from __future__ import annotations
 
+import time
 from typing import Any, Dict, Iterator, List, Optional, Union
 
 from openai import OpenAI
 
 from core.config import get_config
+from core.metrics import record as metrics_record
 
 MessageList = List[Dict[str, Any]]
 
@@ -90,13 +92,28 @@ class LLMClient:
             return [{"role": "user", "content": input_data}]
         return input_data
 
+    def _tracked(self, stream: bool, **create_kwargs):
+        """带监控埋位的 create: 耗时/成败/tokens (core.metrics, 异常吞掉不影响业务)"""
+        t0 = time.time()
+        merged = {**self._default_kwargs(), **create_kwargs}
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model, stream=stream, **merged)
+        except Exception as e:
+            metrics_record("llm", purpose=self.purpose, ok=False,
+                           ms=int((time.time() - t0) * 1000))
+            raise
+        usage = getattr(response, "usage", None)
+        metrics_record("llm", purpose=self.purpose, ok=True,
+                       ms=int((time.time() - t0) * 1000),
+                       pt=getattr(usage, "prompt_tokens", 0) or 0,
+                       ct=getattr(usage, "completion_tokens", 0) or 0)
+        return response
+
     def invoke(self, input_data: Union[str, MessageList], **kwargs) -> str:
         """同步调用, 返回文本"""
         messages = self._normalize(input_data)
-        response = self.client.chat.completions.create(
-            model=self.model, messages=messages,
-            **{**self._default_kwargs(), **kwargs}
-        )
+        response = self._tracked(stream=False, messages=messages, **kwargs)
         return response.choices[0].message.content or ""
 
     def invoke_with_tools(self, messages: MessageList, tools: List[Dict],
@@ -107,20 +124,14 @@ class LLMClient:
         - message.tool_calls: List[{id, function:{name, arguments}}] 或 None
         - message.content: 无工具调用时的最终回答文本
         """
-        response = self.client.chat.completions.create(
-            model=self.model, messages=messages, tools=tools,
-            tool_choice=tool_choice,
-            **{**self._default_kwargs(), **kwargs}
-        )
+        response = self._tracked(stream=False, messages=messages, tools=tools,
+                                 tool_choice=tool_choice, **kwargs)
         return response.choices[0].message
 
     def stream(self, input_data: Union[str, MessageList], **kwargs) -> Iterator[str]:
         """流式调用, 逐块产出文本 (思考模型的 reasoning 块自动跳过, 只出正文)"""
         messages = self._normalize(input_data)
-        response = self.client.chat.completions.create(
-            model=self.model, messages=messages, stream=True,
-            **{**self._default_kwargs(), **kwargs}
-        )
+        response = self._tracked(stream=True, messages=messages, **kwargs)
         for chunk in response:
             content = chunk.choices[0].delta.content if chunk.choices else None
             if content:

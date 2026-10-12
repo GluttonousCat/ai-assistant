@@ -28,6 +28,7 @@ from typing import Any, AsyncIterator, Callable, Dict, List, Optional
 
 from core.logger import get_logger
 from core.config import get_config
+from core import metrics
 from harness import session, trajectory
 
 logger = get_logger(__name__)
@@ -365,6 +366,8 @@ async def _decision_loop(llm, tools, messages: List[Dict[str, Any]],
     holder["escalated"] = False
 
     for round_no in range(1, max_rounds + 1):
+        metrics.record("session_round", session_id=holder.get("session_id"),
+                       round_no=round_no)
         msg = await asyncio.to_thread(llm.invoke_with_tools, messages, tools)
         tool_calls = getattr(msg, "tool_calls", None)
         if not tool_calls:
@@ -385,6 +388,8 @@ async def _decision_loop(llm, tools, messages: List[Dict[str, Any]],
             if fname == ESCALATE_TOOL:
                 reason = str(fargs.get("reason", ""))[:100]
                 holder["escalated"] = True
+                metrics.record("escalate", session_id=holder.get("session_id"),
+                               reason=reason)
                 holder["escalate_reason"] = reason
                 holder["tool_events"].append({
                     "name": ESCALATE_TOOL, "args": fargs, "ok": True,
@@ -472,6 +477,9 @@ async def _decision_loop(llm, tools, messages: List[Dict[str, Any]],
                 "batch": round_no,
                 "ok": env.get("ok", False),
                 "elapsed_ms": env.get("elapsed_ms", 0), "rows": rows})
+            metrics.record("tool", tool=fname, ok=env.get("ok", False),
+                           ms=env.get("elapsed_ms", 0),
+                           session_id=holder.get("session_id"))
             if table:
                 yield sse("data", {"intent": "agent", "tool": fname,
                                    "data": table["data"],
@@ -508,8 +516,10 @@ async def run_agent_stream(text: str, session_id: Optional[str],
         return sse(event, data)
 
     if fast_lane and _fast_path_intent(text):
+        metrics.record("session_start", session_id=session_id, text=text, path="fast")
         async for chunk in _fast_query_stream(text, session_id, sse_tee):
             yield chunk
+        metrics.record("session_end", session_id=session_id, ok=True)
         return
 
     from harness.llm import get_agent_llm
@@ -526,6 +536,9 @@ async def run_agent_stream(text: str, session_id: Optional[str],
 
     holder: Dict[str, Any] = {}
     domain = route_domain(text) if use_subagent else None
+    metrics.record("session_start", session_id=session_id, text=text,
+                   path="subagent" if domain else "full")
+    holder["session_id"] = session_id
 
     try:
         if domain:
@@ -558,6 +571,7 @@ async def run_agent_stream(text: str, session_id: Optional[str],
                           "请换一种问法或稍后重试。")
 
         session.append_assistant(session_id, final_text, tool_events)
+        metrics.record("session_end", session_id=session_id, ok=True)
 
         # 最终回答分块推送 (打字机效果; 决策轮为非流式, 此处按块下发)
         for i in range(0, len(final_text), 80):
@@ -568,6 +582,8 @@ async def run_agent_stream(text: str, session_id: Optional[str],
         logger.error(f"Agent 循环异常: {e}", exc_info=True)
         session.append_assistant(
             session_id, f"[异常] {e}", holder.get("tool_events") or [])
+        metrics.record("session_end", session_id=session_id, ok=False,
+                       error=str(e)[:120])
         yield sse_tee("error", {"message": f"Agent 执行失败: {e}"})
 
 

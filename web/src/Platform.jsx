@@ -5,6 +5,7 @@ import Reports from './Reports'
 import ChainView from './ChainView'
 import App from './App' // 区间扫描看板 (原有页面, 仅 admin)
 import UserAdmin from './UserAdmin' // 用户管理 (仅 admin)
+import Monitor from './Monitor' // 实时监控 (Agent 会话/工具/LLM, 仅 admin)
 
 // 导航定义: adminOnly 的项非管理员置灰不可点
 const SUPER_ADMIN = 'Gluttonouscat'
@@ -14,6 +15,7 @@ const NAV = [
   { key: 'chain', label: '产业链', icon: '⛓' },
   { key: 'reports', label: '研报中心', icon: '▤' },
   { key: 'range', label: '区间看板', icon: '◫', adminOnly: true },      // admin 可见可点, user 置灰 🔒
+  { key: 'monitor', label: '实时监控', icon: '◉', adminOnly: true },
   { key: 'users', label: '用户管理', icon: '⚙', superOnly: true },       // 仅超级管理员渲染
 ]
 
@@ -85,6 +87,7 @@ export default function Platform({ user, onLogout }) {
         {nav === 'chain' && <ChainView />}
         {nav === 'reports' && <Reports />}
         {nav === 'range' && isAdmin && <App embedded />}
+        {nav === 'monitor' && isAdmin && <Monitor />}
         {nav === 'users' && isSuper && <UserAdmin />}
       </main>
     </div>

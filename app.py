@@ -17,6 +17,7 @@ from api.finance import fin_router
 from api.range_api import range_router
 from api.auth_api import auth_router
 from api.reports_api import reports_router
+from api.monitor_api import monitor_router
 
 app = FastAPI(
     title="ai-assistant",
@@ -40,6 +41,7 @@ app.include_router(fin_router)
 app.include_router(range_router)
 app.include_router(auth_router)
 app.include_router(reports_router)
+app.include_router(monitor_router)
 
 # ---------- 前端静态托管 (平台单页应用) ----------
 _WEB_DIST = Path(__file__).parent / "web" / "dist"

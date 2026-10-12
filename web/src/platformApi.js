@@ -167,4 +167,8 @@ export const platformApi = {
 
   // 工作台概览
   health: () => request('GET', '/health'),
+
+  // 实时监控 (adminOnly): SSE 每 2s 一帧 {state:{metrics,pg}}; 返回 {promise, abort}
+  monitorStream: (onEvent) => sseStream('/api/monitor/stream', {}, onEvent),
+  monitorState: () => request('GET', '/api/monitor/state'),
 }

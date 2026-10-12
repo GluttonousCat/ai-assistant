@@ -38,7 +38,7 @@ tools/       pdf(通用PDF工具: 文本/渲染/OCR/表格) / zsxq爬虫 / marke
 storage/     pg.py(连接池) / sqlite(爬虫) / pg_schema.py(全部DDL,改表先看这)
 api/         路由+鉴权中间件(JWT) / finance(SSE流式) / reports / auth
 web/src/     Login / Platform(侧边栏壳+角色门控) / AgentChat(SSE) / ChainView(产业链页)
-             Reports / UserAdmin; Markdownish 共享渲染器
+             Reports / UserAdmin / Monitor(实时监控SSE, adminOnly); Markdownish 共享渲染器
 range_trading/  量化子系统(特征/regime状态机/扫描/回测, 自带tests)
 ```
 
