@@ -63,19 +63,21 @@ def _pg_state() -> Dict[str, Any]:
 
 
 def _build_state() -> Dict[str, Any]:
-    return {"metrics": snapshot(), "pg": _pg_state()}
+    return {"state": {"metrics": snapshot(), "pg": _pg_state()}}
 
 
 @monitor_router.get("/state")
 async def monitor_state(current: TokenPayload = Depends(require_admin)):
-    return _build_state()
+    return _build_state()["state"]
 
 
 @monitor_router.post("/stream")
 async def monitor_stream(current: TokenPayload = Depends(require_admin)):
     async def gen():
         while True:
-            yield f"data: {json.dumps(_build_state(), ensure_ascii=False, default=str)}\n\n"
+            # PG 探活是同步 psycopg2, 放线程池防堵事件循环 (AGENTS 同步重IO坑)
+            payload = await asyncio.to_thread(_build_state)
+            yield f"data: {json.dumps(payload, ensure_ascii=False, default=str)}\n\n"
             await asyncio.sleep(2)
 
     return StreamingResponse(gen(), media_type="text/event-stream",

@@ -43,13 +43,32 @@ export default function Monitor() {
 
   useEffect(() => {
     if (!live) return undefined
-    setErr('')
-    const handle = platformApi.monitorStream((ev) => {
-      if (ev.state) setSt(ev.state)
-    })
-    handle.promise.catch((e) => setErr(String(e.message || e)))
-    streamRef.current = handle
-    return () => handle.abort()
+    let stopped = false
+    let timer = null
+    const start = () => {
+      if (stopped) return
+      setErr('')
+      const handle = platformApi.monitorStream((ev) => {
+        if (ev.state) setSt(ev.state)
+      })
+      streamRef.current = handle
+      // 流断开/服务重启后自动重连 (3s); 组件卸载或暂停时 stopped 拦住重连
+      const retry = (msg) => {
+        if (stopped) return
+        setErr(msg)
+        timer = setTimeout(start, 3000)
+      }
+      handle.promise.then(
+        () => retry(''),
+        (e) => retry(e && e.name === 'AbortError' ? '' : String(e.message || e)),
+      )
+    }
+    start()
+    return () => {
+      stopped = true
+      clearTimeout(timer)
+      streamRef.current?.abort()
+    }
   }, [live])
 
   if (!st) {
