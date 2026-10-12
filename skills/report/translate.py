@@ -60,12 +60,21 @@ def _split_chunks(text: str, size: int = _CHUNK_CHARS) -> List[str]:
 
 
 def translate_body(text: str) -> str:
-    """整段正文 (调用方保证已截窗) 分片串行翻译, 拼接返回"""
+    """整段正文 (调用方保证已截窗) 分片串行翻译, 拼接返回; 单片超时递增重试"""
     from harness.llm import get_extract_llm
-    llm = get_extract_llm(timeout=180.0)
     out: List[str] = []
     for chunk in _split_chunks(text):
-        resp = (llm.invoke(TRANSLATE_PROMPT.format(text=chunk)) or "").strip()
+        resp = ""
+        # 思考模式下长片可能超 180s: 递增超时重试, 3 次皆败才向上抛
+        for attempt, timeout in enumerate((180.0, 240.0, 300.0), 1):
+            try:
+                resp = (get_extract_llm(timeout=timeout).invoke(
+                    TRANSLATE_PROMPT.format(text=chunk)) or "").strip()
+                break
+            except Exception as e:
+                if attempt == 3:
+                    raise
+                logger.warning(f"翻译单片超时/失败, 重试 ({attempt}/3): {str(e)[:80]}")
         if resp.startswith("```"):  # 宽容剥壳
             resp = resp.strip("`").strip()
             if resp.startswith("text"):
@@ -123,11 +132,20 @@ def backfill(limit: int = 0, workers: int = 3) -> None:
     if limit:
         todo = todo[:limit]
     logger.info(f"正文待补译 {len(todo)} 篇 (workers={workers})")
+
+    def _safe(rid: int) -> bool:
+        # 单篇失败 (超时上限/网关抖动) 只记日志, 不打断整批
+        try:
+            return translate_report(rid)
+        except Exception as e:
+            logger.warning(f"#{rid} 补译异常跳过: {str(e)[:80]}")
+            return False
+
     done = 0
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        for ok in ex.map(translate_report, todo):
+        for ok in ex.map(_safe, todo):
             done += 1 if ok else 0
-    print(f"补译完成: {done}/{len(todo)} 篇写入 content_text_cn")
+    print(f"补译完成: {done}/{len(todo)} 篇写入 content_text_cn (失败篇目可重跑本命令续译)")
 
 
 if __name__ == "__main__":
