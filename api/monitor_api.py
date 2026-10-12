@@ -24,7 +24,7 @@ from core.metrics import snapshot
 
 logger = get_logger(__name__)
 
-monitor_router = APIRouter(prefix="/monitor", tags=["monitor"])
+monitor_router = APIRouter(prefix="/api/monitor", tags=["monitor"])
 
 _PG_CACHE: Dict[str, Any] = {"ts": 0.0, "data": None}
 
