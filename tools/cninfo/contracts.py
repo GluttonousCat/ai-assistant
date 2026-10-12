@@ -200,9 +200,8 @@ def repair_brief(kind: str, key: str) -> str:
 
 # ---------------- 批量合规巡检 ----------------
 
-def check_file(path: Path) -> Dict:
-    """单个 _items.json → {file, fails: {key: reason}, n_keys, n_ok}"""
-    d = json.loads(path.read_text(encoding="utf-8"))
+def check_data(d: Dict) -> Dict:
+    """内存态 items 产物 → {fails: {key: reason}, n_keys, n_ok} (修复回环复检用)"""
     fails: Dict[str, str] = {}
     n_ok = 0
     for key, c in CONTRACTS.items():
@@ -212,7 +211,14 @@ def check_file(path: Path) -> Dict:
             n_ok += 1
         else:
             fails[key] = r["reason"]
-    return {"file": str(path), "fails": fails, "n_keys": len(CONTRACTS), "n_ok": n_ok}
+    return {"fails": fails, "n_keys": len(CONTRACTS), "n_ok": n_ok}
+
+
+def check_file(path: Path) -> Dict:
+    """单个 _items.json → {file, fails: {key: reason}, n_keys, n_ok}"""
+    d = json.loads(path.read_text(encoding="utf-8"))
+    r = check_data(d)
+    return {"file": str(path), **r}
 
 
 def check_all(root: Path = MD_ROOT) -> List[Dict]:
