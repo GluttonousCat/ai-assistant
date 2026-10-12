@@ -108,6 +108,22 @@ DATE_NORM_EXTRA = {
     "disclosure_date": ("pre_date", "actual_date", "modify_date"),
 }
 
+# 接口单次返回行数上限 (Tushare 限制, 超过即静默截断): 命中的接口在
+# fetch_stock_fin 里按报告期向前翻页取尽; income 未限, 其余表单股全量 < 上限
+FIN_PAGE_CAP = {
+    "balancesheet": 100,
+    "cashflow": 100,
+    "fina_indicator": 100,
+}
+
+
+def _page_min_end(df: pd.DataFrame) -> Optional[date]:
+    """当页最旧报告期 (end_date 列转 date; 无该列/全空返回 None 终止翻页)"""
+    if "end_date" not in df.columns or df.empty:
+        return None
+    vals = [d for d in (_to_date(v) for v in df["end_date"]) if d]
+    return min(vals) if vals else None
+
 _warned_dropped: set = set()
 
 
@@ -183,16 +199,45 @@ def _to_date(v) -> Optional[date]:
 
 def fetch_stock_fin(pro, api_name: str, ts_code: str, fields: List[str],
                     start: str = "19900101") -> pd.DataFrame:
-    """拉取单只股票单个接口的历史财报数据 (挂死由 _api_call 墙钟兜底)"""
+    """
+    拉取单只股票单个接口的历史财报数据 (挂死由 _api_call 墙钟兜底)。
+
+    balancesheet/cashflow/fina_indicator 接口单次上限 100 行, 长历史会被静默截断
+    (老股只拿到最近 N 期, 更早报告期从未入库): 对这些接口按报告期 end_date 向前
+    翻页取尽 —— 首页不带 end_date 拿最新一页, 之后 end_date=当页最旧报告期前推一天,
+    直到取空/页不满/不再前进; upsert 幂等, 页间重叠无害。
+    """
+    cap = FIN_PAGE_CAP.get(api_name)
     try:
-        return _api_call(pro, api_name, ts_code=ts_code,
-                         start_date=start, fields=",".join(fields))
+        first = _api_call(pro, api_name, ts_code=ts_code,
+                          start_date=start, fields=",".join(fields))
     except TushareHangError:
         raise
     except Exception as e:
         logger.warning(f"  {api_name} {ts_code} 抓取失败: {e}")
         time.sleep(2)
         return pd.DataFrame()
+    if first is None or first.empty or not cap or len(first) < cap:
+        return first
+    frames = [first]
+    seen_min = _page_min_end(first)
+    while seen_min:
+        cursor = (seen_min - timedelta(days=1)).strftime("%Y%m%d")
+        page = _api_call(pro, api_name, ts_code=ts_code, start_date=start,
+                         end_date=cursor, fields=",".join(fields))
+        if page is None or page.empty:
+            break
+        frames.append(page)
+        new_min = _page_min_end(page)
+        # 页不满=更早数据已取尽; 不前进=同报告期成团兜底 (单期行数<<100, 理论到不了)
+        if len(page) < cap or not new_min or new_min >= seen_min:
+            break
+        seen_min = new_min
+    df = pd.concat(frames, ignore_index=True)
+    return df.drop_duplicates(subset=[k for k in
+                                      FIN_CONFLICT_KEYS.get(api_name,
+                                                            ["ts_code", "end_date", "report_type"])
+                                      if k in df.columns])
 
 
 def _upsert_stock_fin(pro, table: str, api_name: str, fields: List[str],
