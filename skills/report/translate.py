@@ -96,8 +96,11 @@ def translate_report(report_id: int) -> bool:
         return False  # 中文正文/过短/已译: 幂等跳过
     with _TRANSLATE_SEMAPHORE:
         cn = translate_body(text)
-    # 译文须中文主导且非空 (防 LLM 原样吐回英文)
-    if len(cn.strip()) > 100 and len(_CJK.findall(cn)) / len(cn) > 0.1:
+    # 译文校验 (防 LLM 原样吐回英文): 中文占比>0.1 直接收;
+    # 表格型原文 (报价/数据表为主, 译文中文占比天然低) 放宽为"中文份额比原文提升 30%+"
+    cn_ratio = len(_CJK.findall(cn)) / len(cn)
+    src_ratio = len(_CJK.findall(text)) / len(text)
+    if len(cn.strip()) > 100 and (cn_ratio > 0.1 or cn_ratio >= src_ratio * 1.3):
         with PgClient() as pg:
             n = pg.execute(
                 "UPDATE fin.report_meta SET content_text_cn=%s WHERE report_id=%s "
