@@ -34,7 +34,7 @@ skills/      领域技能 (每技能一目录, 专业知识放 prompt):
 jobs/        任务层一体: scheduler(Tushare 21:00) / zsxq_scheduler(爬虫 07:00/23:00) /
              管线入口(daily_fetch_zxsq, sync_zxsq_to_pg, merge_report_duplicates, smoke)
 tools/       pdf(通用PDF工具: 文本/渲染/OCR/表格) / zsxq爬虫 / market行情同步 /
-             cninfo巨潮定期报告 / finance(SQL guard, KB, 研报文件提取器)
+             cninfo巨潮定期报告(获取+解析, 自包含) / langgraph(LangGraph原子封装: 建图/记忆) / finance(SQL guard, KB, 研报文件提取器)
 storage/     pg.py(连接池) / sqlite(爬虫) / pg_schema.py(全部DDL,改表先看这)
 api/         路由+鉴权中间件(JWT) / finance(SSE流式) / reports / auth
 web/src/     Login / Platform(侧边栏壳+角色门控) / AgentChat(SSE) / ChainView(产业链页)
