@@ -174,7 +174,8 @@ async def report_detail(report_id: int,
         row = pg.fetch_one(
             "SELECT report_id, topic_id, file_id, ts_code, title, author, org_name, "
             "publish_date, report_type, source, file_name, file_path, content_chars, "
-            "content_text, extraction_status, analysis_status, analysis_json, created_at "
+              "content_text, content_text_cn, extraction_status, analysis_status, "
+              "analysis_json, created_at "
             "FROM fin.report_meta WHERE report_id=%s", (report_id,))
         if not row:
             raise HTTPException(status_code=404, detail="研报不存在")
@@ -186,7 +187,9 @@ async def report_detail(report_id: int,
         if row.get(k):
             row[k] = row[k].strftime("%Y-%m-%d %H:%M") if k == "created_at" \
                 else row[k].strftime("%Y-%m-%d")
-    row["content_text"] = (row.get("content_text") or "")[:8000]
+    # 英文原版有译文用译文 (中文正文 content_text_cn 为空, 自然回退原文)
+    row["content_text"] = ((row.pop("content_text_cn", None) or row.get("content_text") or "")
+                           )[:8000]
     row["forecasts"] = forecasts
     return row
 

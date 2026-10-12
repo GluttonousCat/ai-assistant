@@ -1187,6 +1187,9 @@ DDL_REPORT_ANALYSIS_STATEMENTS = [
      "report_meta", "tags_themes"),
     ("ALTER TABLE fin.report_meta ADD COLUMN IF NOT EXISTS tags_targets TEXT",
      "report_meta", "tags_targets"),
+    # 正文中文译文 (英文原版入库时后台翻译写入; 中文正文留空, 读取侧回退原文)
+    ("ALTER TABLE fin.report_meta ADD COLUMN IF NOT EXISTS content_text_cn TEXT",
+     "report_meta", "content_text_cn"),
     ("ALTER TABLE fin.report_forecast ADD COLUMN IF NOT EXISTS symbol VARCHAR(32)",
      "report_forecast", "symbol"),
     ("ALTER TABLE fin.report_forecast ADD COLUMN IF NOT EXISTS market VARCHAR(8)",

@@ -79,6 +79,18 @@ REPORT_QA_PROMPT = """你是一名研报解读助手。基于研报内容回答�
 
 用户问题: {question}"""
 
+# ---- 研报正文中文翻译 (英文原版 → report_meta.content_text_cn) ----
+TRANSLATE_PROMPT = """你是金融研报翻译引擎。把下面的研报正文片段完整译成简体中文, 逐段对应, 不遗漏不增译:
+- 机构名用中文通用名: J.P. Morgan→摩根大通, Morgan Stanley→摩根士丹利, Goldman Sachs→高盛,
+  UBS→瑞银, Bernstein→伯恩斯坦, BofA→美银证券, Nomura→野村, TSMC→台积电;
+- 品牌/产品/技术缩写原样保留 (NVL576/HBM/PTFE/SpaceX), 公司代码/股票代码保留;
+- 数字/百分比/币种精确保留, 可把 bn/mn 换算成 亿/百万 但数值不得改动;
+- 表格线性化文本保持行结构, 段落换行保留;
+- 只输出译文正文, 不要任何解释、前言或 markdown 代码块包裹。
+
+正文片段:
+{text}"""
+
 # 视觉 OCR 版式要求 (金融研报; 供 tools/pdf/ocr.py 的 prompt 注入)
 VISION_OCR_PROMPT = (
     "你是金融研报 OCR 引擎。逐字提取图片中的全部内容, 保持原始顺序:\n"

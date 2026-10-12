@@ -304,6 +304,8 @@ class ReportSkill(BaseSkill):
                       message=f"结果入库: fin.report_meta + fin.report_forecast "
                               f"(盈利预测 {summary['forecast_count']} 条)")
             self._spawn_chain_extract(row["report_id"])
+            from skills.report.translate import spawn_translate
+            spawn_translate(row["report_id"])
             yield _ev("data", data=summary)
 
         yield _ev("done")
@@ -328,6 +330,9 @@ class ReportSkill(BaseSkill):
 
         self._apply_extract_result(pg, row, data)
         self._spawn_chain_extract(row["report_id"])
+        # 英文原版正文后台翻译 → content_text_cn (中文正文幂等跳过, 失败不影响主链路)
+        from skills.report.translate import spawn_translate
+        spawn_translate(row["report_id"])
 
     @staticmethod
     def _spawn_chain_extract(report_id: int) -> None:
