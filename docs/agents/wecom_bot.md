@@ -36,6 +36,10 @@ aibot_respond_msg (msgtype=stream, 内容刷新式) ──wss──> 企微同�
 | `run_agent_stream` import 写在 `_handle_message` 局部作用域, `_answer` 内 NameError | import 移入 `_answer`（首测即暴露, 已修） |
 | Agent 决策轮本身非流式, 企微"流式"观感不足 | 用 stage/tool_call 状态行即时刷新（"⏳ 调用工具 query_financials…"）, delta 到达后节流 1.5s 刷全量 |
 | 底层工具可能挂死导致流式超 6 分钟 | `wait_for(it.__anext__(), remain)` 逐事件超时, 330s 到点强制 finish |
+| 首跑 `errcode=853000 invalid bot_id or secret` | Secret 生成后配置页未保存生效; 用户重新保存后同凭证订阅成功 |
+| `websockets` 库 30s 心跳即被 1002 `incorrect masking` 杀死 | 企微网关应答帧带 MASK 位, 违反 RFC6455（服务器帧禁掩码）; 官方 Node `ws` 库宽容故无感 |
+| 去掉 JSON 心跳改用库自带协议 ping → 50s keepalive 超时死 | 企微**不响应协议层 ping**, 只认自家 JSON 心跳（实测探针证实） |
+| 以上两条互斥约束 | 弃 `websockets` 切 **aiohttp**（对服务器掩码帧宽容）+ 每 30s JSON ping; 实测 100s/3 心跳周期零断连 |
 
 ## 4. 运行方式
 
@@ -54,4 +58,5 @@ WECOM_BOT_SECRET=...
 - 2026-10-27 假 WS 端到端实测（真实 Agent 链路）：问题"贵州茅台最新股价多少"→
   意图路由财务子Agent → query_financials → 6 帧回复（初始 ack/状态×3/节流部分/finish 全文），
   答案含当日（2026-10-27）收盘价 1355.90、总市值 1.69 万亿、PE 20.8 —— 全链路通过。
-- wss 真连接待用户填入 Bot ID/Secret 后实测（协议字段与官方 Node SDK 逐字段对齐）。
+- 2026-10-27 真实凭证上线：订阅成功（首跑 853000 系 Secret 未保存生效），aiohttp 版
+  100s 观察窗（3 个心跳周期）零断连，收到企微事件回调推送 —— 通道稳定，转用户实测。

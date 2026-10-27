@@ -17,6 +17,10 @@
   约束: content≤20480字节/帧; 流式最长6分钟(超时强制收口); 单bot单连接(新顶旧);
         同一用户并发交互≤3条(本桥按会话串行化)
 
+企微网关两处非常规行为 (2026-10-27 实测, 故用 aiohttp 而非 websockets 库):
+  ① 其应答帧带 MASK 位 (RFC6455 禁止服务器帧掩码; websockets 严格解析即 1002 断连)
+  ② 不响应 WebSocket 协议层 ping, 只认上述 JSON 心跳 (websockets 默认保活 50s 超时)
+
 会话: session_id="wecom-<chatid或userid>" — 每个企微群/私聊各自独立多轮记忆;
       历史在**本进程内存**(harness.session, TTL 30min), 与 web 端会话互不相通。
 
@@ -36,6 +40,8 @@ import uuid
 from collections import deque
 from pathlib import Path
 from typing import Any, Dict, List
+
+import aiohttp
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -75,11 +81,12 @@ class WecomBotBridge:
         self._session_locks: Dict[str, asyncio.Lock] = {}
         self._seen_msgids: deque = deque(maxlen=256)    # 企微重推去重
         self._last_recv = 0.0
+        self._authed = False
 
     # ---------- 发送原语 ----------
     async def _send(self, ws, frame: Dict[str, Any]) -> None:
         async with self._send_lock:
-            await ws.send(json.dumps(frame, ensure_ascii=False))
+            await ws.send_str(json.dumps(frame, ensure_ascii=False))
 
     async def _push_stream(self, ws, req_id: str, stream_id: str,
                            content: str, finish: bool) -> None:
@@ -205,16 +212,23 @@ class WecomBotBridge:
 
     async def _serve(self, ws) -> None:
         self._last_recv = time.monotonic()
+        self._authed = False
         hb = asyncio.create_task(self._heartbeat(ws))
         try:
-            async for raw in ws:
+            async for msg in ws:
+                if msg.type != aiohttp.WSMsgType.TEXT:   # CLOSE/CLOSING/ERROR → 结束迭代
+                    logger.warning("非文本帧/关闭: %s", msg.type.name)
+                    break
                 self._last_recv = time.monotonic()
-                frame = json.loads(raw)
+                frame = json.loads(msg.data)
                 cmd = frame.get("cmd") or ""
                 if not cmd:   # 认证/心跳 ack (errcode 随帧返回)
                     if frame.get("errcode"):
                         logger.warning("企微 ack 异常: errcode=%s %s",
                                        frame.get("errcode"), frame.get("errmsg"))
+                    elif not self._authed:
+                        self._authed = True
+                        logger.info("订阅成功, 机器人已上线 (bot_id=%s…)", self.bot_id[:8])
                     continue
                 if cmd == "aibot_msg_callback":
                     asyncio.create_task(self._safe_handle(ws, frame))
@@ -238,20 +252,20 @@ class WecomBotBridge:
                 pass
 
     async def run(self) -> None:
-        import websockets
-
         backoff = 1
         while True:
             try:
-                async with websockets.connect(WSS_URL, max_size=2**22) as ws:
-                    logger.info("已连接 %s (bot_id=%s…)", WSS_URL, self.bot_id[:8])
-                    await self._send(ws, {"cmd": "aibot_subscribe",
-                                          "headers": {"req_id": _req_id("sub")},
-                                          "body": {"bot_id": self.bot_id,
-                                                   "secret": self.secret}})
-                    backoff = 1
-                    await self._serve(ws)
-                    logger.warning("连接被服务端关闭, 准备重连")
+                async with aiohttp.ClientSession() as session:
+                    async with session.ws_connect(WSS_URL, max_msg_size=2**22,
+                                                  autoping=True) as ws:
+                        logger.info("已连接 %s (bot_id=%s…)", WSS_URL, self.bot_id[:8])
+                        await self._send(ws, {"cmd": "aibot_subscribe",
+                                              "headers": {"req_id": _req_id("sub")},
+                                              "body": {"bot_id": self.bot_id,
+                                                       "secret": self.secret}})
+                        backoff = 1
+                        await self._serve(ws)
+                        logger.warning("连接结束, 准备重连")
             except asyncio.CancelledError:
                 raise
             except Exception as e:  # noqa: BLE001 网络抖动一律退避重连
