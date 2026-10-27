@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import sys
 import time
@@ -62,6 +63,27 @@ RETRY_MAX_S = 30           # 断线重连退避上限
 
 def _req_id(prefix: str) -> str:
     return f"{prefix}_{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}"
+
+
+def _acquire_singleton_lock() -> bool:
+    """单实例守卫: 企微单bot单连接(新顶旧), 双实例会互踢断流 (2026-10-27 实踩)"""
+    import ctypes
+
+    lock = ROOT / "output" / "wecom_bot.lock"
+    lock.parent.mkdir(exist_ok=True)
+    if lock.exists():
+        try:
+            pid = int(lock.read_text().strip())
+            k32 = ctypes.windll.kernel32
+            h = k32.OpenProcess(0x1000, 0, pid)   # PROCESS_QUERY_LIMITED_INFORMATION
+            if h:
+                k32.CloseHandle(h)
+                print(f"已有实例在运行 (PID {pid}); 单bot单连接, 双实例互踢, 先停旧再启新")
+                return False
+        except Exception:
+            pass   # PID 已死/文件损坏 → 锁失效, 可抢
+    lock.write_text(str(os.getpid()))
+    return True
 
 
 def _clip(text: str) -> str:
@@ -275,6 +297,8 @@ class WecomBotBridge:
 
 
 def main() -> None:
+    if not _acquire_singleton_lock():
+        sys.exit(1)
     get_config()  # 先加载 .env (OPENAI/PG 等)
     cfg = get_config()
     if not cfg.wecom_bot_id or not cfg.wecom_bot_secret:

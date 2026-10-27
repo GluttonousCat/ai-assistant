@@ -40,6 +40,8 @@ aibot_respond_msg (msgtype=stream, 内容刷新式) ──wss──> 企微同�
 | `websockets` 库 30s 心跳即被 1002 `incorrect masking` 杀死 | 企微网关应答帧带 MASK 位, 违反 RFC6455（服务器帧禁掩码）; 官方 Node `ws` 库宽容故无感 |
 | 去掉 JSON 心跳改用库自带协议 ping → 50s keepalive 超时死 | 企微**不响应协议层 ping**, 只认自家 JSON 心跳（实测探针证实） |
 | 以上两条互斥约束 | 弃 `websockets` 切 **aiohttp**（对服务器掩码帧宽容）+ 每 30s JSON ping; 实测 100s/3 心跳周期零断连 |
+| 用户提问卡在"⏳ Agent 接管"不再更新 | 停旧版任务时 Windows venv `python.exe` 只是转发器, 真解释器成孤儿存活, 与新进程**双实例互踢**(单bot单连接新顶旧), 消息落在被踢连接上即断流; 清孤儿后恢复 |
+| 双实例互踢复发风险(手动跑+挂后台并存) | 加**单实例锁** `output/wecom_bot.lock`(写真身PID, 启动时 OpenProcess 探活, 活着即退出; 死进程锁自动失效可抢) |
 
 ## 4. 运行方式
 
@@ -52,6 +54,10 @@ WECOM_BOT_SECRET=...
 ```
 
 在企微里找到该机器人（单聊或拉群 @它）发文本即问即答；图片/语音等暂回复"仅支持文本"。
+
+运维注意：**单实例锁**——同一时刻只允许一个实例（企微单bot单连接，双实例互踢断流）；
+停进程要杀真解释器进程（`.venv` 的 python.exe 在 Windows 只是转发器，杀它可能留下孤儿真身，
+用 `taskkill /PID <pid> /F` 杀 `output/wecom_bot.lock` 里记录的 PID）。
 
 ## 5. 验证记录
 
