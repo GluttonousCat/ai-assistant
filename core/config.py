@@ -123,6 +123,14 @@ class Config:
     def tushare_token(self) -> str:
         return self.env("TUSHARE_TOKEN", "")
 
+    @property
+    def wecom_bot_id(self) -> str:
+        return self.env("WECOM_BOT_ID", "")
+
+    @property
+    def wecom_bot_secret(self) -> str:
+        return self.env("WECOM_BOT_SECRET", "")
+
     # PG/Milvus 连接配置已内联至 storage 包 (pg.py: pg_config / milvus_schema.py: milvus_config, 进程 env 直读)
 
     @property

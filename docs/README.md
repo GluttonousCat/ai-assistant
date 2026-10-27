@@ -47,6 +47,7 @@ docs/
 | 加/改产业链Beta、个股Alpha Skill | [agents/chain_beta_skill.md](agents/chain_beta_skill.md) |
 | 改年报披露项提取 (items/sections) | [agents/profile_extraction_handoff.md](agents/profile_extraction_handoff.md) |
 | 实现年报存储/向量召回 | [agents/annual_storage.md](agents/annual_storage.md) |
+| 企微机器人接入/桥接 | [agents/wecom_bot.md](agents/wecom_bot.md) |
 | 改主题/品牌 | [frontend/framework_theme.md](frontend/framework_theme.md) |
 | 域名/启动/看日志 | [ops/domain_setup.md](ops/domain_setup.md) |
 | 安全与加固 | [ops/security.md](ops/security.md) |
