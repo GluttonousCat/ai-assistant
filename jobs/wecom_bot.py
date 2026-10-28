@@ -96,6 +96,40 @@ def _clip(text: str) -> str:
     return text[:n] + "\n\n…(内容过长, 已截断)"
 
 
+def _md_cells(row: str) -> List[str]:
+    return [c.strip() for c in row.strip().strip("|").split("|")]
+
+
+def _wecom_md(text: str) -> str:
+    """企微气泡 Markdown 不支持表格(受限子集): 转"加粗表头+竖线行", 两列表转 key: value"""
+    lines = text.splitlines()
+    out: List[str] = []
+    i = 0
+    while i < len(lines):
+        s = lines[i].strip()
+        if s.startswith("|") and s.endswith("|") and s.count("|") >= 2:
+            j = i + 1
+            while j < len(lines) and lines[j].strip().startswith("|"):
+                j += 1
+            block = [_cells for _cells in (_md_cells(r) for r in lines[i:j])
+                     if not all(re.fullmatch(r":?-{3,}:?", c) for c in _cells if c)]
+            if block:
+                header, data = block[0], block[1:]
+                if len(header) == 2:   # 两列表 → key: value 行
+                    out.extend(f"- **{h}**: {v}" for h, v in
+                               ((r[0], r[1] if len(r) > 1 else "") for r in data))
+                else:
+                    out.append("**" + " | ".join(header) + "**")
+                    out.extend("- " + " | ".join(r) for r in data[:12])
+                    if len(data) > 12:
+                        out.append(f"- …(其余 {len(data) - 12} 行略)")
+                i = j
+                continue
+        out.append(lines[i])
+        i += 1
+    return "\n".join(out)
+
+
 class WecomBotBridge:
     def __init__(self, bot_id: str, secret: str) -> None:
         self.bot_id, self.secret = bot_id, secret
@@ -117,7 +151,7 @@ class WecomBotBridge:
                               "body": {"msgtype": "stream",
                                        "stream": {"id": stream_id,
                                                   "finish": finish,
-                                                  "content": _clip(content)}}})
+                                                  "content": _clip(_wecom_md(content))}}})
 
     # ---------- 消息处理: 收问题 → 本地 Agent → 流式回复 ----------
     async def _handle_message(self, ws, frame: Dict[str, Any]) -> None:
