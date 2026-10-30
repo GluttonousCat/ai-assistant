@@ -53,6 +53,12 @@ MAX_TEXT_CHARS = 200_000
 MIN_REPORT_CHARS = 30
 
 
+def _nn(s):
+    """剥 NUL: 话题/PDF 提取文本偶带 \\x00, psycopg2 字符串字面量拒收,
+    曾致整批同步事务回滚 (17 天断档期的入库全卡在此, 2026-10-30 实证)"""
+    return s.replace("\x00", "") if isinstance(s, str) else s
+
+
 class ZSXQ2PGSync:
     def __init__(self, group_id: str, limit: int = None):
         self.group_id = str(group_id)
@@ -103,8 +109,8 @@ class ZSXQ2PGSync:
             for row in self.db.fetch_topics_after(last_topic_id, self.limit):
                 topic_id = row["topic_id"]
                 max_topic_id = max(max_topic_id, topic_id)
-                text = strip_zsxq_tags(row.get("text") or "")
-                title = (row.get("title") or "").strip()
+                text = _nn(strip_zsxq_tags(row.get("text") or ""))
+                title = _nn((row.get("title") or "").strip())
                 create_time = row.get("create_time") or ""
 
                 # 研报准入: 空文本且无标题, 或文本过短 (非研报内容)
@@ -151,7 +157,7 @@ class ZSXQ2PGSync:
             for row in rows:
                 file_id = row["file_id"]
                 max_file_id = max(max_file_id, file_id)
-                name = row.get("name") or ""
+                name = _nn(row.get("name") or "")
 
                 # 中文翻译版不入库 (保留英文原版; 下载层已跳过, 此处兜底本地已有文件)
                 if is_chinese_translated(name):
@@ -166,6 +172,7 @@ class ZSXQ2PGSync:
 
                 file_path = self._resolve_local_path(row)
                 content, chars, status = self._extract(file_path, row)
+                content = _nn(content)
 
                 if not content:
                     status = "failed"
@@ -207,7 +214,7 @@ class ZSXQ2PGSync:
                 fp = pr.get("file_path")
                 if not fp or not os.path.exists(fp):
                     continue
-                text = self.extractor.extract(fp)
+                text = _nn(self.extractor.extract(fp))
                 if text:
                     pg.execute(
                         f"UPDATE {T_REPORT_META} SET content_text=%s, content_chars=%s, "
@@ -242,7 +249,7 @@ class ZSXQ2PGSync:
                 file_id = row["file_id"]
                 max_file_id = max(max_file_id, file_id)
 
-                name = row.get("name") or ""
+                name = _nn(row.get("name") or "")
 
                 # 中文翻译版不入库 (保留英文原版)
                 if is_chinese_translated(name):
@@ -255,6 +262,7 @@ class ZSXQ2PGSync:
                     continue
                 file_path = self._resolve_local_path(row)
                 content, chars, status = self._extract(file_path, row)
+                content = _nn(content)
 
                 # 关联话题文本 (若 PDF 提取为空, 用话题文本兜底)
                 if (not content or chars < MIN_REPORT_CHARS) and row.get("topic_id"):
