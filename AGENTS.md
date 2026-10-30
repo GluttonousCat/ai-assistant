@@ -33,6 +33,7 @@ skills/      领域技能 (每技能一目录, 专业知识放 prompt):
              research(研究生产线: 证据→十章草稿→成稿, 任务分派见 docs/research/tasks/)
 jobs/        任务层一体: scheduler(Tushare 21:00) / zsxq_scheduler(爬虫 07:00/23:00) /
              管线入口(daily_fetch_zxsq, sync_zxsq_to_pg, merge_report_duplicates, smoke) /
+             health_sentinel(独立心跳哨兵: API探活+WS广播+自动拉起, 8209) /
              wecom_bot(企微智能机器人 wss 长连接桥接→本地Agent, 见 docs/agents/wecom_bot.md)
 tools/       pdf(通用PDF工具: 文本/渲染/OCR/表格) / zsxq爬虫 / market行情同步 /
              cninfo巨潮定期报告(获取+解析, 自包含) / langgraph(LangGraph原子封装: 建图/记忆) / finance(SQL guard, KB, 研报文件提取器)
