@@ -75,6 +75,46 @@ def build_app(interval: float, fail_threshold: int, auto_restart: bool) -> FastA
             s.settimeout(1)
             return s.connect_ex(("127.0.0.1", 8208)) == 0
 
+    # ---- 企微机器人监护: 锁文件 PID 探活, 死亡自动拉起 (实证三次静默死亡) ----
+    def wecom_alive() -> bool:
+        import ctypes
+        import ctypes.wintypes as wt
+        try:
+            pid = int((ROOT / "output" / "wecom_bot.lock").read_text().strip())
+        except (OSError, ValueError):
+            return False
+        SYNCHRONIZE = 0x00100000
+        h = ctypes.windll.kernel32.OpenProcess(SYNCHRONIZE, False, pid)
+        if not h:
+            return False
+        ctypes.windll.kernel32.CloseHandle(h)
+        return True
+
+    WECOM_CMD = [str(ROOT / ".venv" / "Scripts" / "python.exe"),
+                 "-m", "jobs.wecom_bot"]
+    state["wecom_down"] = 0
+
+    async def wecom_guard() -> None:
+        if wecom_alive():
+            state["wecom_down"] = 0
+            return
+        state["wecom_down"] += 1
+        if state["wecom_down"] < 3:      # 连续3拍才动手 (避免启动间隙误杀)
+            return
+        if state["wecom_down"] > 3:      # 已拉起过, 等它写锁 (给60s启动窗)
+            if state["wecom_down"] > 9:  # 9拍(~90s)仍死 → 再拉
+                state["wecom_down"] = 3
+            return
+        logger.error("[告警] wecom_bot 进程死亡, 自动拉起")
+        await broadcast({"type": "alert", "event": "wecom_down", "ts": time.time()})
+        (ROOT / "output" / "wecom_bot.lock").unlink(missing_ok=True)
+        subprocess.Popen(  # noqa: S603 固定命令行
+            WECOM_CMD, cwd=str(ROOT),
+            stdout=open(ROOT / "logs" / "wecom_bot.log", "ab"),
+            stderr=subprocess.STDOUT,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        state["wecom_down"] = 4
+
     async def tick() -> None:
         t0 = time.time()
         try:
@@ -122,7 +162,7 @@ def build_app(interval: float, fail_threshold: int, auto_restart: bool) -> FastA
 
     @app.get("/state")
     async def state_ep():
-        return state
+        return {**state, "wecom_ok": wecom_alive()}
 
     @app.websocket("/ws")
     async def ws_ep(ws: WebSocket):
@@ -145,6 +185,7 @@ def build_app(interval: float, fail_threshold: int, auto_restart: bool) -> FastA
             while True:
                 try:
                     await tick()
+                    await wecom_guard()
                 except Exception as e:  # noqa: BLE001 哨兵自身永不退出
                     logger.error(f"tick 异常: {e}")
                 await asyncio.sleep(interval)
