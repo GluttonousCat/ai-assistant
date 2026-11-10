@@ -277,13 +277,19 @@ def fetch_recent_financial(pro, table: str, codes: List[str],
     """
     api_name = FIN_TABLE_APIS[table]
     fields = table_fields(table)
+    # fina_indicator 的 start_date/end_date 语义是报告期而非公告日 (income 家族是
+    # 公告日): 公告日窗口起点会整段滤掉更早报告期的行 (实证 2026Q3 全缺 — 报告期
+    # 0930 < 窗口起点 1013)。该表把窗口平移为报告期下限 (前移 120 天覆盖窗口内
+    # 公告的报告期), 行量仍只有近期数期, 不增重。
+    fetch_start = (datetime.strptime(start, "%Y%m%d") - timedelta(days=120)
+                   ).strftime("%Y%m%d") if table == "fina_indicator" else start
     total = 0
     for i, ts_code in enumerate(codes, 1):
         rows = 0
         for attempt in range(1, 4):
             try:
                 rows = _upsert_stock_fin(pro, table, api_name, fields,
-                                         ts_code, start=start)
+                                         ts_code, start=fetch_start)
                 break
             except PG_DOWN as e:
                 logger.warning(f"{table} {ts_code} PG 断连 "
