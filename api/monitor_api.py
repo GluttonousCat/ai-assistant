@@ -1,11 +1,12 @@
 # -*- encoding: utf-8 -*-
 """
-Agent 实时监控 API (SSE)
+Real-time Agent monitoring API (SSE)
 
-- POST /api/monitor/stream  每 2s 推一帧全量状态 (SSE, 与 agent/stream 同协议族)
-- GET  /api/monitor/state   一次性快照 (首屏/调试)
-状态 = core.metrics 进程内指标 (会话/漏斗/工具/LLM) + PG 侧数据新鲜度 (10s 缓存,
-含 PG 延迟/研报管线/同步水位线)。整组 require_admin (DB 实时角色校验)。
+- POST /api/monitor/stream  Push a full state frame every 2s (SSE, same protocol family as agent/stream)
+- GET  /api/monitor/state   One-shot snapshot (first paint / debugging)
+State = in-process metrics from core.metrics (sessions/funnel/tools/LLM) + PG-side
+data freshness (10s cache, incl. PG latency/report pipeline/sync watermarks).
+The whole group is require_admin (live DB role check).
 """
 from __future__ import annotations
 
@@ -30,7 +31,7 @@ _PG_CACHE: Dict[str, Any] = {"ts": 0.0, "data": None}
 
 
 def _pg_state() -> Dict[str, Any]:
-    """PG 侧状态 (延迟/研报管线/同步水位线); 10s 缓存, SSE 帧间不重复查库"""
+    """PG-side state (latency/report pipeline/sync watermarks); cached 10s so SSE frames don't re-query the DB"""
     if time.time() - _PG_CACHE["ts"] < 10:
         return _PG_CACHE["data"] or {}
     t0 = time.time()
@@ -55,7 +56,7 @@ def _pg_state() -> Dict[str, Any]:
             "freshness": [dict(r) for r in freshness],
             "last_trade_date": quote["d"] if quote else None,
         }
-    except Exception as e:  # noqa: BLE001 PG 不可达也是监控要展示的状态
+    except Exception as e:  # noqa: BLE001 PG being unreachable is itself a state monitoring must show
         data = {"ok": False, "error": str(e)[:80]}
     _PG_CACHE["ts"] = time.time()
     _PG_CACHE["data"] = data
@@ -75,7 +76,7 @@ async def monitor_state(current: TokenPayload = Depends(require_admin)):
 async def monitor_stream(current: TokenPayload = Depends(require_admin)):
     async def gen():
         while True:
-            # PG 探活是同步 psycopg2, 放线程池防堵事件循环 (AGENTS 同步重IO坑)
+            # PG probing is synchronous psycopg2; run it in a thread pool to avoid blocking the event loop (AGENTS heavy-sync-IO pitfall)
             payload = await asyncio.to_thread(_build_state)
             yield f"data: {json.dumps(payload, ensure_ascii=False, default=str)}\n\n"
             await asyncio.sleep(2)

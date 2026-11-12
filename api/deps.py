@@ -1,14 +1,15 @@
 # -*- encoding: utf-8 -*-
 """
-API 公共依赖: 登录态校验
+Shared API dependencies: login-state validation
 
-用法:
+Usage:
     from api.deps import get_current_user
     @router.get("/xxx")
     async def xxx(current: TokenPayload = Depends(get_current_user)): ...
 
-鉴权范围由 app.py 的全局中间件控制 (白名单: 登录/注册/健康检查/静态资源),
-路由内部一般无需再显式 Depends; 本依赖供需要用户身份/角色判断的端点使用。
+Auth scope is enforced by the global middleware in app.py (whitelist: login/
+register/health check/static assets), so routes generally need no explicit
+Depends; these dependencies are for endpoints that need user identity/role.
 """
 from __future__ import annotations
 
@@ -34,7 +35,7 @@ def _extract_token(authorization: Optional[str]) -> Optional[str]:
 def get_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
 ) -> TokenPayload:
-    """校验 Bearer Token, 失败抛 401"""
+    """Validate the Bearer token; raises 401 on failure"""
     token = credentials.credentials if credentials else None
     if not token:
         raise HTTPException(status_code=401, detail="未登录")
@@ -45,7 +46,7 @@ def get_current_user(
 
 
 def require_admin(current: TokenPayload = Depends(get_current_user)) -> TokenPayload:
-    """管理员校验: 以数据库实时角色为准 (不信 token 内 role, 降权即时生效)"""
+    """Admin check: the live DB role is authoritative (token role is not trusted, so demotion takes effect immediately)"""
     from storage.pg import PgClient
     try:
         with PgClient() as pg:
@@ -61,7 +62,7 @@ def require_admin(current: TokenPayload = Depends(get_current_user)) -> TokenPay
 
 
 async def ws_auth(websocket: WebSocket) -> Optional[TokenPayload]:
-    """WebSocket 鉴权: 优先 header Authorization, 其次 query 参数 ?token="""
+    """WebSocket auth: prefer the Authorization header, then the ?token= query parameter"""
     token = _extract_token(websocket.headers.get("authorization"))
     if not token:
         token = websocket.query_params.get("token")

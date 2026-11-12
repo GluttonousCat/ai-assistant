@@ -1,13 +1,13 @@
 # -*- encoding: utf-8 -*-
 """
-研报中心 API
-- GET  /api/reports                      研报列表 (分页/筛选: 标的/来源/分析状态)
-- GET  /api/reports/{report_id}          研报详情 (含提取结果与预测数据)
-- GET  /api/reports/{report_id}/download 下载研报原文文件 (本地已下载的 PDF/docx)
-- POST /api/reports/{id}/analyze         触发单篇 LLM 结构化提取 (同步, 一次性返回)
-- POST /api/reports/{id}/analyze/stream  同上, SSE 流式 (Agent 流程阶段 + LLM 输出逐块)
-- POST /api/reports/analyze              批量提取未分析研报
-- GET  /api/reports/stocks               有研报覆盖的标的列表 (研报热度)
+Report center API
+- GET  /api/reports                      Report list (paginated/filters: target/source/analysis status)
+- GET  /api/reports/{report_id}          Report detail (incl. extraction results and forecast data)
+- GET  /api/reports/{report_id}/download Download the original report file (locally downloaded PDF/docx)
+- POST /api/reports/{id}/analyze         Trigger single-report LLM structured extraction (sync, one-shot return)
+- POST /api/reports/{id}/analyze/stream  Same as above but SSE streaming (Agent pipeline stages + LLM output chunks)
+- POST /api/reports/analyze              Batch-extract unanalyzed reports
+- GET  /api/reports/stocks               Targets with report coverage (report heat)
 """
 from __future__ import annotations
 
@@ -21,7 +21,6 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
-from fastapi.security import HTTPBearer
 
 from core.logger import get_logger
 from core.security import TokenPayload
@@ -33,11 +32,6 @@ from storage.pg import PgClient
 logger = get_logger(__name__)
 reports_router = APIRouter(prefix="/api/reports", tags=["reports"])
 
-_bearer = HTTPBearer(auto_error=False)
-
-# 标题常见前缀 (中文版-/【券商】-/券商-) 剥离后取 "券商-标的" 展示名
-_ORG_PREFIX_RE = None  # lazy
-
 
 @reports_router.get("")
 async def list_reports(
@@ -45,12 +39,12 @@ async def list_reports(
     keyword: Optional[str] = None,
     source: Optional[str] = None,
     analysis: Optional[str] = None,   # done / pending / all
-    market: Optional[str] = None,     # A股 / 美股 / 港股 / 宏观 / 商品 / 行业 / 其他
-    industry: Optional[str] = None,   # 行业标签 (tags_industries 精确匹配)
-    region: Optional[str] = None,     # 地区标签
-    commodity: Optional[str] = None,  # 商品标签
-    theme: Optional[str] = None,      # 主题标签
-    target: Optional[str] = None,     # 标的标签
+    market: Optional[str] = None,     # A-shares / US stocks / HK stocks / macro / commodity / industry / other
+    industry: Optional[str] = None,   # industry tag (exact match on tags_industries)
+    region: Optional[str] = None,     # region tag
+    commodity: Optional[str] = None,  # commodity tag
+    theme: Optional[str] = None,      # theme tag
+    target: Optional[str] = None,     # target tag
     page: int = 1,
     page_size: int = 20,
     current: TokenPayload = Depends(get_current_user),
@@ -60,8 +54,8 @@ async def list_reports(
 
     where = ["1=1"]
     args: list = []
-    # 只展示原始研报文件 (pdf/docx); 不展示话题文本解读版 (txt 易重复)
-    # 排除 OCR 进行中的条目 (pending_ocr: 正文尚未就绪, 展示出来是空壳)
+    # Show only original report files (pdf/docx); hide topic-text digest versions (txt duplicates easily)
+    # Exclude entries still undergoing OCR (pending_ocr: body not ready, they would render as empty shells)
     if source:
         where.append("source = %s")
         args.append(source)
@@ -71,14 +65,14 @@ async def list_reports(
     if market:
         where.append("market = %s")
         args.append(market)
-    # 行业/地区: 独立列精确匹配 (LLM Analysis 提取); 兼容 tags 列 (深度提取多值)
+    # Industry/region: exact match on dedicated columns (from LLM Analysis); also matches the tags columns (multi-value, from deep extraction)
     if industry:
         where.append("(industry = %s OR ',' || COALESCE(tags_industries,'') || ',' LIKE %s)")
         args.extend([industry, f"%,{industry},%"])
     if region:
         where.append("(region = %s OR ',' || COALESCE(tags_regions,'') || ',' LIKE %s)")
         args.extend([region, f"%,{region},%"])
-    # 商品/主题/标的: tags 多值列
+    # Commodity/theme/target: multi-value tags columns
     for col, val in (
         ("tags_commodities", commodity),
         ("tags_themes", theme),
@@ -121,7 +115,7 @@ async def list_reports(
 
 @reports_router.get("/tags")
 async def report_tags(current: TokenPayload = Depends(get_current_user)):
-    """分类聚合: 行业/地区来自独立列 (LLM Analysis), 商品/主题/标的来自 tags 列 (深度提取)"""
+    """Tag aggregates: industries/regions from dedicated columns (LLM Analysis); commodities/themes/targets from tags columns (deep extraction)"""
     with PgClient() as pg:
         industries = pg.fetch_all(
             "SELECT industry AS tag, COUNT(*) AS n FROM fin.report_meta "
@@ -146,7 +140,7 @@ async def report_tags(current: TokenPayload = Depends(get_current_user)):
 
 @reports_router.get("/stocks")
 async def report_stocks(current: TokenPayload = Depends(get_current_user)):
-    """研报覆盖统计 (按标的聚合, 含最新分析观点)"""
+    """Report coverage stats (aggregated by target, incl. latest analysis view)"""
     with PgClient() as pg:
         rows = pg.fetch_all(
             """
@@ -187,7 +181,7 @@ async def report_detail(report_id: int,
         if row.get(k):
             row[k] = row[k].strftime("%Y-%m-%d %H:%M") if k == "created_at" \
                 else row[k].strftime("%Y-%m-%d")
-    # 英文原版有译文用译文 (中文正文 content_text_cn 为空, 自然回退原文)
+    # Prefer the translation when an English original has one (content_text_cn is empty for Chinese bodies, naturally falls back to the original text)
     row["content_text"] = ((row.pop("content_text_cn", None) or row.get("content_text") or "")
                            )[:8000]
     row["forecasts"] = forecasts
@@ -197,7 +191,7 @@ async def report_detail(report_id: int,
 @reports_router.get("/{report_id}/download")
 async def download_report_file(report_id: int,
                                current: TokenPayload = Depends(get_current_user)):
-    """下载研报原文 (本地已下载的 PDF/docx 原始文件)"""
+    """Download the original report (locally downloaded PDF/docx file)"""
     with PgClient() as pg:
         row = pg.fetch_one(
             "SELECT file_name, file_path FROM fin.report_meta WHERE report_id=%s",
@@ -209,7 +203,7 @@ async def download_report_file(report_id: int,
         raise HTTPException(status_code=404,
                             detail="原文文件不存在 (话题文本类研报无原文文件, 或本地文件已清理)")
     fname = row.get("file_name") or os.path.basename(path)
-    # RFC 5987: 中文文件名用 filename*=UTF-8''
+    # RFC 5987: non-ASCII filenames go in filename*=UTF-8''
     return FileResponse(
         path,
         media_type="application/octet-stream",
@@ -231,7 +225,7 @@ def _run_extract(report_id: Optional[int], limit: int) -> Dict[str, Any]:
 @reports_router.post("/{report_id}/analyze")
 async def analyze_report(report_id: int,
                          current: TokenPayload = Depends(get_current_user)):
-    """单篇研报 LLM 结构化提取 (同步, 单篇秒级)"""
+    """Single-report LLM structured extraction (sync, seconds per report)"""
     try:
         result = await asyncio.to_thread(_run_extract, report_id, 1)
     except Exception as e:
@@ -247,14 +241,15 @@ def _sse(event: str, data: Any) -> str:
 async def analyze_report_stream(report_id: int,
                                 current: TokenPayload = Depends(get_current_user)):
     """
-    单篇研报 AI 分析 (SSE 流式)。事件:
-      stage {stage, message}   Agent 流程阶段 (读取正文/LLM提取/解析/入库)
-      delta {text}             LLM 原始输出逐块 (多次)
-      data  {data}             结构化结果摘要
-      error {message}          失败
-      done  {}                 结束 (error 后也会发, 便于前端统一收尾)
-    Skill 生成器为同步重 IO (LLM/PG), 放 worker 线程执行, 事件经队列桥接到
-    async 生成器 —— 不阻塞事件循环 (同 21:00 同步调度踩过的坑)。
+    Single-report AI analysis (SSE streaming). Events:
+      stage {stage, message}   Agent pipeline stage (read body/LLM extract/parse/persist)
+      delta {text}             Raw LLM output in chunks (multiple)
+      data  {data}             Structured result summary
+      error {message}          Failure
+      done  {}                 End (also sent after error so the frontend can wrap up uniformly)
+    The skill generator is synchronous heavy IO (LLM/PG); it runs in a worker
+    thread and events bridge to the async generator via a queue — the event loop
+    is not blocked (same pitfall as the 21:00 sync scheduler).
     """
     events: "_queue.Queue[Optional[Dict[str, Any]]]" = _queue.Queue()
 
@@ -267,7 +262,7 @@ async def analyze_report_stream(report_id: int,
             logger.exception(f"研报 #{report_id} AI 分析流式执行失败")
             events.put({"type": "error", "message": str(e)})
         finally:
-            events.put(None)  # 结束哨兵
+            events.put(None)  # end sentinel
 
     threading.Thread(target=_worker, daemon=True,
                      name=f"report-stream-{report_id}").start()
@@ -298,7 +293,7 @@ async def analyze_report_stream(report_id: int,
 @reports_router.post("/analyze")
 async def analyze_batch(limit: int = 10,
                         current: TokenPayload = Depends(require_admin)):
-    """批量提取未分析研报 (后台线程, 立即返回)"""
+    """Batch-extract unanalyzed reports (background thread, returns immediately)"""
     from fastapi.concurrency import run_in_threadpool
 
     def _job():

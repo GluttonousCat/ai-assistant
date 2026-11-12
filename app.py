@@ -1,7 +1,7 @@
 # -*- encoding: utf-8 -*-
 """
-fin-agent 统一入口
-运行: uvicorn app:app --reload --port 8208
+fin-agent unified entrypoint
+Run: uvicorn app:app --reload --port 8208
 """
 from pathlib import Path
 
@@ -43,14 +43,14 @@ app.include_router(auth_router)
 app.include_router(reports_router)
 app.include_router(monitor_router)
 
-# ---------- 前端静态托管 (平台单页应用) ----------
+# ---------- Frontend static hosting (platform SPA) ----------
 _WEB_DIST = Path(__file__).parent / "web" / "dist"
 if _WEB_DIST.exists():
     app.mount("/assets", StaticFiles(directory=_WEB_DIST / "assets"), name="assets")
 
     @app.get("/", include_in_schema=False)
     async def index():
-        """平台首页 (登录 + 控制台, React 单页应用)"""
+        """Platform index (login + console, React SPA)"""
         return FileResponse(_WEB_DIST / "index.html")
 
     @app.get("/login", include_in_schema=False)
@@ -59,7 +59,7 @@ if _WEB_DIST.exists():
 
     @app.get("/range", include_in_schema=False)
     async def range_dashboard():
-        """区间扫描看板 (同一单页应用)"""
+        """Range scan dashboard (same SPA)"""
         return FileResponse(_WEB_DIST / "index.html")
 
 

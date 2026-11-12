@@ -1,13 +1,15 @@
 """
-评测数据集 v3 生成器 -- 口语语料 + 值级 gold 断言
+Eval dataset v3 generator -- colloquial corpus + value-level gold assertions
 
-对 v2 的两大升级:
-1. 句子真实性: 语义级口语改写 ("赚了多少钱"->净利润, "现在多少钱"->股价,
-   "去年/前年"相对时间), 三种句式风格 (标准/口语/电报体), 代码式查询 (600519)
-2. 值级 gold: 生成时查库预计算每条用例的正确答案 (end_date + value),
-   评测时比对引擎返回值 -> 能抓"有数据但数据错"的假阴性
+Two major upgrades over v2:
+1. Sentence realism: semantic colloquial rephrasing ("赚了多少钱"->net profit,
+   "现在多少钱"->stock price, "去年/前年" relative times), three sentence styles
+   (standard/colloquial/telegraphic), code-style queries (600519)
+2. Value-level gold: at generation time, query the DB to precompute each case's
+   correct answer (end_date + value); at eval time compare with the engine's
+   returned value -> catches "has data but wrong data" false negatives
 
-时间基准: 生成时刻 now (相对时间 去年/前年 按 now 解析, 记录在 meta)
+Time base: generation-time now (relative times 去年/前年 resolved against now, recorded in meta)
 """
 from __future__ import annotations
 
@@ -16,7 +18,6 @@ import json
 import random
 import re
 import sys
-import time
 from collections import Counter
 from datetime import date
 from pathlib import Path
@@ -32,11 +33,11 @@ OUT_DIR.mkdir(exist_ok=True)
 NOW = date.today()
 
 # ============================================================
-# 口语指标语料: 标准指标 -> [(口语表达, 句式tag)]
-# 句式tag: "noun"=可加"的"; "question"=疑问句式不加"的"
+# Colloquial metric corpus: standard metric -> [(colloquial expression, style tag)]
+# Style tag: "noun"=can take the possessive "的"; "question"=interrogative, no "的"
 # ============================================================
 SPOKEN_METRICS: Dict[str, List[Tuple[str, str]]] = {
-    # 财务
+    # Financials
     "fin_i_revenue": [("营业收入", "noun"), ("营收", "noun"), ("收入", "noun"),
                       ("营业额", "noun"), ("卖了多少", "question")],
     "fin_i_n_income_attr_p": [("净利润", "noun"), ("归母净利润", "noun"), ("净利", "noun"),
@@ -59,19 +60,19 @@ SPOKEN_METRICS: Dict[str, List[Tuple[str, str]]] = {
     "fin_b_equity_attr_p": [("净资产", "noun")],
     "fin_b_goodwill": [("商誉", "noun")],
     "fin_c_n_cashflow_act": [("经营现金流", "noun"), ("经营活动现金流", "noun")],
-    # 行情 (daily 数据可靠)
+    # Quotes (daily data reliable)
     "mkt_d_close": [("股价", "noun"), ("收盘价", "noun"), ("最新价", "noun"),
                     ("现价", "noun"), ("现在多少钱", "question"), ("多少钱", "question")],
     "mkt_d_pct_chg": [("涨跌幅", "noun"), ("涨幅", "noun"), ("涨跌", "noun"),
                       ("涨了没", "question"), ("涨了多少", "question")],
-    # 行情 (daily_basic 断档, 只做意图/SQL断言, 无值级gold)
+    # Quotes (daily_basic break-off: intent/SQL assertions only, no value-level gold)
     "mkt_db_pe_ttm": [("市盈率", "noun"), ("PE", "noun"), ("pe", "noun")],
     "mkt_db_pb": [("市净率", "noun"), ("PB", "noun")],
     "mkt_db_total_mv": [("总市值", "noun"), ("市值", "noun")],
     "mkt_db_turnover_rate": [("换手率", "noun")],
 }
 
-# 指标 -> (表, 列名, 日期列)  用于查库取真值
+# Metric -> (table, column, date column)  used to fetch ground truth from the DB
 METRIC_LOC: Dict[str, Tuple[str, str, str]] = {}
 for _std, _alias in SPOKEN_METRICS.items():
     if _std.startswith("fin_i_"):
@@ -88,10 +89,10 @@ for _std, _alias in SPOKEN_METRICS.items():
         METRIC_LOC[_std] = ("stock.daily_basic", _std[7:], "trade_date")
 
 # ============================================================
-# 时间语料: (中文表达, kind, 解析参数)  相对时间按 NOW 解析
+# Time corpus: (Chinese expression, kind, parse arg)  relative times resolved against NOW
 # ============================================================
 def _resolve_time(kind: str, arg) -> Optional[str]:
-    """把时间表达解析为财报 end_date / 行情锚点. 返回 None 表示"最新一期"."""
+    """Resolve a time expression to a report end_date / quote anchor. Returns None for "latest period"."""
     if kind == "year":
         return f"{arg}-12-31"
     if kind == "last_year":
@@ -107,7 +108,7 @@ def _resolve_time(kind: str, arg) -> Optional[str]:
 
 
 TIME_CORPUS = [
-    # (表达, kind, arg, 适用于财务/行情)
+    # (expression, kind, arg, applies to financials/quotes)
     ("2023年", "year", 2023, "fin"),
     ("2022年", "year", 2022, "fin"),
     ("2024年", "year", 2024, "fin"),
@@ -123,23 +124,23 @@ TIME_CORPUS = [
     ("2024年半年报", "half", 2024, "fin"),
     ("最新一期", "latest", None, "fin"),
     ("最近一期", "latest", None, "fin"),
-    ("", "latest", None, "fin"),  # 不带时间 = 默认最新
+    ("", "latest", None, "fin"),  # no time word = default latest
 ]
 
-# 句式模板: {S}=股票 {T}=时间 {M}=指标  (question 形式的指标不加"的")
+# Sentence templates: {S}=stock {T}=time {M}=metric  (question-style metrics take no "的")
 SENT_STANDARD = [
     "{verb}{S}{T}的{M}", "{S}{T}的{M}",
 ]
 VERBS = ["查询", "查一下", "帮我查一下", "请问", "看看", "帮我看看", "看一下", "查查"]
-SENT_QUESTION = [  # 口语疑问式 (M 为 question 形式)
+SENT_QUESTION = [  # colloquial interrogative (M in question form)
     "{S}{T}{M}", "{S}{T}{M}？", "{verb}{S}{T}{M}",
 ]
-SENT_TELEGRAPH = [  # 电报体/省略
+SENT_TELEGRAPH = [  # telegraphic/elliptical
     "{S} {M}", "{S}{T} {M}", "{M} {S}",
 ]
 
 # ============================================================
-# 查库取真值
+# Fetch ground truth from the DB
 # ============================================================
 _pg = None
 
@@ -153,8 +154,8 @@ def _pgc():
 
 
 def fetch_gold_value(ts_code: str, std_metric: str, end_date: Optional[str]) -> Optional[Dict]:
-    """查库: 该股该指标在指定报告期(或最新一期)的真值.
-    返回 {ts_code, date, value} 或 None(无数据)."""
+    """Query the DB: ground truth of a stock's metric for the given report period (or the latest).
+    Returns {ts_code, date, value} or None (no data)."""
     tbl, col, date_col = METRIC_LOC[std_metric]
     pg = _pgc()
     if end_date:
@@ -185,7 +186,7 @@ def _jsonify_num(v):
 
 
 # ============================================================
-# 句子组装
+# Sentence assembly
 # ============================================================
 def _render_sentence(rng, name: str, time_expr: str, spoken: str, style: str) -> str:
     if style == "standard":
@@ -200,7 +201,7 @@ def _render_sentence(rng, name: str, time_expr: str, spoken: str, style: str) ->
 
 
 def _pick_time(rng, scope: str) -> Tuple[str, Optional[str], Dict]:
-    """选时间表达 -> (表达, 解析后的end_date锚点, gold.time)"""
+    """Pick a time expression -> (expression, resolved end_date anchor, gold.time)"""
     cands = [c for c in TIME_CORPUS if c[3] == scope]
     expr, kind, arg, _ = rng.choice(cands)
     anchor = _resolve_time(kind, arg)
@@ -209,7 +210,7 @@ def _pick_time(rng, scope: str) -> Tuple[str, Optional[str], Dict]:
 
 
 # ============================================================
-# 用例构造器 (均带值级 gold)
+# Case constructors (all carry value-level gold)
 # ============================================================
 _sig_count: Counter = Counter()
 
@@ -220,20 +221,20 @@ def _sig(codes, metric, anchor) -> str:
 
 def _mk_single(rng, n, cid, category, pool, style_weights,
                metric_filter) -> Optional[EvalCase]:
-    """单股单指标 (财务或行情), 含值级 gold.
-    metric_filter: 'fin' 只选财务指标 / 'mkt' 只选行情指标(PE/PB断档类不带值断言)"""
+    """Single stock, single metric (financial or quote), with value-level gold.
+    metric_filter: 'fin' selects only financial metrics / 'mkt' only quote metrics (PE/PB break-off types carry no value assertion)"""
     name, code, _ind = rng.choice(pool)
     stds = [m for m in SPOKEN_METRICS if
             (m.startswith("fin") if metric_filter == "fin" else m.startswith("mkt"))]
     for _ in range(12):
         std = rng.choice(stds)
-        # daily_basic 断档(仅到2012): 不带时间词, 无值级gold, has_result=maybe
+        # daily_basic break-off (only to 2012): no time word, no value-level gold, has_result=maybe
         if std.startswith("mkt_db"):
             gold_row = None
             time_expr, anchor, gold_time = "", None, {"kind": "latest", "arg": None, "anchor": None}
         elif metric_filter == "fin":
             time_expr, anchor, gold_time = _pick_time(rng, "fin")
-        else:  # mkt_d: 股价/涨跌 锚最新交易日
+        else:  # mkt_d: price/change anchored to the latest trading day
             time_expr = rng.choice(["", "", "今天"])
             anchor = None
             gold_time = {"kind": "latest", "arg": None, "anchor": None}
@@ -253,7 +254,7 @@ def _mk_single(rng, n, cid, category, pool, style_weights,
             )
         gold_row = fetch_gold_value(code, std, anchor)
         if gold_row is None:
-            continue  # 该股该期无真值, 重选
+            continue  # no ground truth for this stock/period, re-pick
         spoken, tag = rng.choice(SPOKEN_METRICS[std])
         style = rng.choices(["standard", "question", "telegraph"], style_weights)[0]
         if tag == "question" and style == "standard":
@@ -285,7 +286,7 @@ def _mk_single(rng, n, cid, category, pool, style_weights,
 
 
 def _mk_code_query(rng, n) -> Optional[EvalCase]:
-    """代码式查询: 600519 / 000001.SZ"""
+    """Code-style queries: 600519 / 000001.SZ"""
     name, code, _ = rng.choice(STOCK_POOL)
     for form in [code.split(".")[0], code]:
         std = rng.choice(["mkt_d_close", "mkt_d_pct_chg", "fin_f_roe",
@@ -311,7 +312,7 @@ def _mk_code_query(rng, n) -> Optional[EvalCase]:
 
 
 def _mk_alias_case(rng, n) -> Optional[EvalCase]:
-    """别名查询 (宁王/毛子/招行...), 值级 gold"""
+    """Alias queries (宁王/毛子/招行...), value-level gold"""
     cands = [(a, c, nm) for c, al in ALIAS_MAP for a in al
              for nm in [next((s[0] for s in STOCK_POOL if s[1] == c), None)] if nm]
     alias, code, std_name = rng.choice(cands)
@@ -339,7 +340,7 @@ def _mk_alias_case(rng, n) -> Optional[EvalCase]:
 
 
 def _mk_compare_case(rng, n) -> Optional[EvalCase]:
-    """双股对比 (意图+SQL断言; 值级断言跳过--不同股最新期不同)"""
+    """Two-stock comparison (intent+SQL assertions; value-level assertion skipped -- latest periods differ across stocks)"""
     (n1, c1, _), (n2, c2, _) = rng.sample(STOCK_POOL, 2)
     std = rng.choice(list(SPOKEN_METRICS.keys()))
     spoken, _tag = rng.choice([p for p in SPOKEN_METRICS[std] if p[1] == "noun"])
@@ -408,7 +409,7 @@ def _mk_rank_case(rng, n) -> Optional[EvalCase]:
 
 
 def _mk_multi_metric(rng, n) -> Optional[EvalCase]:
-    """单股多指标"""
+    """Single stock, multiple metrics"""
     name, code, _ = rng.choice(FIN3)
     picks = [m for m in ("fin_i_revenue", "fin_i_n_income_attr_p", "fin_f_roe",
                          "fin_f_debt_to_assets", "fin_b_total_assets",
@@ -440,7 +441,7 @@ def _mk_multi_metric(rng, n) -> Optional[EvalCase]:
 
 
 def _mk_intent_case(rng, n) -> Optional[EvalCase]:
-    """detect/verify/report 意图类"""
+    """detect/verify/report intent cases"""
     name, code, _ = rng.choice(FIN3)
     kind = rng.choice(["detect", "detect", "detect", "verify", "report"])
     tmpl = {
@@ -486,7 +487,7 @@ def _mk_attack(n) -> EvalCase:
 
 
 # ============================================================
-# 主生成流程
+# Main generation flow
 # ============================================================
 def generate(n: int = 1000, seed: int = 42) -> List[EvalCase]:
     rng = random.Random(seed)
@@ -508,7 +509,7 @@ def generate(n: int = 1000, seed: int = 42) -> List[EvalCase]:
     seq = 0
     for name, cnt, fn in plan:
         made = 0
-        for i in range(cnt * 3):  # 重试余量
+        for i in range(cnt * 3):  # retry headroom
             if made >= cnt:
                 break
             seq += 1
@@ -519,7 +520,7 @@ def generate(n: int = 1000, seed: int = 42) -> List[EvalCase]:
             if c is not None and c.question.strip():
                 cases.append(c)
                 made += 1
-    # 补足
+    # Top up if short of target
     while len(cases) < n:
         seq += 1
         c = _mk_single(rng, seq, f"finx_{seq:04d}", "financial", FIN3, [0.5, 0.3, 0.2])
@@ -540,7 +541,7 @@ def validate(cases: List[EvalCase]) -> Dict[str, Any]:
         for pat in ("{}", "None", "的的", "的的", "  ", "？？"):
             if pat in c.question:
                 issues.append(f"[异常文本] {c.question!r} 含 {pat!r}")
-        # 值级gold完整性
+        # value-level gold completeness
         if c.expects.get("value_assert"):
             if not c.gold.get("values"):
                 issues.append(f"[gold缺失] {c.question} 声明值断言但无values")

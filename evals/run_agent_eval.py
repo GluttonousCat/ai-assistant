@@ -1,21 +1,21 @@
 # -*- encoding: utf-8 -*-
 """
-Agent 对话评测器 (v1)
+Agent chat evaluator (v1)
 
-对 evals/agent_cases.py 全量用例跑真实 LLM+PG, 断言:
-工具选择 / 回答关键词 / 无工具泄漏, 输出 JSON 报告 + 控制台摘要。
+Runs every case in evals/agent_cases.py against the real LLM+PG, asserting:
+tool selection / answer keywords / no tool leakage; outputs a JSON report +
+console summary.
 
-用法 (项目根目录):
-    .venv\\Scripts\\python.exe evals\\run_agent_eval.py                  # 全量 (快车道跟随 config = 线上路径)
-    .venv\\Scripts\\python.exe evals\\run_agent_eval.py --no-fast-lane  # 强制全走 Agent 循环
-    .venv\\Scripts\\python.exe evals\\run_agent_eval.py --only multiturn,query  # 按类型过滤
+Usage (from project root):
+    .venv\\Scripts\\python.exe evals\\run_agent_eval.py                  # full run (fast lane follows config = production path)
+    .venv\\Scripts\\python.exe evals\\run_agent_eval.py --no-fast-lane  # force the full Agent loop
+    .venv\\Scripts\\python.exe evals\\run_agent_eval.py --only multiturn,query  # filter by type
 
-报告: evals/results/agent_eval_<ts>.json
+Report: evals/results/agent_eval_<ts>.json
 """
 from __future__ import annotations
 
 import argparse
-import asyncio
 import json
 import os
 import sys
@@ -28,7 +28,7 @@ from evals.agent_cases import AGENT_CASES, GLOBAL_NOT_CONTAINS  # noqa: E402
 
 
 def check_turn(turn: dict, tools: list, answer: str) -> tuple:
-    """单轮断言 -> (ok, failures[list of str])"""
+    """Single-turn assertions -> (ok, failures[list of str])"""
     failures = []
 
     called = [t.get("tool", "") for t in tools]
@@ -77,7 +77,7 @@ def main() -> int:
     if args.limit:
         cases = cases[:args.limit]
 
-    # None=跟随 config (评测线上真实路径); False=强制关快车道
+    # None=follow config (eval the real production path); False=force-disable the fast lane
     fast_lane = None if not args.no_fast_lane else False
     from harness.loop import FAST_LANE_ENABLED
     print(f"== Agent eval: {len(cases)} cases, "
@@ -111,7 +111,7 @@ def main() -> int:
                 print(f"      - {f}")
         n_pass_cases += int(case_ok)
 
-    # ---- 报告 ----
+    # ---- Report ----
     by_type: dict = {}
     for r in results:
         stat = by_type.setdefault(r["type"], {"turns": 0, "pass": 0})

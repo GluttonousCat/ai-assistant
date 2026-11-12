@@ -1,25 +1,26 @@
 # -*- encoding: utf-8 -*-
 """
-Agent 对话评测用例集 (v1 基线)
+Agent chat eval case set (v1 baseline)
 
-评测对象: /api/v1/agent/stream 对应的 agent.loop.run_agent (真实 LLM + 真实 PG)
-与旧 evals/dataset.py (意图路由+SQL 管道) 的区别: 意图识别已被 Agent 工具循环取代,
-本用例集断言的是用户可感知行为:
-  - tools_any      本轮至少调用了其中一个工具 (快车道命中记为 query_financials)
-  - tools_none     这些工具不得出现 (防重扫描滥用等)
-  - expect_no_tools 整轮不调任何工具 (常识问答)
-  - contains_any   回答含关键词之一; contains_all 全部含
-  - not_contains   回答不得含 (全局另强制检查工具记录泄漏)
+Target under test: agent.loop.run_agent behind /api/v1/agent/stream (real LLM + real PG)
+Unlike the old evals/dataset.py (intent routing + SQL pipeline), intent recognition
+has been replaced by the Agent tool loop; this case set asserts user-visible behavior:
+  - tools_any       at least one of these tools must be called this turn (fast-lane hits count as query_financials)
+  - tools_none      these tools must not appear (guards against rescan abuse etc.)
+  - expect_no_tools no tool calls for the whole turn (common-sense Q&A)
+  - contains_any    answer contains at least one keyword; contains_all requires all
+  - not_contains    answer must not contain these (a global check for tool-record leakage also applies)
 
-类型覆盖: query/compare/mainbiz/valuation/forecast/verify/risk/chain/alpha/quant/
-          knowledge(纯常识)/no_data(未来期间)/offscope(库外标的)/multiturn(多轮追问)
+Type coverage: query/compare/mainbiz/valuation/forecast/verify/risk/chain/alpha/quant/
+               knowledge (pure common sense) / no_data (future periods) / offscope (symbols outside DB) / multiturn (multi-turn follow-ups)
 """
 from __future__ import annotations
 
 AGENT_CASES = [
-    # ---------- 单轮: 财务/行情 ----------
-    # 注: 快车道直连走 RESULT_INTERPRET_PROMPT v2 (数值由图表呈现, 解读不复述数据),
-    # 故断言不强制具体数值单位, 只断言主题词与工具路径
+    # ---------- Single turn: financials/quotes ----------
+    # Note: fast-lane direct hits go through RESULT_INTERPRET_PROMPT v2 (values are
+    # rendered as charts and the interpretation does not restate data), so assertions
+    # do not enforce specific values/units, only topic words and tool paths
     {"id": "q_maotai_rev", "type": "query", "turns": [
         {"q": "查询贵州茅台最近三年的营业收入",
          "tools_any": ["query_financials"],
@@ -33,7 +34,7 @@ AGENT_CASES = [
          "tools_any": ["query_financials"],
          "contains_any": ["茅台", "五粮液", "%", "高"]}]},
 
-    # ---------- 单轮: 延伸域 ----------
+    # ---------- Single turn: extended domains ----------
     {"id": "mb_zhongji", "type": "mainbiz", "turns": [
         {"q": "中际旭创靠什么赚钱",
          "tools_any": ["query_main_business"],
@@ -53,7 +54,7 @@ AGENT_CASES = [
          "tools_any": ["detect_financial_risk"],
          "contains_any": ["风险", "现金流", "毛利率"]}]},
 
-    # ---------- 单轮: 产业链/Alpha/量化 ----------
+    # ---------- Single turn: chain/alpha/quant ----------
     {"id": "chain_overview", "type": "chain", "turns": [
         {"q": "AI算力产业链有哪些环节",
          "tools_any": ["analyze_chain", "list_chains"], "contains_any": ["环节"]}]},
@@ -68,15 +69,15 @@ AGENT_CASES = [
          "tools_any": ["run_quant_scan", "compute_indicators"],
          "contains_any": ["区间", "趋势", "形态", "震荡"]}]},
 
-    # ---------- 复合意图 (快车道深水区词防护的回归用例) ----------
-    # 判定信号: valuation_percentile 必须被调用 (快车道永远不会调它,
-    # 它在即证明走了 Agent 循环完整作答; query_financials 合法与否不约束)
+    # ---------- Compound intents (regression cases for the fast-lane deep-water keyword guard) ----------
+    # Pass signal: valuation_percentile must be called (the fast lane never calls it;
+    # its presence proves the Agent loop answered in full; query_financials is unconstrained)
     {"id": "cmpd_pe_and_val", "type": "compound", "turns": [
         {"q": "中际旭创的最新市盈率和估值分位一起看看",
          "tools_any": ["valuation_percentile"],
          "contains_any": ["市盈率", "估值", "分位"]}]},
 
-    # ---------- 身份/单维度 (工具自解析优化后: 无需 resolve_stock 前置) ----------
+    # ---------- Identity/single-dimension (after tool self-resolution optimization: no resolve_stock prefix needed) ----------
     {"id": "ent_industry_profile", "type": "identity", "turns": [
         {"q": "宁德时代属于哪个行业板块",
          "tools_any": ["resolve_stock"],
@@ -86,7 +87,7 @@ AGENT_CASES = [
          "tools_any": ["verify_forecasts"],
          "contains_any": ["兑现", "偏差", "%"]}]},
 
-    # ---------- 常识/边界 ----------
+    # ---------- Common sense/boundaries ----------
     {"id": "kn_what_is_pe", "type": "knowledge", "turns": [
         {"q": "什么是市盈率", "expect_no_tools": True,
          "contains_any": ["市盈率", "市值", "净利润"]}]},
@@ -98,7 +99,7 @@ AGENT_CASES = [
         {"q": "特斯拉的营收是多少",
          "contains_any": ["未识别", "无法", "暂无", "没有", "不支持", "美股"]}]},
 
-    # ---------- 多轮追问 (核心场景) ----------
+    # ---------- Multi-turn follow-ups (core scenario) ----------
     {"id": "mt_qoq_challenge", "type": "multiturn", "turns": [
         {"q": "中际旭创2025年报的净利润是多少",
          "tools_any": ["query_financials"],
@@ -120,5 +121,5 @@ AGENT_CASES = [
          "tools_any": ["analyze_alpha"], "contains_any": ["预期", "分歧"]}]},
 ]
 
-# 所有回答强制检查 (防回归): 工具记录不得泄漏给用户
+# Enforced on every answer (regression guard): tool records must never leak to the user
 GLOBAL_NOT_CONTAINS = ["[本轮工具调用]"]

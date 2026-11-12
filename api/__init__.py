@@ -1,6 +1,6 @@
 # -*- encoding: utf-8 -*-
 """
-API 层
+API layer
 """
 from api.router import router
 

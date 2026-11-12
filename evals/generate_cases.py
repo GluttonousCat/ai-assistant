@@ -1,33 +1,31 @@
 """
-评测用例生成器
-生成 1000 条多样化 Text-to-SQL 查询用例, 覆盖:
-- 财务单要素查询 (营收/净利/毛利率/ROE...)
-- 行情查询 (股价/市值/PE/涨跌幅...)
-- 时间修饰 (某年/最近N天/最近N年)
-- 多股对比 / 单股多指标
-- 边界与恶意用例 (无关输入/危险指令)
+Eval case generator
+Generates 1000 diverse Text-to-SQL query cases covering:
+- Single-factor financial queries (revenue/net profit/gross margin/ROE...)
+- Quote queries (price/market cap/PE/price change...)
+- Time modifiers (a given year/last N days/last N years)
+- Multi-stock comparison / single stock with multiple metrics
+- Boundary and malicious cases (irrelevant input/dangerous commands)
 
-可复现: 固定 random seed
+Reproducible: fixed random seed
 """
 from __future__ import annotations
 
-import json
 import random
-import re
 from typing import Dict, List
 
 # ============================================================
-# 素材库 (只含预期有把握的实体)
+# Corpus (only entities with confident expectations)
 # ============================================================
 
-# 财务有数据的股票 (income 存在) — 预期 "有结果"
+# Stocks with financial data (income exists) — expected "has result"
 FIN_STOCKS = [
     ("平安银行", "000001.SZ"),
     ("万科A", "000002.SZ"),
     ("深振业A", "000006.SZ"),
 ]
 
-# 通用股票 (行情数据全量有, 财务未必) — 预期 "行情可查"
+# General stocks (quotes fully available, financials maybe) — expected "quotes queryable"
 MARKET_STOCKS = [
     ("平安银行", "000001.SZ"),
     ("万科A", "000002.SZ"),
@@ -41,7 +39,7 @@ MARKET_STOCKS = [
     ("格力电器", "000651.SZ"),
 ]
 
-# 财务指标模板 -> (示例问题, 预期字段)
+# Financial metric templates -> (sample question, expected field)
 FIN_METRICS = [
     ("营收", "营收"),
     ("营业收入", "营业收入"),
@@ -57,7 +55,7 @@ FIN_METRICS = [
     ("每股收益", "每股收益"),
 ]
 
-# 行情指标模板
+# Quote metric templates
 MARKET_METRICS = [
     ("股价", "股价"),
     ("收盘价", "收盘价"),
@@ -70,23 +68,23 @@ MARKET_METRICS = [
     ("换手率", "换手率"),
 ]
 
-# 年份模板
+# Year templates
 YEARS = ["2020年", "2021年", "2022年", "2023年", "2024年", "最近两年", "最近三年"]
 
-# 动作词
+# Action verbs
 VERBS = ["查询", "查一下", "看看", "帮我查", "请问", "查一查"]
 
-# 问句后缀
+# Question suffixes
 SUFFIXES = ["", "是多少？", "怎么样？", "多少？", "的情况如何？"]
 
-# 边界/恶意用例
+# Boundary/malicious cases
 EDGE_CASES = [
     ("我想吃火锅", "unknown"),
     ("今天天气怎么样", "unknown"),
     ("你好", "unknown"),
-    ("分析复仇者联盟的财务数据", "query"),   # 无语义约束
-    ("删除所有数据", "query"),                 # 危险意图(应被SQL校验拦截)
-    ("DROP TABLE income", "query"),           # 危险SQL
+    ("分析复仇者联盟的财务数据", "query"),   # no semantic constraint
+    ("删除所有数据", "query"),                 # dangerous intent (should be blocked by SQL validation)
+    ("DROP TABLE income", "query"),           # dangerous SQL
     ("帮我写一首诗", "unknown"),
     ("QAQ", "unknown"),
 ]
@@ -97,7 +95,7 @@ def _rng():
 
 
 def _pick_text(stock: str, metric: str, year: str = "") -> str:
-    """组合一句查询文本"""
+    """Assemble one query sentence"""
     verb = random.choice(VERBS)
     if year:
         return f"{verb}{stock}{year}的{metric}"
@@ -106,21 +104,21 @@ def _pick_text(stock: str, metric: str, year: str = "") -> str:
 
 def generate_cases(count: int = 1000) -> List[Dict]:
     """
-    生成 count 条用例
-    每条: {question, type, expected_intent, fin_stock(expected有财务数据)}
+    Generate count cases
+    Each: {question, type, expected_intent, fin_stock (expected to have financial data)}
     type: financial / market / multi / edge
     """
     r = _rng()
     cases: List[Dict] = []
 
-    # 分配比例 (approx): 40% 财务, 35% 行情, 10% 多股对比, 10% 多指标, 5% 边界
+    # Mix (approx): 40% financial, 35% quotes, 10% multi-stock compare, 10% multi-metric, 5% edge
     n_fin = int(count * 0.40)
     n_mkt = int(count * 0.35)
     n_multi = int(count * 0.10)
     n_combined = int(count * 0.10)
     n_edge = count - n_fin - n_mkt - n_multi - n_combined
 
-    # 1. 财务单要素
+    # 1. Single-factor financial
     for i in range(n_fin):
         stock, code = r.choice(FIN_STOCKS)
         metric, _ = r.choice(FIN_METRICS)
@@ -132,11 +130,11 @@ def generate_cases(count: int = 1000) -> List[Dict]:
             "type": "financial",
             "expected_intent": "query",
             "fin_stock": True,
-            "expected_has_result": True,   # 财务数据应在
+            "expected_has_result": True,   # financial data should exist
             "expected_metric": metric,
         })
 
-    # 2. 行情单要素
+    # 2. Single-factor quotes
     for i in range(n_mkt):
         stock, code = r.choice(MARKET_STOCKS)
         metric, _ = r.choice(MARKET_METRICS)
@@ -151,7 +149,7 @@ def generate_cases(count: int = 1000) -> List[Dict]:
             "expected_metric": metric,
         })
 
-    # 3. 多股对比
+    # 3. Multi-stock comparison
     for i in range(n_multi):
         s1, _ = r.choice(MARKET_STOCKS)
         s2, _ = r.choice(MARKET_STOCKS)
@@ -168,7 +166,7 @@ def generate_cases(count: int = 1000) -> List[Dict]:
             "fin_stock": False,
         })
 
-    # 4. 单股多指标
+    # 4. Single stock, multiple metrics
     for i in range(n_combined):
         stock, _ = r.choice(FIN_STOCKS)
         m1, _ = r.choice(FIN_METRICS)
@@ -186,7 +184,7 @@ def generate_cases(count: int = 1000) -> List[Dict]:
             "expected_has_result": True,
         })
 
-    # 5. 边界用例
+    # 5. Edge cases
     for i, (q, expected) in enumerate(EDGE_CASES[:n_edge]):
         cases.append({
             "id": f"edge_{i:04d}",
@@ -196,7 +194,7 @@ def generate_cases(count: int = 1000) -> List[Dict]:
             "fin_stock": False,
         })
 
-    # 若边界不足, 补充
+    # If edge cases run short, top up
     while len(cases) < count:
         stock, code = r.choice(FIN_STOCKS)
         metric, _ = r.choice(FIN_METRICS)
@@ -217,7 +215,7 @@ def generate_cases(count: int = 1000) -> List[Dict]:
 if __name__ == "__main__":
     cases = generate_cases(1000)
     print(f"生成 {len(cases)} 条用例")
-    # 分类统计
+    # Type distribution stats
     from collections import Counter
     types = Counter(c["type"] for c in cases)
     print("类型分布:", dict(types))

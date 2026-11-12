@@ -1,6 +1,6 @@
 # -*- encoding: utf-8 -*-
 """
-API 请求/响应模型 (Pydantic)
+API request/response models (Pydantic)
 """
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 
-# ---------- 知识星球 ----------
+# ---------- ZSXQ ----------
 class CrawlRequest(BaseModel):
     group_id: str
     pages: int = Field(default=10, ge=1, le=100)
@@ -47,7 +47,7 @@ class AgentChatResponse(BaseModel):
     tasks: List[TaskInfo] = []
 
 
-# ---------- 通用 ----------
+# ---------- Common ----------
 class HealthResponse(BaseModel):
     status: str
     time: datetime

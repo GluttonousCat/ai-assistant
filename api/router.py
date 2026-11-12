@@ -1,11 +1,11 @@
 # -*- encoding: utf-8 -*-
 """
-统一 API 路由
-- /crawl/*       知识星球爬虫
-- /files/*       文件下载
-- /accounts/*    账号管理
-- /agent/chat    Agent 对话 (阶段二接入)
-- /health        健康检查
+Unified API routes
+- /crawl/*       ZSXQ (knowledge planet) crawler
+- /files/*       File download
+- /accounts/*    Account management
+- /agent/chat    Agent chat (wired in phase 2)
+- /health        Health check
 """
 from __future__ import annotations
 
@@ -26,18 +26,18 @@ from tools.zsxq.crawler import ZSXQCrawler
 from tools.zsxq.downloader import FileDownloader
 from storage.sqlite.account import AccountDatabase
 from storage.pg import PgClient
-from storage.pg_schema import T_REPORT_META, T_REPORT_FORECAST
+from storage.pg_schema import T_REPORT_META
 
 logger = get_logger(__name__)
 
 router = APIRouter(tags=["router"])
 
-# 运行期任务状态 (简易内存存储)
+# Runtime task state (simple in-memory store)
 tasks: Dict[str, Dict[str, Any]] = {}
 
 
 def get_crawler(group_id: str) -> ZSXQCrawler:
-    """获取爬虫实例: 优先 .env Cookie, 其次 accounts.db"""
+    """Get a crawler instance: prefer the .env Cookie, then accounts.db"""
     config = get_config()
     cookie = config.zsxq_cookie
 
@@ -53,25 +53,26 @@ def get_crawler(group_id: str) -> ZSXQCrawler:
     return ZSXQCrawler(cookie, str(group_id))
 
 
-# ---------- 基础 ----------
-# 根路径 "/" 由 app.py 提供前端首页 (FileResponse); 本 router 先于首页路由挂载,
-# 此处若注册 GET / 会按注册顺序抢占首页, 因此不再提供 JSON 版根路由
+# ---------- Basics ----------
+# The root path "/" is served by app.py as the frontend index (FileResponse);
+# this router is mounted before the index route, so registering GET / here
+# would shadow the index by registration order — hence no JSON root route here
 
 @router.get("/health", response_model=HealthResponse, tags=["meta"])
 async def health():
     return HealthResponse(status="ok", time=datetime.now())
 
 
-# ---------- 知识星球爬虫 ----------
+# ---------- ZSXQ crawler ----------
 @router.get("/crawl/status", tags=["zsxq"])
 async def crawl_status():
-    """后台任务状态 (简单内存态)"""
+    """Background task status (simple in-memory state)"""
     return {"tasks": tasks, "count": len(tasks)}
 
 
 @router.post("/crawl/latest", tags=["zsxq"])
 async def crawl_latest(request: CrawlRequest, background_tasks: BackgroundTasks):
-    """爬取最新话题"""
+    """Crawl the latest topics"""
     def task():
         crawler = get_crawler(request.group_id)
         result = crawler.crawl_latest(request.per_page)
@@ -84,7 +85,7 @@ async def crawl_latest(request: CrawlRequest, background_tasks: BackgroundTasks)
 
 @router.post("/crawl/historical", tags=["zsxq"])
 async def crawl_historical(request: CrawlRequest, background_tasks: BackgroundTasks):
-    """爬取历史数据"""
+    """Crawl historical data"""
     def task():
         crawler = get_crawler(request.group_id)
         result = crawler.crawl_historical(request.pages, request.per_page)
@@ -97,7 +98,7 @@ async def crawl_historical(request: CrawlRequest, background_tasks: BackgroundTa
 
 @router.post("/crawl/incremental", tags=["zsxq"])
 async def crawl_incremental(request: CrawlRequest, background_tasks: BackgroundTasks):
-    """增量爬取"""
+    """Incremental crawl"""
     def task():
         crawler = get_crawler(request.group_id)
         result = crawler.crawl_incremental(request.pages, request.per_page)
@@ -108,10 +109,10 @@ async def crawl_incremental(request: CrawlRequest, background_tasks: BackgroundT
     return {"status": "started", "message": "开始增量爬取"}
 
 
-# ---------- 文件下载 ----------
+# ---------- File download ----------
 @router.post("/files/collect", tags=["zsxq"])
 async def collect_files(request: FileDownloadRequest, background_tasks: BackgroundTasks):
-    """收集文件列表"""
+    """Collect the file list"""
     def task():
         config = get_config()
         cookie = config.zsxq_cookie
@@ -126,7 +127,7 @@ async def collect_files(request: FileDownloadRequest, background_tasks: Backgrou
 
 @router.post("/files/download", tags=["zsxq"])
 async def download_files(request: FileDownloadRequest, background_tasks: BackgroundTasks):
-    """下载文件 - 限制每次1个"""
+    """Download files - limited to 1 per request"""
     def task():
         config = get_config()
         cookie = config.zsxq_cookie
@@ -141,7 +142,7 @@ async def download_files(request: FileDownloadRequest, background_tasks: Backgro
 
 @router.post("/files/download-topic-files", tags=["zsxq"])
 async def download_topic_files(request: FileDownloadRequest, background_tasks: BackgroundTasks):
-    """下载话题附件 (topic_files, 研报多为话题附件)"""
+    """Download topic attachments (topic_files; reports are mostly topic attachments)"""
     def task():
         config = get_config()
         cookie = config.zsxq_cookie
@@ -156,7 +157,7 @@ async def download_topic_files(request: FileDownloadRequest, background_tasks: B
 
 @router.get("/stats/{group_id}", tags=["zsxq"])
 async def get_stats(group_id: str):
-    """获取统计信息"""
+    """Get crawl statistics"""
     try:
         crawler = get_crawler(group_id)
         stats = crawler.db.get_stats()
@@ -166,10 +167,10 @@ async def get_stats(group_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ---------- 研报管理 (fin.report_meta) ----------
+# ---------- Report management (fin.report_meta) ----------
 @router.get("/reports", tags=["zsxq"])
 async def list_reports(source: str = None, status: str = None, limit: int = 100):
-    """研报列表 (fin.report_meta 查询)"""
+    """Report list (query on fin.report_meta)"""
     sql = f"""SELECT report_id, topic_id, file_id, ts_code, title, source,
                      extraction_status, content_chars, publish_date, created_at
               FROM {T_REPORT_META} WHERE 1=1"""
@@ -191,7 +192,7 @@ async def list_reports(source: str = None, status: str = None, limit: int = 100)
 
 @router.get("/reports/{report_id}", tags=["zsxq"])
 async def get_report(report_id: int, include_text: bool = False):
-    """研报详情 (默认不带全文)"""
+    """Report detail (full text omitted by default)"""
     with PgClient() as pg:
         row = pg.fetch_one(
             f"SELECT * FROM {T_REPORT_META} WHERE report_id = %s", (report_id,))
@@ -205,7 +206,7 @@ async def get_report(report_id: int, include_text: bool = False):
 @router.post("/reports/upload", tags=["zsxq"])
 async def upload_report(request: dict):
     """
-    手动上传研报文本入库 (研报校验数据源之一)
+    Manually upload report text into the DB (one of the report verification data sources)
     body: {"ts_code": "600519.SH", "title": "...", "content_text": "...", "source": "upload"}
     """
     ts_code = request.get("ts_code")
@@ -230,7 +231,7 @@ async def upload_report(request: dict):
 
 @router.post("/crawl/sync-reports", tags=["zsxq"])
 async def sync_zxsq_reports(group_id: str = None, background_tasks: BackgroundTasks = None):
-    """将本地爬取的 zsxq 数据同步到 PG 研报库"""
+    """Sync locally crawled zsxq data into the PG report store"""
     def task():
         from jobs.sync_zxsq_to_pg import ZSXQ2PGSync
         gid = group_id or get_config().zsxq_group_id
@@ -243,15 +244,15 @@ async def sync_zxsq_reports(group_id: str = None, background_tasks: BackgroundTa
         background_tasks.add_task(task)
         return {"status": "started", "message": "后台开始同步研报数据"}
     else:
-        # 前台同步 (调试用)
+        # Foreground sync (for debugging)
         task()
         return {"status": "ok", "message": "同步完成"}
 
 
-# ---------- 账号管理 ----------
+# ---------- Account management ----------
 @router.post("/accounts", tags=["zsxq"])
 async def create_account(request: AccountCreateRequest):
-    """创建账号"""
+    """Create an account"""
     db = AccountDatabase()
     account = db.add_account(request.cookie, request.name)
     return {"status": "ok", "account": account}
@@ -259,18 +260,18 @@ async def create_account(request: AccountCreateRequest):
 
 @router.get("/accounts", tags=["zsxq"])
 async def list_accounts():
-    """列出账号"""
+    """List accounts"""
     db = AccountDatabase()
     accounts = db.list_accounts()
     return {"accounts": accounts}
 
 
-# ---------- Agent 对话 (阶段二接入) ----------
+# ---------- Agent chat (wired in phase 2) ----------
 @router.post("/agent/chat", tags=["agent"])
 async def agent_chat(request: dict):
     """
-    Agent 对话入口 (阶段二实现)
-    当前为占位, 将接入 LangGraph 主图
+    Agent chat entry (phase 2)
+    Currently a placeholder; will be wired to the LangGraph main graph
     """
     return {
         "status": "todo",
@@ -279,10 +280,10 @@ async def agent_chat(request: dict):
     }
 
 
-# ---------- 数据同步调度 ----------
+# ---------- Data sync scheduling ----------
 @router.post("/admin/sync-today", tags=["admin"])
 async def sync_today():
-    """手动触发每日增量同步 (交易日 18:00 自动执行的同款)"""
+    """Manually trigger the daily incremental sync (the same job that runs automatically at 18:00 on trading days)"""
     from jobs.scheduler import get_scheduler
     result = await get_scheduler().trigger_now()
     return {"status": "done", "result": result}
@@ -290,7 +291,7 @@ async def sync_today():
 
 @router.get("/admin/scheduler-status", tags=["admin"])
 async def scheduler_status():
-    """调度器状态"""
+    """Scheduler status"""
     from jobs.scheduler import get_scheduler
     s = get_scheduler()
     return {

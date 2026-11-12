@@ -1,4 +1,4 @@
-"""分析评测失败样例 (attack / compare / edge)"""
+"""Analyze eval failure samples (attack / compare / edge)"""
 import json
 from pathlib import Path
 

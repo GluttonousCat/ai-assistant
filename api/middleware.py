@@ -1,12 +1,12 @@
 # -*- encoding: utf-8 -*-
 """
-全局鉴权中间件
+Global auth middleware
 
-规则:
-- 免登录白名单: /api/auth/login, /api/auth/register, /health, /, /docs*, /openapi.json,
-  静态资源 (/assets/*, /range, /login, /favicon*)
-- 其余 /api/* 与 WebSocket 升级请求必须携带有效 Bearer Token
-- 非 API 路径 (前端页面) 放行, 由前端路由引导到登录页
+Rules:
+- Login-free whitelist: /api/auth/login, /api/auth/register, /health, /, /docs*, /openapi.json,
+  static assets (/assets/*, /range, /login, /favicon*)
+- All other /api/* paths and WebSocket upgrade requests must carry a valid Bearer token
+- Non-API paths (frontend pages) pass through; the frontend router redirects to the login page
 """
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from core.security import decode_token
 
 logger = get_logger(__name__)
 
-# 前缀/精确匹配的免登录路径
+# Login-free paths, matched exactly or by prefix
 OPEN_PATHS = {
     "/", "/health", "/range", "/login", "/favicon.ico",
     "/openapi.json", "/docs", "/docs/oauth2-redirect", "/redoc",
@@ -34,7 +34,7 @@ def _is_open(path: str) -> bool:
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
-    """API 鉴权: 校验 Authorization: Bearer <jwt>"""
+    """API auth: validate Authorization: Bearer <jwt>"""
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path

@@ -1,20 +1,20 @@
 # -*- encoding: utf-8 -*-
 """
-可交易震荡区间 (range_trading) 数据 API + 每日定时扫描
+Tradable range (range_trading) data API + daily scheduled scan
 
-路由:
-  GET  /api/range/latest          最近一次扫描结果 (优先内存缓存, 其次落盘 CSV)
-  GET  /api/range/dates           已有扫描结果的交易日列表
-  GET  /api/range/scan/{date}     读取指定交易日扫描结果; 无则触发扫描
-  POST /api/range/scan            手动触发一次最新扫描 (后台执行)
-  GET  /api/range/chart/{symbol}  单标的蜡烛图数据 (含区间边界), 供前端弹层
+Routes:
+  GET  /api/range/latest          Latest scan result (memory cache first, then on-disk CSV)
+  GET  /api/range/dates           Trading days that have scan results
+  GET  /api/range/scan/{date}     Read the scan result for a given trading day; triggers a scan if missing
+  POST /api/range/scan            Manually trigger a fresh scan (runs in background)
+  GET  /api/range/chart/{symbol}  Candlestick data for one symbol (with range boundaries), for the frontend popup layer
 
-调度:
-  后台线程每日 21:30 触发: 全市场扫描 -> 落盘 + 刷新缓存 (当天日K由 21:00 调度已同步)。
+Schedule:
+  A background thread fires daily at 21:30: whole-market scan -> persist + refresh cache
+  (the day's daily bars are already synced by the 21:00 scheduler).
 """
 from __future__ import annotations
 
-import json
 import threading
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -27,20 +27,21 @@ from core.logger import get_logger
 
 logger = get_logger("range_trading.api")
 
-# 区间看板含实盘交易信号, 整组接口仅 admin 可访问 (前端按钮同步置灰)
+# The range dashboard carries live trading signals; the whole route group is admin-only
+# (frontend buttons are greyed out accordingly)
 from api.deps import require_admin as _require_admin
 range_router = APIRouter(prefix="/api/range", tags=["range"],
                          dependencies=[Depends(_require_admin)])
 
 OUT_DIR = Path("output/range_scan")
 
-# 内存缓存: {scan_date_str: records}
+# Memory cache: {scan_date_str: records}
 _cache: Dict[str, List[Dict[str, Any]]] = {}
 _cache_meta: Dict[str, Any] = {"last_scan_date": None, "last_scan_ts": None}
 _lock = threading.Lock()
 
 
-# ============================ 数据存取 ============================
+# ============================ Data access ============================
 
 def _scan_csv(d: date) -> Path:
     return OUT_DIR / f"scan_{d.strftime('%Y%m%d')}.csv"
@@ -72,7 +73,7 @@ def _available_dates() -> List[str]:
 
 
 def _enrich_names(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """补股票名称 (stock_basic) + 申万 L1/L2 行业 (stock_industry -> index_classify)"""
+    """Enrich records with stock names (stock_basic) + Shenwan L1/L2 industries (stock_industry -> index_classify)"""
     if not records:
         return records
     try:
@@ -83,7 +84,7 @@ def _enrich_names(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                      for r in pg.fetch_all(
                          "SELECT ts_code, name FROM stock.stock_basic WHERE ts_code = ANY(%s)",
                          (codes,))}
-            # L2 行业 (当前生效记录), L1 经 parent_code = L1.industry_code 上溯
+            # L2 industries (currently effective records); L1 resolved upward via parent_code = L1.industry_code
             ind_rows = pg.fetch_all(
                 """
                 SELECT si.con_code,
@@ -108,9 +109,10 @@ def _enrich_names(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return records
 
 
-# 板块偏好权重 (方案1: 稳健优先, 但科技不追杀)
-# 价值/蓝筹 = 加分 (稳健土壤); 科技/成长 = 0 (靠缩量质量+市值过滤, 不额外奖励)
-# 强周期/高位题材 = 轻减 (避免追高陷阱)
+# Sector preference weights (scheme 1: robustness first, but no added penalty on tech)
+# Value/blue-chip = bonus (robust ground); tech/growth = 0 (relies on volume-shrink quality
+# + market-cap filtering, no extra reward); strong-cyclical/high-position themes = mild
+# penalty (avoid chasing tops)
 _SECTOR_L1 = {
     "银行": 8, "食品饮料": 8, "交通运输": 7, "公用事业": 7, "非银金融": 7,
     "家用电器": 6, "建筑装饰": 5, "汽车": 5, "农林牧渔": 5, "医药生物": 4,
@@ -125,7 +127,7 @@ _SECTOR_L2_BONUS = {
 
 
 def _sector_bias(l1: str, l2: str) -> int:
-    """板块偏好分: 正值=稳健加分, 0=中性, 负值=减分"""
+    """Sector preference score: positive = robustness bonus, 0 = neutral, negative = penalty"""
     bias = _SECTOR_L1.get(l1, 0)
     for kw, b in _SECTOR_L2_BONUS.items():
         if kw in (l2 or ""):
@@ -134,14 +136,14 @@ def _sector_bias(l1: str, l2: str) -> int:
 
 
 def run_scan(scan_date: Optional[date] = None) -> Dict[str, Any]:
-    """执行一次全市场扫描, 落盘 + 刷新缓存。返回摘要。"""
+    """Run one whole-market scan, persist to disk + refresh cache. Returns a summary."""
     from range_trading.scanner.daily_scan import scan_market
     from storage.pg import PgClient
 
     df = scan_market(scan_date=scan_date, top=0, out_dir=str(OUT_DIR))
     if df.empty:
         raise RuntimeError("扫描无结果")
-    # scan_market 内部已按最新交易日落盘; 取其实际日期
+    # scan_market already persisted using the latest trade date internally; take that actual date
     d = scan_date
     if d is None:
         with PgClient() as pg:
@@ -155,7 +157,7 @@ def run_scan(scan_date: Optional[date] = None) -> Dict[str, Any]:
         _cache_meta["last_scan_ts"] = datetime.now().isoformat(timespec="seconds")
     logger.info(f"扫描完成并缓存: {key}, {len(records)} 只")
 
-    # 信号落盘 + 历史信号事后回填 (健康监控)
+    # Persist signals + backfill outcomes of historical signals (health monitoring)
     try:
         from range_trading.research.signal_tracking import record_signals, backfill_outcomes
         with PgClient() as pg:
@@ -166,18 +168,18 @@ def run_scan(scan_date: Optional[date] = None) -> Dict[str, Any]:
     return {"date": key, "count": len(records)}
 
 
-# ============================ 路由 ============================
+# ============================ Routes ============================
 
 @range_router.get("/latest")
 async def get_latest(min_score: float = 70.0, range_only: bool = True):
-    """最近一次扫描结果 (默认仅高质量区间族)"""
+    """Latest scan result (defaults to high-quality range families only)"""
     key = _cache_meta.get("last_scan_date")
     records = None
     with _lock:
         if key and key in _cache:
             records = _cache[key]
     if records is None:
-        # 内存未命中 -> 读最新落盘
+        # Memory miss -> read the latest on-disk file
         dates = _available_dates()
         if not dates:
             raise HTTPException(status_code=404, detail="尚无扫描结果, 请先 POST /api/range/scan")
@@ -207,7 +209,7 @@ async def get_dates():
 
 @range_router.get("/scan/{scan_date}")
 async def get_scan(scan_date: str, min_score: float = 70.0, range_only: bool = True):
-    """读取指定交易日结果; 不存在则 404 (不自动扫描历史, 避免长阻塞)"""
+    """Read the result for a given trading day; 404 if missing (no auto-scanning of history, avoids long blocking)"""
     try:
         d = datetime.strptime(scan_date, "%Y-%m-%d").date()
     except ValueError:
@@ -228,7 +230,7 @@ async def get_scan(scan_date: str, min_score: float = 70.0, range_only: bool = T
 
 @range_router.post("/scan")
 async def trigger_scan():
-    """手动触发最新扫描 (后台线程, 立即返回)"""
+    """Manually trigger the latest scan (background thread, returns immediately)"""
     def _job():
         try:
             run_scan(None)
@@ -239,7 +241,7 @@ async def trigger_scan():
 
 
 def _clean_nan(obj):
-    """递归清洗 dict/list 中的 NaN/Inf float, 避免 JSON 序列化报错"""
+    """Recursively clean NaN/Inf floats in dicts/lists to avoid JSON serialization errors"""
     import math
     if isinstance(obj, dict):
         return {k: _clean_nan(v) for k, v in obj.items()}
@@ -247,7 +249,7 @@ def _clean_nan(obj):
         return [_clean_nan(v) for v in obj]
     if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
         return None
-    # numpy 标量
+    # numpy scalars
     try:
         import numpy as np
         if isinstance(obj, np.generic):
@@ -260,7 +262,7 @@ def _clean_nan(obj):
 
 @range_router.get("/chart/{symbol}")
 async def get_chart(symbol: str, days: int = 60):
-    """单标的蜡烛图数据: OHLC + 30日分位区间 + 最新 RangeState"""
+    """Candlestick data for one symbol: OHLC + 30-day percentile range + latest RangeState"""
     from storage.pg import PgClient
     from range_trading.data.loader import load_daily_bars, get_latest_trade_date
     from range_trading.regime.daily_regime import run_daily_regime
@@ -284,7 +286,7 @@ async def get_chart(symbol: str, days: int = 60):
         }
         for _, r in tail.iterrows()
     ]
-    # 30 日分位区间 (与系统边界检测同口径)
+    # 30-day percentile range (same basis as the system's boundary detection)
     last30 = df.tail(30)
     upper = round(float(last30["close"].quantile(0.90)), 3)
     lower = round(float(last30["close"].quantile(0.10)), 3)
@@ -303,14 +305,14 @@ async def get_chart(symbol: str, days: int = 60):
 
 @range_router.get("/tracking")
 async def get_tracking(min_score: float = 70.0, horizon: int = 10, lookback_days: int = 60):
-    """信号跟踪与滚动胜率统计 (健康监控页数据源)"""
+    """Signal tracking and rolling win-rate stats (data source for the health monitoring page)"""
     from range_trading.research.signal_tracking import tracking_summary
     from storage.pg import PgClient
     try:
         with PgClient() as pg:
             result = tracking_summary(pg, min_score=min_score, horizon=horizon,
                                       lookback_days=lookback_days)
-        # 明细补名称 + L1/L2 行业
+        # Enrich detail rows with names + L1/L2 industries
         result["recent_signals"] = _enrich_names(result.get("recent_signals", []))
         return result
     except Exception as e:
@@ -318,7 +320,7 @@ async def get_tracking(min_score: float = 70.0, horizon: int = 10, lookback_days
         raise HTTPException(status_code=500, detail=f"tracking 统计失败: {e}")
 
 
-# ============================ 趋势系统 ============================
+# ============================ Trend system ============================
 
 TREND_OUT_DIR = Path("output/trend_scan")
 
@@ -329,7 +331,7 @@ def _trend_csv(d: date) -> Path:
 
 @range_router.get("/trend/latest")
 async def get_trend_latest(min_tqs: float = 0.0):
-    """最近一次趋势扫描结果 (读落盘 CSV)"""
+    """Latest trend scan result (reads the on-disk CSV)"""
     if not TREND_OUT_DIR.exists():
         raise HTTPException(status_code=404, detail="尚无趋势扫描结果")
     files = sorted(TREND_OUT_DIR.glob("trend_scan_*.csv"), reverse=True)
@@ -354,7 +356,7 @@ async def get_trend_latest(min_tqs: float = 0.0):
 
 @range_router.post("/trend/scan")
 async def trigger_trend_scan():
-    """手动触发趋势扫描 (后台线程)"""
+    """Manually trigger a trend scan (background thread)"""
     def _job():
         try:
             from range_trading.scanner.trend_scan import scan_trend_market
@@ -367,7 +369,7 @@ async def trigger_trend_scan():
 
 @range_router.get("/trend/tracking")
 async def get_trend_tracking(min_tqs: float = 55.0, horizon: int = 10):
-    """趋势信号跟踪与滚动统计 (MFE/MAE/profit_ratio, 趋势健康监控)"""
+    """Trend signal tracking and rolling stats (MFE/MAE/profit_ratio, trend health monitoring)"""
     from range_trading.research.trend_tracking import trend_tracking_summary
     from storage.pg import PgClient
     try:
@@ -380,7 +382,7 @@ async def get_trend_tracking(min_tqs: float = 55.0, horizon: int = 10):
         raise HTTPException(status_code=500, detail=f"趋势 tracking 统计失败: {e}")
 
 
-# ============================ 蓄势启动 (Surge Setup) API ============================
+# ============================ Surge Setup API ============================
 SETUP_OUT_DIR = Path("output/setup_scan")
 
 
@@ -404,24 +406,24 @@ def _setup_available_dates() -> List[str]:
 @range_router.get("/setup/latest")
 async def get_setup_latest(min_score: float = 55.0, max_score: float = 80.0,
                            detector: str = "all"):
-    """最近一次蓄势候选。
-    detector: all=蓄势盾+动量矛 / base=仅蓄势盾 / momentum=仅动量矛
-    方案1: 板块偏好加权; 方案2: 大盘 Gate 分层。"""
+    """Latest surge-setup candidates.
+    detector: all=base shield + momentum spear / base=shield only / momentum=spear only
+    Scheme 1: sector-preference weighting; scheme 2: market-gate tiering."""
     dates = _setup_available_dates()
     if not dates:
         raise HTTPException(status_code=404, detail="尚无蓄势扫描结果, 请先 POST /api/range/setup/scan")
     key = dates[0]
 
-    # 方案2: 大盘状态 -> 动态最低分 (BULL宽松 / RANGE中性 / BEAR严苛)
+    # Scheme 2: market state -> dynamic minimum score (BULL lenient / RANGE neutral / BEAR strict)
     market_state, eff_min = _market_gate()
-    apply_min = max(min_score, eff_min)   # 用户阈值与大盘 Gate 取更高者
+    apply_min = max(min_score, eff_min)   # take the higher of user threshold and market gate
 
     try:
         df = pd.read_csv(_setup_csv(datetime.strptime(key, "%Y-%m-%d").date()))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"读取失败: {e}")
 
-    # ---- detector 筛选 ----
+    # ---- detector filter ----
     if "momentum_score" in df.columns:
         if detector == "base":
             df = df[df["detector"].fillna("base") == "base"]
@@ -430,8 +432,8 @@ async def get_setup_latest(min_score: float = 55.0, max_score: float = 80.0,
     if detector == "base" or detector == "all" or "momentum_score" not in df.columns:
         df = df[(df["base_score"] >= apply_min) & (df["base_score"] < max_score)]
     records = df.to_dict(orient="records")
-    records = _enrich_names(records)   # 含 sector_bias
-    # 补板块 + 市值 (百万 -> 亿)
+    records = _enrich_names(records)   # includes sector_bias
+    # Add board classification + market cap
     for r in records:
         sym = r.get("symbol", "")
         if sym.endswith(".SH"):
@@ -451,11 +453,11 @@ async def get_setup_latest(min_score: float = 55.0, max_score: float = 80.0,
         mv_map = {r["ts_code"]: r["mv"] for r in mv_rows}
         for r in records:
             mv = mv_map.get(r["symbol"])
-            r["total_mv_yi"] = round(mv / 10000.0, 1) if mv else None   # 万元 -> 亿
+            r["total_mv_yi"] = round(mv / 10000.0, 1) if mv else None   # 10k-yuan -> 100M-yuan
     except Exception as e:
         logger.warning(f"补市值失败: {e}")
 
-    # 方案1: 板块偏好加权排序  adjusted = base_score + sector_bias × 市值系数
+    # Scheme 1: sort by sector-preference weighting  adjusted = base_score + sector_bias x market-cap coefficient
     for r in records:
         mv = r.get("total_mv_yi")
         bias = r.get("sector_bias", 0)
@@ -465,7 +467,7 @@ async def get_setup_latest(min_score: float = 55.0, max_score: float = 80.0,
             mv_coef = 0.5
         r["sector_bias_adjusted"] = round(bias * mv_coef, 1)
         r["adjusted_score"] = round(r.get("base_score", 0) + bias * mv_coef, 1)
-    # 排序: momentum 模式按动量加权分, 否则按 adjusted_score
+    # Sort: momentum mode by momentum-weighted score, otherwise by adjusted_score
     if detector == "momentum" and records and "m_weighted_score" in records[0]:
         records.sort(key=lambda x: x.get("m_weighted_score", 0), reverse=True)
     else:
@@ -478,12 +480,12 @@ async def get_setup_latest(min_score: float = 55.0, max_score: float = 80.0,
     }
 
 
-# 大盘 Gate 分层 (方案2): BULL=55 / RANGE=60 / BEAR=68
+# Market gate tiers (scheme 2): BULL=55 / RANGE=60 / BEAR=68
 _MARKET_GATE = {"BULL": 55.0, "RANGE": 60.0, "BEAR": 68.0}
 
 
 def _market_gate() -> tuple:
-    """读取大盘状态与对应最低分 (读不足时默认 RANGE/60)"""
+    """Read market state and its minimum score (defaults to RANGE/60 when data is insufficient)"""
     try:
         from storage.pg import PgClient
         with PgClient() as pg:
@@ -492,7 +494,7 @@ def _market_gate() -> tuple:
                 "WHERE ts_code='000001.SH' ORDER BY trade_date DESC LIMIT 1")
             if not row:
                 return "RANGE", 60.0
-            # 20日动量 + 站上20日线
+            # 20-day momentum + above the 20-day MA
             rows = pg.fetch_all(
                 "SELECT close::float8 AS c FROM stock.index_daily WHERE ts_code='000001.SH' "
                 "ORDER BY trade_date DESC LIMIT 21")
@@ -514,10 +516,10 @@ def _market_gate() -> tuple:
 
 @range_router.get("/setup/backtest")
 async def get_setup_backtest():
-    """蓄势识别器逐日历史回测 (daily_backtest_{start}_{end}_daily.csv 逐日汇总 + 主文件明细)"""
+    """Per-day historical backtest of the surge detector (daily_backtest_{start}_{end}_daily.csv per-day summary + main-file details)"""
     if not SETUP_OUT_DIR.exists():
         raise HTTPException(status_code=404, detail="尚无逐日回测结果")
-    # 找最新的 daily_backtest_*_daily.csv (逐日汇总)
+    # Find the latest daily_backtest_*_daily.csv (per-day summary)
     daily_files = sorted(SETUP_OUT_DIR.glob("daily_backtest_*_daily.csv"), reverse=True)
     if not daily_files:
         raise HTTPException(status_code=404, detail="尚无逐日回测结果, 请先运行 setup_backtest_daily")
@@ -525,7 +527,7 @@ async def get_setup_backtest():
         by_day = pd.read_csv(daily_files[0]).to_dict(orient="records")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"读取失败: {e}")
-    # 主文件: 逐笔明细 (date/symbol/base_score/surge/close_ret ...)
+    # Main file: per-signal details (date/symbol/base_score/surge/close_ret ...)
     detail = []
     main_files = sorted(SETUP_OUT_DIR.glob("daily_backtest_*.csv"), reverse=True)
     for mf in main_files:
@@ -544,7 +546,7 @@ async def get_setup_backtest():
 
 @range_router.get("/setup/market")
 async def get_setup_market():
-    """大盘指数指引: 核心指数近 90 日走势 + 大盘状态判定 (牛/震荡/熊)"""
+    """Market index guide: core indices' last ~90 days + market state verdict (bull/range/bear)"""
     from storage.pg import PgClient
     try:
         with PgClient() as pg:
@@ -558,14 +560,14 @@ async def get_setup_market():
         raise HTTPException(status_code=404, detail="尚无指数数据, 请先运行 sync_index")
     df["trade_date"] = pd.to_datetime(df["trade_date"]).dt.strftime("%Y-%m-%d")
 
-    # 逐指数序列 (收盘)
+    # Per-index series (close)
     series = {}
     for code, g in df.groupby("ts_code"):
         g = g.sort_values("trade_date")
         series[code] = [{"t": r["trade_date"], "c": round(float(r["close"]), 2)}
                         for _, r in g.iterrows()]
 
-    # 大盘状态判定 (以上证指数 = 市场代理): 20日/60日动量
+    # Market state verdict (SSE Composite as market proxy): 20-day/60-day momentum
     sh = df[df["ts_code"] == "000001.SH"].sort_values("trade_date").reset_index(drop=True)
     state = "UNKNOWN"
     if len(sh) > 60:
@@ -575,11 +577,11 @@ async def get_setup_market():
         ma20 = closes[-20:].mean()
         above_ma20 = closes[-1] > ma20
         if ret20 > 0.03 and above_ma20:
-            state = "BULL"       # 20日动量向上且在20日线上
+            state = "BULL"       # 20-day momentum up and above the 20-day MA
         elif ret20 < -0.03 and not above_ma20:
-            state = "BEAR"       # 20日动量向下且在20日线下
+            state = "BEAR"       # 20-day momentum down and below the 20-day MA
         else:
-            state = "RANGE"      # 震荡
+            state = "RANGE"      # range-bound
     latest = sh["trade_date"].iloc[-1] if len(sh) else None
     last_close = round(float(sh["close"].iloc[-1]), 2) if len(sh) else None
 
@@ -593,7 +595,7 @@ async def get_setup_market():
 
 @range_router.post("/setup/scan")
 async def trigger_setup_scan():
-    """手动触发蓄势启动扫描 (后台线程)"""
+    """Manually trigger a surge-setup scan (background thread)"""
     def _job():
         try:
             from range_trading.scanner.setup_scan import scan_setups
@@ -625,26 +627,27 @@ def _filter(records: List[Dict[str, Any]], min_score: float, range_only: bool) -
     return out
 
 
-# ============================ 每日 21:30 调度 ============================
+# ============================ Daily 21:30 schedule ============================
 
-# 调度时间: 每日 21:30。系统 21:00 已自动同步当天日K (core/scheduler),
-# 本任务直接用最新数据做扫描, 不再重复同步。
+# Schedule: daily 21:30. The system already auto-synced the day's daily bars at
+# 21:00 (core/scheduler); this job scans directly on the latest data without
+# syncing again.
 SCAN_HOUR = 21
 SCAN_MINUTE = 30
 
 
 def _daily_job():
-    """每日任务: 震荡扫描 + 蓄势启动扫描 + 信号跟踪回填 (在线程池中执行, 不阻塞事件循环)"""
+    """Daily job: range scan + surge-setup scan + signal tracking backfill (runs in a thread pool, does not block the event loop)"""
     from datetime import date as _date
     from storage.pg import PgClient
     today = _date.today()
     logger.info(f"[调度] {SCAN_HOUR}:{SCAN_MINUTE:02d} 扫描任务触发: {today}")
-    # 1. 震荡扫描 (含信号落盘 + 事后回填)
+    # 1. Range scan (incl. signal persistence + outcome backfill)
     try:
         run_scan(None)
     except Exception as e:
         logger.error(f"[调度] 扫描失败: {e}")
-    # 2. 蓄势启动扫描 (底部反弹+缩量消化候选, 趋势挖掘)
+    # 2. Surge-setup scan (bottom-rebound + volume-digestion candidates, trend discovery)
     try:
         from range_trading.scanner.setup_scan import scan_setups
         from range_trading.data.loader import get_latest_trade_date
@@ -670,7 +673,7 @@ def _seconds_until_next(hour: int = SCAN_HOUR, minute: int = SCAN_MINUTE) -> flo
 
 
 async def _scheduler_loop():
-    """asyncio 调度循环: 每日 21:30 触发 (21:00 已同步当天数据), 扫描放到线程池避免阻塞事件循环"""
+    """asyncio scheduler loop: fires daily at 21:30 (data already synced at 21:00); scans go to a thread pool to avoid blocking the event loop"""
     import asyncio
     logger.info(f"[调度] 每日 {SCAN_HOUR}:{SCAN_MINUTE:02d} 震荡+蓄势扫描调度已启动")
     while True:
@@ -684,7 +687,7 @@ _scheduler_task = None
 
 
 def start_scheduler():
-    """在 FastAPI lifespan 中调用 (需处于运行中的事件循环)"""
+    """Call from the FastAPI lifespan (must be inside a running event loop)"""
     import asyncio
     global _scheduler_task
     if _scheduler_task is not None and not _scheduler_task.done():
@@ -695,11 +698,13 @@ def start_scheduler():
 
 def catchup_if_stale():
     """
-    启动时检测落后并补跑 (应对电脑关机/睡眠导致定时器错过):
+    Detect staleness at startup and catch up (handles missed timers caused by
+    PC shutdown/sleep):
 
-    若当日是交易日且当前时间已过 21:30, 但最新扫描结果的日期 < 最新交易日,
-    说明今日 (或最近若干日) 的扫描没跑 -> 后台补跑 _daily_job (同步 + 双扫描)。
-    幂等: 已最新则直接跳过, 不重复扫描。
+    If today is a trading day, it is already past 21:30, and the latest scan
+    date < latest trading day, then today's (or recent days') scan did not run
+    -> rerun _daily_job in the background (sync + both scans).
+    Idempotent: skips directly if already up to date, no duplicate scans.
     """
     import asyncio
     from datetime import date as _date, datetime as _dt
@@ -714,7 +719,7 @@ def catchup_if_stale():
         logger.warning(f"[启动检查] 读取最新交易日失败, 跳过补跑: {e}")
         return
 
-    # 最新扫描日期: 优先内存缓存, 其次落盘文件
+    # Latest scan date: memory cache first, then on-disk files
     last_scan = _cache_meta.get("last_scan_date")
     if not last_scan:
         dates = _available_dates()
@@ -728,7 +733,7 @@ def catchup_if_stale():
         return
 
     now = _dt.now()
-    # 只有在"数据应该已就绪"的时间点才补跑: 当日 21:30 之后, 或最新交易日早于今天
+    # Catch up only when the data should already be ready: past 21:30 today, or the latest trading day is before today
     past_scan_time = (now.hour, now.minute) >= (SCAN_HOUR, SCAN_MINUTE)
     data_is_old = latest_td and latest_td < _date.today()
     if not (past_scan_time or data_is_old):
@@ -738,7 +743,7 @@ def catchup_if_stale():
     logger.info(f"[启动检查] 检测到扫描落后 (最新扫描 {last_scan} < 最新交易日 {latest_td_str}), 后台补跑")
 
     def _catchup():
-        # 若数据本身落后, 先同步到最新
+        # If the data itself lags, sync to latest first
         try:
             from tools.market.sync_tushare import run_backfill
             run_backfill(start=None, end=None, tables=["daily"])
