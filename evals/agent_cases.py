@@ -11,7 +11,7 @@ has been replaced by the Agent tool loop; this case set asserts user-visible beh
   - contains_any    answer contains at least one keyword; contains_all requires all
   - not_contains    answer must not contain these (a global check for tool-record leakage also applies)
 
-Type coverage: query/compare/mainbiz/valuation/forecast/verify/risk/chain/alpha/quant/
+Type coverage: query/compare/mainbiz/valuation/forecast/verify/risk/chain/alpha/
                knowledge (pure common sense) / no_data (future periods) / offscope (symbols outside DB) / multiturn (multi-turn follow-ups)
 """
 from __future__ import annotations

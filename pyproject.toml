@@ -58,4 +58,4 @@ requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["api*", "core*", "skills*", "services*", "tools*", "storage*", "jobs*", "mcp*", "range_trading*", "evals*"]
+include = ["api*", "core*", "harness*", "skills*", "tools*", "storage*", "jobs*", "evals*"]

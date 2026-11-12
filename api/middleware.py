@@ -4,7 +4,7 @@ Global auth middleware
 
 Rules:
 - Login-free whitelist: /api/auth/login, /api/auth/register, /health, /, /docs*, /openapi.json,
-  static assets (/assets/*, /range, /login, /favicon*)
+  static assets (/assets/*, /login, /favicon*)
 - All other /api/* paths and WebSocket upgrade requests must carry a valid Bearer token
 - Non-API paths (frontend pages) pass through; the frontend router redirects to the login page
 """
@@ -21,7 +21,7 @@ logger = get_logger(__name__)
 
 # Login-free paths, matched exactly or by prefix
 OPEN_PATHS = {
-    "/", "/health", "/range", "/login", "/favicon.ico",
+    "/", "/health", "/login", "/favicon.ico",
     "/openapi.json", "/docs", "/docs/oauth2-redirect", "/redoc",
 }
 OPEN_PREFIXES = ("/api/auth/login", "/api/auth/register", "/assets/")

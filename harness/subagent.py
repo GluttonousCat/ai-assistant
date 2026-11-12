@@ -2,7 +2,7 @@
 """
 Sub-agent domain routing.
 
-Motivation: presenting all 18 tools at once to a weaker model (deepseek flash tier)
+Motivation: presenting all 29 tools at once to a weaker model (deepseek flash tier)
 makes the choice space large and mis-selection likely. The mainstream fix is not
 splitting MCP servers (hosts flatten tool lists, so server splits are invisible to the
 model) but **shrinking the menu**: route to a domain first, the sub-agent sees only its

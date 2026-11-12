@@ -5,7 +5,7 @@ data; no LLM in the assembly layer)
 
 Everything goes through REGISTRY.call to reuse the MCP tool layer (resolve_stock /
 query_financials / query_main_business / valuation_percentile / get_forecasts /
-verify_forecasts / detect_financial_risk / search_reports / run_quant_scan) —
+verify_forecasts / detect_financial_risk / search_reports) —
 zero duplicated capability implementations; a single failed section does not
 take down the whole profile (recorded in failed_sections).
 
@@ -36,7 +36,6 @@ _SECTIONS: List[tuple] = [
     ("verification", "verify_forecasts", {"stock": "{stock}"}),
     ("risk", "detect_financial_risk", {"stock": "{stock}"}),
     ("reports", "search_reports", {"stock": "{stock}", "days": 180, "limit": 5}),
-    ("regime", "run_quant_scan", {"scan_type": "regime", "stock": "{stock}"}),
 ]
 
 
@@ -235,9 +234,6 @@ def profile_digest(profile: Dict[str, Any], max_chars: int = 6000) -> str:
             items.append(f"{(h['holder_name'] or '')[:14]} "
                          f"{h.get('hold_ratio')}%{mark}")
         parts.append(f"[十大股东·{hd.get('end_date', '')}] " + "; ".join(items))
-
-    # Note: the quant regime section is deliberately excluded from the article
-    # digest — articles contain no quant content
 
     text = "\n".join(parts)
     return text[:max_chars] + ("\n…(截断)" if len(text) > max_chars else "")

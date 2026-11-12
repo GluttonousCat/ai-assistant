@@ -60,20 +60,20 @@
 
 | 角色 | 权限 |
 |------|------|
-| 超级管理员（`Gluttonouscat`，.env `SUPER_ADMIN` 可改） | 全部 + 区间看板 + **用户管理（独占）** |
-| `admin`（其他管理员） | Agent 对话 / 研报中心 / **区间看板可看可点**；**用户管理完全不可见**（导航不渲染，API 403） |
-| `user` | Agent 对话 / 研报中心；区间看板置灰 🔒；用户管理不可见 |
+| 超级管理员（`Gluttonouscat`，.env `SUPER_ADMIN` 可改） | 全部 + 实时监控 + **用户管理（独占）** |
+| `admin`（其他管理员） | Agent 对话 / 研报中心 / **实时监控可看可点**；**用户管理完全不可见**（导航不渲染，API 403） |
+| `user` | Agent 对话 / 研报中心；实时监控置灰 🔒；用户管理不可见 |
 
 **机制三层**：
 1. 前端门控：`Platform.jsx` 导航项 `adminOnly` → 非 admin `disabled` + 🔒 图标；hash 直达也回落对话页
-2. API 门控：`/api/range/*` 整组挂 `require_admin`；`GET /api/auth/users`、`POST /api/auth/users/{id}/role` 同
+2. API 门控：`/api/monitor/*` 整组挂 `require_admin`；`GET /api/auth/users`、`POST /api/auth/users/{id}/role` 同
 3. **实时校验**：`require_admin` 以数据库当前角色为准（不信 JWT 内 role）——提权/降权**无需重新登录，即时生效**
    （防降权后旧 token 残留 admin 权限 12h）
 
 **管理操作**：仅超级管理员在「用户管理」页切换任意账号角色（其他 admin 连入口都看不到，
 API 层 `_require_super` 同样拦截，用户名匹配 .env `SUPER_ADMIN`，默认 Gluttonouscat）；防呆：不能改自己的角色。
 
-**区间看板**：所有 admin（超级管理员+被提升的管理员）可见可点；user 置灰。
+**实时监控**：所有 admin（超级管理员+被提升的管理员）可见可点；user 置灰。
 
 **种子账号策略变更**：`ensure_auth_schema` 原"admin 用户不存在就自动重建"会导致删除弱口令账号后重启复活
 （实际发生过）——已改为**仅用户表完全为空时**才创建种子（首次部署引导）。日常管理员任命走用户管理页。
@@ -96,7 +96,7 @@ API 层 `_require_super` 同样拦截，用户名匹配 .env `SUPER_ADMIN`，默
 | 弱口令可注册 | 原仅 ≥6 位 | 双层校验升级为用户名英文≥6、密码≥8（本节二） | ✅ 本轮 |
 | 公网开放注册有滥用风险 | 无门槛 | 注册码门槛（默认 123456，.env 可改）；「显示名称」字段移除 | ✅ 本轮 |
 | 删除 admin 后重启又自动复活 | 种子逻辑"admin 不存在就重建" | 种子改为仅空表创建；admin 删除后由 Gluttonouscat(admin) 独占管理权 | ✅ 已修复 |
-| 需要角色权限分级（区间看板 admin 专属/朋友仅研究员） | 初版无角色体系 | 三层门控（前端 disabled/API require_admin/DB 实时角色）+ 用户管理页 | ✅ 本轮 |
+| 需要角色权限分级（管理页 admin 专属/朋友仅研究员） | 初版无角色体系 | 三层门控（前端 disabled/API require_admin/DB 实时角色）+ 用户管理页 | ✅ 本轮 |
 
 ## 五、验证记录
 

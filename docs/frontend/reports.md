@@ -8,14 +8,14 @@
 ### 1.1 数据流水线
 
 ```
-知识星球 (每日 07:00/23:00 调度, core/zsxq_scheduler.py)
+知识星球 (每日 00:00/12:00 调度, jobs/zsxq_scheduler.py)
    │ 爬话题 + 逐个下载 PDF 附件 (反检测限速 60-120s/个)
    │ ※ 中文翻译版 (文件名「中文版-」等, utils.helpers.is_chinese_translated)
    │    下载层标 skipped 不下载 + sync 层不入库 —— 只保留英文原版
    ▼
-★ 逐篇流水 (scripts/daily_fetch_zxsq.py:_process_one_report,
+★ 逐篇流水 (jobs/daily_fetch_zxsq.py:_process_one_report,
    每下载完 1 个文件立即执行, 不等整批 —— 下载完即"已分析", 前端立即可用):
-   1. 增量同步 PG (scripts/sync_zxsq_to_pg.py, 返回本次新入库 report_id)
+   1. 增量同步 PG (jobs/sync_zxsq_to_pg.py, 返回本次新入库 report_id)
       → fin.report_meta (本地文本层抽取正文, 有文本层即 content_chars>0)
    2. 对新入库的 PDF/docx 逐篇:
       ① LLM Analysis 轻量元数据 (tools/finance/report_meta_analysis.py,
@@ -23,7 +23,7 @@
       ② 深度提取 (skills/report/skill.py 单篇 extract:
          正文 → 评级/盈利预测/核心观点/tags; 输出一律中文, 英文原版翻译后输出)
       (话题 txt 条目跳过, 由 merge 归并进同话题 PDF, 不浪费 LLM)
-   3. 去重合并 (scripts/merge_report_duplicates.py)
+   3. 去重合并 (jobs/merge_report_duplicates.py)
 
 图片型 PDF (无文本层, content_chars=0): 深度提取时转后台 qwen 视觉 OCR
   (状态 pending_ocr, 前端隐藏) → OCR 完成 → ★自动接续单篇深度提取
@@ -31,7 +31,6 @@
 
 兜底 (调度器 _run_round 轮末, 12h 一轮): LLM Analysis 积压清理(40) +
 深度提取批量限额(8/15 篇) —— 只兜漏网/存量, 主链路已是逐篇流水
-存量积压: scripts/backfill_report_analysis.py 一次性回填 (元数据/深度/OCR 三阶段, 幂等)
 ```
 
 ### 1.2 表结构（fin.report_meta 关键列）
@@ -51,7 +50,7 @@
 
 `fin.report_forecast`：盈利预测（report_id 关联，A 股用 ts_code、非 A 股用 symbol+market）。
 
-### 1.3 去重合并规则（scripts/merge_report_duplicates.py）
+### 1.3 去重合并规则（jobs/merge_report_duplicates.py）
 
 同一知识星球话题常产生多条记录（PDF 原文 / txt 中文解读 / mp3 音频）：
 
@@ -96,7 +95,7 @@ POST /api/reports/{id}/analyze/stream   (SSE, 需 JWT)
        (同步重 IO 不进事件循环; error 后必补发 done, 前端统一收尾)
 ```
 
-事件协议与 Agent 问答（/api/v1/query/stream）同构：
+事件协议与 Agent 问答（/api/v1/agent/stream）同构：
 `stage {stage,message} / delta {text} / data {data} / error {message} / done {}`。
 
 提取与规范化逻辑由 `_apply_extract_result` 统一承载，
@@ -138,7 +137,7 @@ POST /api/reports/{id}/analyze/stream   (SSE, 需 JWT)
 | 深度提取永远追不上下载，"未分析"研报越积越多（前端十几个不可用） | 深度提取只在**整轮爬完后**由调度器批量跑且限额 8/15 篇，而下载 15 篇/轮 × 2 轮/天；逐篇流水里只有 LLM Analysis 没有 AI 分析 | 深度提取搬进下载流水线：`sync.run()` 返回新入库 report_id（INSERT RETURNING）→ `_process_one_report` 对刚入库的 PDF/docx 逐篇「元数据+深度提取」，下载完即 done；调度器轮末批量保留为兜底 | ✅ 已修复 (2026-09-02) |
 | 新研报元数据迟迟不提取（标题仍是文件名），被旧积压挡住 | 逐篇流水里的 `analyze_pending(limit=5)` 按 `report_id` **升序**取最旧 5 篇，有积压时新篇永远排不上 | 改为精准单篇 `analyze_report_meta(新report_id)`；`analyze_pending` 仅在无新文件时兜底清积压 | ✅ 已修复 (2026-09-02) |
 | 图片型 PDF OCR 完成后最长 12h 无人接续深度提取 | OCR 后台线程只回写正文，提取要等下一轮调度（07:00/23:00）碰到它 | `_vision_backfill` 的 OCR 完成回调里直接跑单篇深度提取（此刻已有正文，不再进视觉分支，无递归） | ✅ 已修复 (2026-09-02) |
-| 逐篇流水上线后前端仍见大量"未处理"（存量积压：元数据缺 128 + 深度提取 52 + 图片 PDF 90） | 流水线只管**新下载**；存量靠轮末兜底（元数据 40 篇/12h、深度提取 8-15 篇/12h）要清数天~数周 | 一次性回填脚本 `scripts/backfill_report_analysis.py`（元数据/深度提取/OCR 三阶段，均最新优先、幂等可重跑，与调度共存）；OCR 阶段串行防线程风暴 | ✅ 已修复 (2026-09-02) |
+| 逐篇流水上线后前端仍见大量"未处理"（存量积压：元数据缺 128 + 深度提取 52 + 图片 PDF 90） | 流水线只管**新下载**；存量靠轮末兜底（元数据 40 篇/12h、深度提取 8-15 篇/12h）要清数天~数周 | 一次性回填脚本（元数据/深度提取/OCR 三阶段，均最新优先、幂等可重跑，与调度共存）；OCR 阶段串行防线程风暴 | ✅ 已修复 (2026-09-02) |
 | OCR 失败/异常的 PDF 被每轮无限重试 OCR（白烧 qwen），或异常时状态卡 `pending_ocr` 前端永久隐藏 | `_vision_backfill` 失败只置 `extraction_status`，`analysis_status` 仍 none → 每轮重新选中再 OCR；ocr_pdf 抛异常时状态不更新 | 失败与异常统一置 `extraction_status='failed' + analysis_status='failed'`（终态，轮次不再自动选；「AI 分析」按钮仍可手动重试） | ✅ 已修复 (2026-09-02) |
 | 中文翻译版与英文原版成对入库（70 条 `中文版-xxx-译文.pdf`） | 知识星球对英文研报常同时发原版+中文翻译，下载/入库层无过滤 | `is_chinese_translated()`（utils.helpers）：下载层标 skipped 不下载、sync 层不入库；存量清理删 60 条成对中文版（保留原版），10 条无原版的中文版保留顶位（删则失数据） | ✅ 已修复 (2026-09-03) |
 | 英文原版研报的 AI 分析输出英文（core_view/key_points 英文） | 提取 prompt 未约束输出语言，模型跟随原文语言 | REPORT_EXTRACT_PROMPT 显式约束「所有文本字段一律简体中文，英文必须翻译」（代码/数字/单位保留）；META prompt 的 org/target 同样约束中文通用名 | ✅ 已修复 (2026-09-03) |
@@ -169,21 +168,21 @@ POST /api/reports/{id}/analyze/stream   (SSE, 需 JWT)
 英文原版必须翻译后输出（代码/数字/单位/专业术语缩写可保留原样）**。
 
 模型调用：deepseek-v4-flash，思考开关与 max_tokens 由 `harness/llm.py` 按 config 统一注入
-（当前 `enable_thinking: true` 最强思考 + `max_tokens: 16384`，
+（当前 `enable_thinking: true` 最强思考 + `max_tokens: 32768`，
 流式 reasoning 块自动跳过只出正文）。
 
 ## 四、AI 分析流式弹窗验证记录（2026-09-02）
 
 | 验证项 | 方式 | 结果 |
 |--------|------|------|
-| extract_stream 事件流 (正常链路) | `scripts/test_report_stream_mock.py` mock PG/LLM | stage→delta×14→parse→save→data→done 全序正确；delta 拼接=原始 JSON；`report_forecast` DELETE+INSERT 均执行；analysis_status='done' |
+| extract_stream 事件流 (正常链路) | mock PG/LLM | stage→delta×14→parse→save→data→done 全序正确；delta 拼接=原始 JSON；`report_forecast` DELETE+INSERT 均执行；analysis_status='done' |
 | 图片型 PDF 分支 | 同上 (content_chars=0 + file_path) | stage ocr + error 友好提示；**不**写 analysis_status='failed' |
 | enable_thinking 关闭 | mock 断言 invoke/stream 均传 `extra_body` | 通过 |
 | SSE 端点鉴权/协议 | TestClient 直连 app (不起 lifespan) | 无 token 401；带 token 200 + `text/event-stream`，事件 `stage/error/done` 序列正确 (error 后补 done) |
 | 前端 | `npm run build` (vite) | 构建通过，dist 已更新 |
-| 逐篇下载流水线 (本次: 深度提取进流水) | `scripts/test_fetch_pipeline_mock.py` | 新入库仅 PDF 逐篇 元数据+深度提取（txt 跳过）；无新文件 noop+兜底；返回 `ok+extracted 1` |
+| 逐篇下载流水线 (本次: 深度提取进流水) | mock 测试 | 新入库仅 PDF 逐篇 元数据+深度提取（txt 跳过）；无新文件 noop+兜底；返回 `ok+extracted 1` |
 | sync.run() 返回新 report_id | 真实 PG 增量空跑 (幂等) | 返回 `[]` 无错；INSERT 改 `RETURNING report_id` 不影响存量行为 |
-| 存量积压回填 | `scripts/backfill_report_analysis.py` 真实运行 3 轮 (日志 logs/backfill_report_analysis.log) | 服务补跑轮 bulk-sync 148 个历史下载文件带来二次积压，脚本幂等重跑吸收；最终：元数据缺失 128→1、深度提取 52→0、截图行全部 done；剩 39 册图片 PDF 由脚本+调度并行 OCR（约 1-2h） |
+| 存量积压回填 | 回填脚本真实运行 3 轮 (日志 logs/backfill_report_analysis.log) | 服务补跑轮 bulk-sync 148 个历史下载文件带来二次积压，脚本幂等重跑吸收；最终：元数据缺失 128→1、深度提取 52→0、截图行全部 done；剩 39 册图片 PDF 由脚本+调度并行 OCR（约 1-2h） |
 | 中文版过滤 (2026-09-03) | `is_chinese_translated` 单测 8 例 + PG 存量清理 | 判定含「中文版-」前缀/「-中文版-」分隔/中文版后缀变体；删 60 条成对中文版 (级联 forecast+merge 清 100 残余)，10 条无原版中文版保留 |
 | 最强思考 + 中文输出 (2026-09-03) | 英文原版 #14758 重跑深度提取 (extract_stream 全链) | 思考开启 91s 完成 (原 ~10s)，content 正常 (delta 203 块)；core_view/key_points 全中文；评级/词表正常；盈利预测 7 条入库；extract 用途注入 `enable_thinking: true`+`max_tokens: 16384`，vision 用途 false |
 | OCR 密集日志诊断 (2026-09-03) | 库检查 + 日志比对 | 同 file_path 无重复记录（无重复入库/重复 OCR）；1 分钟 15 个「转后台」= 本地已有积压文件在下载循环秒过密集触发，属积压消化；165 done / 26 pending_ocr / 50 待轮到；外键竞争用例（UPDATE rowcount=0）mock 验证返回 None 且无 forecast INSERT |

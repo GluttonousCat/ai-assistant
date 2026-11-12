@@ -13,7 +13,7 @@ forbidden):
     in batches of 3)
 
 Three-layer separation: this shard produces fact layer only. The profile's
-forecasts/verification/reports/risk/regime sections belong to the view/judgment layers
+forecasts/verification/reports/risk sections belong to the view/judgment layers
 (T04/T09 responsibility) and are deliberately excluded.
 
 Caliber conventions:
@@ -488,7 +488,7 @@ def _build_meta(profile: Dict[str, Any], years: int, facts: List[Fact],
         "valuation_note": ("估值水位=画像valuation板块(PE/PB现值+近3年分位); 市值为最新交易日现值"
                            "(万元÷1e4折亿); 多年估值/市值年度时序在禁直写SQL约束下不可达"
                            "(query_financials行情分支仅近30天宽列)"),
-        "excluded": ("画像中 forecasts/verification/reports/risk/regime 板块未纳入: "
+        "excluded": ("画像中 forecasts/verification/reports/risk 板块未纳入: "
                      "属观点/判断层 (T04/T09 职责), 本分片纯事实层"),
     }
 

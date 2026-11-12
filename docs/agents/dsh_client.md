@@ -1,7 +1,7 @@
 # dsh (DeepSeek Harness) 作为 MCP 客户端接入
 
 > 更新:2026-09-14 · 一次性验证记录, 非依赖项 — 本项目**不引入 dsh 框架**,
-> 仅把平台的 34 工具 MCP server (`python -m harness.mcp.server`) 当作外部 harness
+> 仅把平台的 32 工具 MCP server (`python -m harness.mcp.server`) 当作外部 harness
 > 的数据后端试用/评测。
 
 ## 一、系统设计(为什么这样接)
@@ -9,10 +9,10 @@
 DSH 的范式是 "Agent = Model + Harness, 一切皆插件"。对本项目的正确用法
 不是重写 core(已验证: 技术栈不接、单用户平台无热插拔需求), 而是**消费关系**:
 dsh 这类 MCP 客户端 harness 直接连我们的 stdio MCP server, 复用平台全部
-只读数据能力(A 股财务/行情/研报/产业链/量化扫描)。
+只读数据能力(A 股财务/行情/研报/产业链)。
 
 ```
-dsh (TS, 插件化 harness)  ──stdio JSON-RPC──>  python -m harness.mcp.server (34 工具)
+dsh (TS, 插件化 harness)  ──stdio JSON-RPC──>  python -m harness.mcp.server (32 工具)
                                                     └─> skills/tools/storage (PG/SQLite)
 ```
 
@@ -27,7 +27,7 @@ dsh (TS, 插件化 harness)  ──stdio JSON-RPC──>  python -m harness.mcp.
 | 项 | 值 |
 |----|----|
 | command | `<项目根>\.venv\Scripts\python.exe` |
-| args | `["-m", "mcp.server"]` |
+| args | `["-m", "harness.mcp.server"]` |
 | cwd(如支持) | 项目根(定位 config.yaml/.env) |
 | env | `PYTHONIOENCODING=utf-8`(Windows 控制台编码坑) |
 

@@ -32,13 +32,7 @@ llm:
       enable_thinking: false
     embedding:
       model: text-embedding-v3
-  temperature: 0.7
-  timeout: 60
 
-# Tushare 数据抓取参数
-tushare:
-  rate_limit_sleep: 0.5       # 每次抓取间隔(秒)
-  chunk_size: 1000            # 批量入库分块大小
 
 # 每日增量同步调度 (后端常驻即自动执行)
 schedule:
@@ -50,8 +44,6 @@ schedule:
 zsxq:
   crawl_interval_min: 1.5        # 话题爬取最小间隔(秒)
   crawl_interval_max: 2.5        # 话题爬取最大间隔(秒)
-  download_min_delay: 60         # 文件下载最小间隔(秒)
-  download_max_delay: 120        # 文件下载最大间隔(秒)
   download_long_sleep_min: 60    # 每个文件下载后的长休眠最小(秒) — 逐篇流水的节奏来源
   download_long_sleep_max: 120   # 每个文件下载后的长休眠最大(秒)
 

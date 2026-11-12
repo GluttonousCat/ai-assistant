@@ -15,9 +15,9 @@
           api/finance.py agent_stream_endpoint → harness/loop.py run_agent_stream
               │
               ├─ ① 快车道: 高置信简单 query/compare → LLM 直生成 SQL(规则兜底) → 图表+简报
-              ├─ ② 域子Agent: L1 规则路由六域(财务/研报/产业链/量化/风控/实体), 域内 2~4 工具
+              ├─ ② 域子Agent: L1 规则路由五域(财务/研报/产业链/风控/实体), 域内 2~4 工具
               │     + escalate_to_full_agent 升级伪工具
-              └─ ③ 全工具循环: 17 只读工具 LLM 自主决策 (快车道/子Agent 未命中或升级续跑)
+              └─ ③ 全工具循环: 29 只读工具 LLM 自主决策 (快车道/子Agent 未命中或升级续跑)
 ```
 
 （旧链路 `POST /api/v1/query/stream` 与编排层 services/ 已于 2026-09-14 移除，

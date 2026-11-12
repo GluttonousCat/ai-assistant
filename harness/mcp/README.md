@@ -1,4 +1,4 @@
-# mcp/ — MCP 工具层 (29 只读 + 3 写类 = 32 个投研能力)
+# harness/mcp/ — MCP 工具层 (29 只读 + 3 写类 = 32 个投研能力)
 
 > 2026-09-07 首版。目标: 把平台散落在 skills/tools/beta_alpha 的原子能力
 > 统一包成 **带 JSON Schema 的标准工具**, 同时服务两条消费链路:
@@ -11,7 +11,7 @@
 ## 一、目录结构
 
 ```
-mcp/
+harness/mcp/
   spec.py       ToolSpec 规范 (一个工具长什么样, 见下节)
   registry.py   注册表: @REGISTRY.tool 装饰器 / call 统一入口 / 双协议导出
   tools/        32 个工具实现 (29 只读 + forge_chain/fetch_annual_report/write_article 3 写类), 按 5 域分组
@@ -27,7 +27,7 @@ mcp/
 ../../jobs/smoke_mcp_tools.py      全量冒烟 (fast/heavy 两档)
 ```
 
-## 二、工具清单 (18 只读 + 3 写类)
+## 二、工具清单 (29 只读 + 3 写类 = 32)
 
 | # | 域 | 工具 | 能力 | 底座 (既有代码) | 只读 |
 |---|----|------|------|----------------|------|
@@ -52,6 +52,8 @@ mcp/
 | 15 | risk | `detect_financial_risk` | 8 规则财务排雷 (毛利率连降/背离/商誉/杠杆…) | **全新** (fina_indicator+三表) | ✓ |
 | 16 | risk | `verify_forecasts` | 券商预测兑现校验 (历史预测 vs 实际, 命中率/偏向) | **全新** (report_forecast+income) | ✓ |
 
+> 注: 上表仅列代表性工具 (非全部 32 个), 完整清单见 `tools/` 各域实现与 REGISTRY 注册表。
+
 ## 三、ToolSpec 设计格式 (审核重点)
 
 一个工具 = 一个 `@REGISTRY.tool(...)` 装饰器声明 + 一个普通 Python 函数:
@@ -59,7 +61,7 @@ mcp/
 ```python
 @REGISTRY.tool(
     name="valuation_percentile",            # 英文 snake_case, 动词开头, 全局唯一
-    domain="financial",                     # 6 域之一 (分组/权限/图表路由用)
+    domain="financial",                     # 5 域之一 (分组/权限/图表路由用)
     description="估值分位: 当前 PE(TTM)/PB 处于近 N 年历史的百分位…",  # 中文, 见下节
     params_schema=obj_schema({
         "stock": param("股票名或代码", "string"),
@@ -104,10 +106,10 @@ def valuation_percentile(stock: str, years: int = 3) -> dict: ...
 ### 5.1 内部 Agent Loop (推荐主路径, 对话页升级用)
 
 ```python
-from mcp.bridge import openai_tools, run_tool_call, system_prompt_hint
-from llm.client import get_agent_llm
+from harness.mcp.bridge import openai_tools, run_tool_call, system_prompt_hint
+from harness.llm import get_agent_llm
 
-tools = openai_tools()          # 只读 18 个; openai_tools(include_write=True) 全量 21
+tools = openai_tools()          # 只读 29 个; openai_tools(include_write=True) 全量 32
 # … LLMClient 发起 tool_choice="auto" 的对话 (需在 client 层补 tools 参数透传) …
 env = run_tool_call(tc.name, tc.arguments_json)   # -> 统一信封
 ```
@@ -116,7 +118,7 @@ env = run_tool_call(tc.name, tc.arguments_json)   # -> 统一信封
 
 ```bash
 # 启动 (项目根目录; core/config 会自动向上定位 config.yaml/.env)
-.venv\Scripts\python.exe -m mcp.server
+    .venv\Scripts\python.exe -m harness.mcp.server
 ```
 
 客户端配置示例 (任何支持 stdio MCP 的宿主):
@@ -126,7 +128,7 @@ env = run_tool_call(tc.name, tc.arguments_json)   # -> 统一信封
   "mcpServers": {
     "alpha-radar": {
       "command": "C:/Users/GluttonousCat/PycharmProjects/ai-assistant/.venv/Scripts/python.exe",
-      "args": ["-m", "mcp.server"],
+      "args": ["-m", "harness.mcp.server"],
       "cwd": "C:/Users/GluttonousCat/PycharmProjects/ai-assistant"
     }
   }
@@ -142,17 +144,17 @@ protocolVersion `2024-11-05`, 零第三方依赖 (手写 JSON-RPC, UTF-8)。
 
 | 日期 | 内容 | 结果 |
 |------|------|------|
-| 2026-09-07 | fast 档冒烟 (18 工具 21 用例, `scripts/smoke_mcp_tools.py`) | 全部 PASS, 单工具 0ms~6s |
+| 2026-09-07 | (历史) fast 档冒烟 (18 工具 21 用例, `scripts/smoke_mcp_tools.py`) | 全部 PASS, 单工具 0ms~6s |
 | 2026-09-07 | stdio 协议端到端 (initialize/list/call/错误路径) | PASS, isError 正确标记 |
 | 2026-09-07 | verify_forecasts 抽查: 阳光电源 2025 净利预测 135亿 vs 实际 134.6亿, err -0.3% 判「兑现」 | 数值正确 |
 | 2026-09-07 | detect_financial_risk 抽查: 中际旭创命中「经营现金流仅为净利润 13%」medium | 符合预期 |
-| 2026-09-07 | heavy 档 (全市场扫描 + forge): regime 0.5s / range 578s / trend 365s / setup 172s / forge 509s (含 2 次 LLM 超时重试后成功) / extract 不存在文件→正确报 ToolError | 全部 PASS |
+| 2026-09-07 | (历史) heavy 档 (全市场扫描 + forge): regime 0.5s / range 578s / trend 365s / setup 172s / forge 509s (含 2 次 LLM 超时重试后成功) / extract 不存在文件→正确报 ToolError | 全部 PASS |
 | 2026-09-07 | pytest mcp/tests (注册表完整性/信封契约/schema 规范) | 24 passed |
 | 2026-09-13 | stdio 错误通道对齐 MCP 规范: 未知工具/arguments 非对象回 JSON-RPC error -32602 (原误走 isError), 非对象消息回 -32600; 新增 test_server.py 协议单测 | pytest mcp/tests 全过 + stdio 端到端复验 PASS |
 
 已知限制 (审核时留意):
-1. **`mcp` 包名与官方 MCP SDK 同名**: 若日后 `pip install mcp`, 从项目根运行会 import 到本目录。
-   如需共存可整体改名 `mcptools/` (内部引用只有 `mcp.` 前缀, 机械替换即可)。
+1. **包路径已迁 `harness/mcp/`**: 顶层导入为 `harness.mcp.*`, 不再与 PyPI 官方 `mcp` SDK 同名冲突
+   (目录曾为顶层 `mcp/`, 旧 `mcp.` 前缀引用已随之改写)。
 2. verify_forecasts 现库可回验样本少: forecast 表仅 252 行且多为 2026E+ 期间/外币口径
    (中芯国际的预测全是美元)。随研报持续入库自动改善。
    Agent 侧建议对重工具做耗时提示。
@@ -161,11 +163,11 @@ protocolVersion `2024-11-05`, 零第三方依赖 (手写 JSON-RPC, UTF-8)。
 
 ## 七、接入状态 (2026-09-07 已实施)
 
-1. ✅ `agent/loop.py` — LLM + `openai_tools()` 工具循环 (≤8 轮), 沙盒 (只读/超时/防重复), 见 docs/agents/agent_loop.md
-2. ✅ `llm/client.py` — 新增 `invoke_with_tools` (deepseek function-calling)
+1. ✅ `harness/loop.py` — LLM + `openai_tools()` 工具循环 (≤8 轮), 沙盒 (只读/超时/防重复), 见 docs/agents/agent_loop.md
+2. ✅ `harness/llm.py` — 新增 `invoke_with_tools` (deepseek function-calling)
 3. ✅ `api/finance.py` — 新端点 `POST /api/v1/agent/stream` (stage/tool_call/data/delta 事件)
-4. ✅ `agent/history_store.py` — 会话历史 (多轮追问); 前端 AgentChat 已切换并携带 session_id
-5. ✅ `mcp/server.py` — stdio 服务默认只读模式 (`ALPHA_MCP_READ_ONLY=1`, 写类工具不可见不可调)
+4. ✅ `harness/session.py` — 会话历史 (多轮追问); 前端 AgentChat 已切换并携带 session_id
+5. ✅ `harness/mcp/server.py` — stdio 服务默认只读模式 (`ALPHA_MCP_READ_ONLY=1`, 写类工具不可见不可调)
 
 E2E 实测 (用户原例): T1「中际旭创2025年报净利润」→ 107.97亿;
 T2「环比竟然下降了，数据对吗？」(零线索追问) → 继承标的 → 重新取数拆单季 →

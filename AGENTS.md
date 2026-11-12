@@ -2,7 +2,7 @@
 
 > 本文件是给 AI Agent（及新成员）的**项目第一入口**。读完本文件即可建立全局认知，
 > 再按需深入 `docs/` 对应模块文档。人类同事请从 [docs/README.md](docs/README.md) 进。
-> 更新：2026-09-02
+> 更新：2026-11-12
 
 ## 1. 项目是什么
 
@@ -18,9 +18,9 @@
 
 ```
 harness/     引擎层 (Agent Harness — 模型之外的一圈机器, 借鉴 DSH/Cordis 范式):
-             loop(三级漏斗决策循环)/subagent(六域子代理)/intent(分层意图)/
+             loop(三级漏斗决策循环)/subagent(五域子代理)/intent(分层意图)/
              session(会话=历史+股票槽位)/trajectory(全量轨迹JSONL)/llm.py(模型路由工厂)/
-             mcp(工具协议层: 22工具ToolSpec+stdio server, 外部客户端 python -m harness.mcp.server)
+             mcp(工具协议层: 32工具ToolSpec+stdio server, 外部客户端 python -m harness.mcp.server)
              (ctx 事件总线/插件化: 已有设计, 按 YAGNI 未落地)
 core/        基础设施 (引擎与各层共用的地基, 不含业务):
              config(.env+yaml)/logger(按顶层包分桶)/security(JWT+bcrypt)/
@@ -30,7 +30,7 @@ skills/      领域技能 (每技能一目录, 专业知识放 prompt):
              beta_alpha(产业链Beta+个股Alpha: chains种子链/analysis/tests) /
              content(内容资产管线: 画像/公众号文章/PPT/年报解读) /
              research(研究生产线: 证据→十章草稿→成稿, 任务分派见 docs/research/tasks/)
-jobs/        任务层一体: scheduler(Tushare 21:00) / zsxq_scheduler(爬虫 07:00/23:00) /
+jobs/        任务层一体: scheduler(Tushare 21:00) / zsxq_scheduler(爬虫 00:00/12:00) /
              管线入口(daily_fetch_zxsq, sync_zxsq_to_pg, merge_report_duplicates, smoke) /
              health_sentinel(独立心跳哨兵: API探活+WS广播+自动拉起, 8209) /
              wecom_bot(企微智能机器人 wss 长连接桥接→本地Agent, 见 docs/agents/wecom_bot.md)
@@ -57,7 +57,7 @@ DB 实时角色校验）、`storage/pg.py`（PgClient 是上下文管理器，�
 ## 3. 数据流水线（研报链路，最常改动）
 
 ```
-07:00/23:00 调度 → 爬话题 + 逐个下载PDF(反检测,60-120s/个)
+00:00/12:00 调度 → 爬话题 + 逐个下载PDF(反检测,60-120s/个)
   ※ 中文翻译版(文件名"中文版-"等, is_chinese_translated)下载/入库层直接过滤, 保留英文原版
   → 每下载1个立即(逐篇流水, 下载完即"已分析"前端可用):
      sync_zxsq_to_pg 入库(返回新report_id) → LLM Analysis(仅文件名→标题/机构/标的/行业/地区/市场)
@@ -85,7 +85,7 @@ sections=三~七节按 L1 小节全量（mdna 全量/治理·事项关键词/股
 
 `config.yaml llm.models.<用途>`：default/agent/extract/analysis=deepseek-v4-flash-0731，
 vision=qwen3.8-flash（deepseek 不收图片）。**思考开关由 `llm.enable_thinking` 全局控制
-（当前 true=最强思考；vision 用途已覆盖关闭）；`llm.max_tokens` 必须给足（16384，思考与
+（当前 true=最强思考；vision 用途已覆盖关闭）；`llm.max_tokens` 必须给足（32768，思考与
 正文共用预算）——两者由 `harness/llm.py` 统一注入，业务代码禁止传 `enable_thinking`**。
 代码用 `get_agent_llm()/get_extract_llm()/get_vision_llm()` 工厂，禁止硬编码模型名。详见
 [docs/agents/llm_models.md](docs/agents/llm_models.md)。
@@ -102,7 +102,7 @@ vision=qwen3.8-flash（deepseek 不收图片）。**思考开关由 `llm.enable_
 
 | 坑 | 规则 |
 |----|------|
-| deepseek 思考吃光 token（content 空） | 根因是 **max_tokens 太小**而非思考本身：开思考必须配足 `llm.max_tokens`（16384）；思考开关 config 统一控制，业务代码禁止硬编码 |
+| deepseek 思考吃光 token（content 空） | 根因是 **max_tokens 太小**而非思考本身：开思考必须配足 `llm.max_tokens`（32768）；思考开关 config 统一控制，业务代码禁止硬编码 |
 | DDL 在事务内锁死整表 | `_ensure_columns` 用独立连接+缺才 ALTER（曾致全站卡死） |
 | 孤儿控制台 stdout 阻塞事件循环 | 服务输出必须重定向文件，bat 用 tail 看 |
 | 同步重 IO 在 async 上下文 | 用 `asyncio.to_thread`（21:00 同步曾卡死站点） |
@@ -148,7 +148,7 @@ vision=qwen3.8-flash（deepseek 不收图片）。**思考开关由 `llm.enable_
 | 扫描件 Agent | [docs/agents/scanned_report_agent.md](docs/agents/scanned_report_agent.md) | PDF→PNG→视觉OCR 解耦设计 |
 | MCP 工具层 | [harness/mcp/README.md](harness/mcp/README.md) | 32 工具(29 只读)/ToolSpec 规范/中文description约定/stdio 服务(默认只读) |
 | 企微机器人桥接 | [docs/agents/wecom_bot.md](docs/agents/wecom_bot.md) | wss外拨收消息/流式回复/会话映射; python -m jobs.wecom_bot |
-| Agent 对话循环 | [docs/agents/agent_loop.md](docs/agents/agent_loop.md) | LLM 自主决策+工具循环/多轮追问/累计口径知识/沙盒；新入口 `/api/v1/agent/stream`；沙盒参数与六域定义在 config.yaml `agent:` 段，全量轨迹落 logs/trajectories/ |
+| Agent 对话循环 | [docs/agents/agent_loop.md](docs/agents/agent_loop.md) | LLM 自主决策+工具循环/多轮追问/累计口径知识/沙盒；新入口 `/api/v1/agent/stream`；沙盒参数与五域定义在 config.yaml `agent:` 段，全量轨迹落 logs/trajectories/ |
 | dsh 客户端接入 | [docs/agents/dsh_client.md](docs/agents/dsh_client.md) | 外部 harness(dsh/Claude Desktop)连 MCP server；stdio 握手冒烟 jobs/smoke_mcp_stdio.py |
 | 研究生产线 | [docs/research/tasks/T00_总纲_契约与分工.md](docs/research/tasks/T00_总纲_契约与分工.md) | 三Agent流水线(证据→草稿→成稿)/并行任务分派/契约 skills/research/contracts.py；方法论源 docs/research/company_industry_guide.md |
 | 内容资产管线 | [docs/agents/content_pipeline.md](docs/agents/content_pipeline.md) | 上市公司画像/公众号文章/pptgen出片；`python -m skills.content` |

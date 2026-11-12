@@ -9,7 +9,7 @@
 
 ```
 旧 (意图路由+固定管道):                新 (LLM 自主决策+工具循环):
-  意图分类器 (7 格子)                    LLM 看全部 17 个只读工具
+  意图分类器 (7 格子)                    LLM 看全部 29 个只读工具
   → 命中即锁死单条管道                   → 自己决定调什么、调几次
   → 复合问题答不了                       → 组合查询/交叉验证/自由问答
   → 每加能力改 3 处路由                  → 加能力=注册一个工具
@@ -20,21 +20,21 @@
 ```
 AgentChat.jsx (session_id 每页生成一次, 全程携带)
   → POST /api/v1/agent/stream (SSE)
-    → agent/loop.run_agent_stream:
+    → harness/loop.run_agent_stream:
         ├─ 快车道: L1 三重门槛命中 → 直连 Text-to-SQL (零 LLM, 0.4~2s)
-        ├─ 域子Agent: L1 规则单域命中 (agent/subagent.py, 6 域) →
+        ├─ 域子Agent: L1 规则单域命中 (harness/subagent.py, 5 域) →
         │   域内 2~4 工具 + escalate 伪工具 + 域专家提示词 → 共享决策循环
         │   └─ escalate_to_full_agent → 同一 messages 换全工具清单续跑 (上下文不丢)
         └─ 全工具循环: 未命中/复合/定义类/升级续跑 (兜底永在)
-            loop (≤8 轮): deepseek function-calling × 17 只读工具
+            loop (≤8 轮): deepseek function-calling × 29 只读工具
             ├─ 同轮多调用并行执行 (gather)
             └─ 执行层白名单: 只跑本次 manifest 列出的工具
-    → agent/session (内存会话历史+股票槽位, 30min TTL)
-    → mcp.bridge.openai_tools() (只读 17 工具) / mcp REGISTRY.call
+    → harness/session (内存会话历史+股票槽位, 30min TTL)
+    → harness.mcp.bridge.openai_tools() (只读 29 工具) / harness.mcp REGISTRY.call
 ```
 
-**域子Agent 设计要点**（`agent/subagent.py`）：
-- 路由 = L1 纯规则（毫秒级零 LLM）：6 域核心词恰命中 1 个 → 该域；
+**域子Agent 设计要点**（`harness/subagent.py`）：
+- 路由 = L1 纯规则（毫秒级零 LLM）：5 域核心词恰命中 1 个 → 该域；
   ≥2 个（复合）或 0 个 → 全工具循环。**路由是缩小菜单的优化，不是能力闸门**
 - 定义/解释类问法（什么是…）一律全循环
 - escalate 伪工具只注入域清单（不进全局注册表/MCP）；
@@ -70,9 +70,9 @@ AgentChat.jsx (session_id 每页生成一次, 全程携带)
 | 文件 | 职责 |
 |------|------|
 | `harness/loop.py` | Agent 主循环：系统提示词（口径知识/数据纪律/多轮规则）、沙盒参数、事件流 |
-| `agent/session.py` | 会话（对话历史完整轮配对注入，6 轮/6000 字符双限截断 + 股票槽位继承） |
+| `harness/session.py` | 会话（对话历史完整轮配对注入，6 轮/6000 字符双限截断 + 股票槽位继承） |
 | `harness/llm.py` | 新增 `invoke_with_tools`（function-calling，返回完整 message） |
-| `api/finance.py` | 新端点 `POST /api/v1/agent/stream`（旧 `/query/stream` 保留作回退） |
+| `api/finance.py` | 新端点 `POST /api/v1/agent/stream`（旧 `/query/stream` 已移除） |
 | `web/src/AgentChat.jsx` | 切换到 agentStream + session_id + 🤖 徽章 + 工具步骤元信息 |
 | `harness/mcp/server.py` | stdio MCP 服务默认只读模式（`ALPHA_MCP_READ_ONLY=1`） |
 
@@ -82,10 +82,10 @@ AgentChat.jsx (session_id 每页生成一次, 全程携带)
 |------|------|
 | 随意问（BI+延伸+相关问题） | LLM 自主路由；平台数据必须走工具（反幻觉纪律写进 system prompt）；通用常识直接答并声明"非平台数据" |
 | 追问质疑（"环比竟然下降了，数据对吗"） | ① 会话历史注入（工具摘要含股票/指标）；② system prompt 内置**累计口径知识**：相邻报告期相减才是单季，Q2单季=中报−Q1…；③ 质疑类必须**重新取数核验**，禁止凭上轮记忆辩解 |
-| 只读安全（一半以上是查询） | 只暴露 read_only=True 的 17 个工具；SQL 工具内已有 sql_guard；MCP 服务默认只读模式 |
+| 只读安全（一半以上是查询） | 只暴露 read_only=True 的 29 个工具；SQL 工具内已有 sql_guard；MCP 服务默认只读模式 |
 | 沙盒 | 每工具超时（默认 120s，重扫描 900s）；决策轮数 ≤8；同参数重复调用 ≤3 次；工具结果注入 LLM 截断 4000 字符；底座行数上限 |
 | MCP server 复用 | 同一份 ToolSpec 双导出：OpenAI function-calling（内部循环）+ MCP stdio（外部宿主），能力永不分叉 |
-| **工具选择优化（2026-09-08）** | ① 股票类工具自解析（直接收股票名），`resolve_stock` 降级为身份查询/多实体/歧义场景，系统提示词明令"不要当前置步骤"——省一次 LLM 决策轮；② 重叠工具家族补交叉引用（get_forecasts/verify_forecasts/analyze_alpha、search_reports/read_report/extract_document、run_quant_scan/compute_indicators）。**注意工具数量对选择的影响与 MCP server 拆分无关**（宿主拍平清单）；若真实误路由持续，下一步为域分组 sub-agent（REGISTRY 按 domain 过滤 manifest 即可，无需拆 server） |
+| **工具选择优化（2026-09-08）** | ① 股票类工具自解析（直接收股票名），`resolve_stock` 降级为身份查询/多实体/歧义场景，系统提示词明令"不要当前置步骤"——省一次 LLM 决策轮；② 重叠工具家族补交叉引用（get_forecasts/verify_forecasts/analyze_alpha、search_reports/read_report/extract_document）。**注意工具数量对选择的影响与 MCP server 拆分无关**（宿主拍平清单）；若真实误路由持续，下一步为域分组 sub-agent（REGISTRY 按 domain 过滤 manifest 即可，无需拆 server） |
 
 ## 三、问题（已踩坑）
 
@@ -113,7 +113,7 @@ AgentChat.jsx (session_id 每页生成一次, 全程携带)
 | 2026-09-08 | 快车道（零 LLM 版）延迟实测：简单查询 0.4~1.9s（Agent 循环 ~12s，带 LLM 解读版 28~40s）；同轮并行执行单测验证（3 调用 0.3s 并行 < 0.8s 断言）；复合问题全栈验证 resolve_stock→(query_financials ∥ valuation_percentile) 双数据完整作答 | ✅ |
 | 2026-09-07 | 工具记录泄漏修复后复测：T1「中际旭创的券商盈利预测怎么看」（5 连工具，含 1 次失败）回答无 `[本轮工具调用]` 块；T2「那它的估值现在贵不贵」继承标的、仅 1 次估值工具、无泄漏 | ✅ |
 | 2026-09-07 | **E2E 用户原例**（单进程双轮，真实 LLM+PG）：T1「中际旭创2025年报净利润」→ "107.97 亿（累计口径）"；T2「环比竟然下降了，数据对吗？」（零线索）→ 继承标的+指标 → 重新取数拆单季 → "单季逐季抬升，没有环比下降，是累计口径假象；同比 +109%" | ✅ |
-| 2026-09-07 | pytest `agent/tests` + `mcp/tests`（提示词知识/历史配对截断/TTL/沙盒参数/只读清单/表格提取） | 31 passed |
+| 2026-09-07 | pytest `harness/tests` + `harness/mcp/tests`（提示词知识/历史配对截断/TTL/沙盒参数/只读清单/表格提取） | 31 passed |
 | 2026-09-07 | E2E T2 耗时 14s / 工具 1 次（history 生效省掉 resolve_stock） | ✅ |
 | 2026-09-07 | `npm run build` 前端构建 | ✅ |
 
@@ -122,13 +122,13 @@ AgentChat.jsx (session_id 每页生成一次, 全程携带)
 - 最终回答改真 token 流（当前决策轮非流式+分块下发；需在 stream 模式累积 tool_call delta）
 - session 落 PG/Redis（多进程/重启持久化）
 - 对话内文档上传（extract_document 已就绪，差前端上传通道）
-- 旧 `/query/stream` 意图管道观察一段后下线
+- ~~旧 `/query/stream` 意图管道观察一段后下线~~（已于 2026-09-14 随旧引擎移除）
 - 评测集扩容（当前 19 用例 22 轮基线），把失败用例修复纳入常规迭代
 
 ### 5.1 Agent 评测（evals/run_agent_eval.py）
 
 - 用例集：`evals/agent_cases.py` — 19 用例 22 轮，覆盖 query/compare/mainbiz/valuation/
-  forecast/verify/risk/chain/alpha/quant/knowledge(纯常识)/no_data(未来期间)/
+  forecast/verify/risk/chain/alpha/knowledge(纯常识)/no_data(未来期间)/
   offscope(库外标的)/compound(复合意图)/multiturn(多轮追问)
 - 断言：`tools_any`（工具路由正确）/`tools_none`/`expect_no_tools`（常识不调工具）/
   `contains_any|all`（回答关键词）/全局禁词（`[本轮工具调用]` 泄漏防回归）

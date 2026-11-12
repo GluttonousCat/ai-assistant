@@ -13,8 +13,8 @@ Schedule rules:
     4. Run LLM structured extraction on un-analyzed reports (limited, cost control)
 - Idempotent: safe to re-run (topics/files deduplicated by ID, PG sync resumes from
   checkpoints, extraction gated by analysis_status)
-- Startup catch-up: if the machine boots after 07:00 and the day's first round has
-  not run (user powers on ~6:30; the server auto-starts at login), run one round
+- Startup catch-up: if the machine boots after the day's first round (00:00) and it has
+  not run run one round
   immediately at startup so the platform has the latest reports in the morning
 """
 from __future__ import annotations
@@ -32,7 +32,7 @@ logger = get_logger(__name__)
 # 24 is normalized to 0)
 RUN_HOURS = [12, 0]
 # Per-round LLM extraction cap (token cost control; the 23:00 round runs more)
-EXTRACT_LIMITS = {7: 8, 23: 15}
+EXTRACT_LIMITS = {0: 15, 12: 8}
 # Per-round file-download cap
 MAX_FETCH_FILES = 15
 # Per-round LLM Analysis (lightweight metadata) cap — seconds per report, relaxed
@@ -161,8 +161,8 @@ class ZSXQScheduleScheduler:
         Startup catch-up: user powers on ~6:30; the server auto-starts at login.
         If a scheduled slot has already passed today and that round has not run ->
         immediately run the most recently missed round.
-        (The 23:00 round is normally triggered by the resident process and rarely
-        missed; this mainly covers 07:00.)
+        (The 12:00 round is normally triggered by the resident process and rarely
+        missed; this mainly covers 00:00.)
         """
         now = datetime.now()
         today = now.date()

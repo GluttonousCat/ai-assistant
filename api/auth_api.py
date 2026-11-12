@@ -100,7 +100,7 @@ async def change_password(req: ChangePasswordRequest,
 
 # ============================================================
 # User management (super admin Gluttonouscat only): list / role change
-# Other admins may view the range dashboard but cannot manage users
+# Other admins can view admin pages but cannot manage users
 # ============================================================
 
 def _require_super(current: TokenPayload = Depends(require_admin)) -> TokenPayload:

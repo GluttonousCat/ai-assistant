@@ -75,7 +75,7 @@ def main() -> int:
         [sys.executable, "-m", "harness.mcp.server"], cwd=str(ROOT),
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         env=env, text=True, encoding="utf-8")
-    print(f"[smoke] spawn: {sys.executable} -m mcp.server (cwd={ROOT})")
+    print(f"[smoke] spawn: {sys.executable} -m harness.mcp.server (cwd={ROOT})")
     try:
         # 1) initialize
         r = _rpc(proc, {"jsonrpc": "2.0", "id": 1, "method": "initialize",

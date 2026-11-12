@@ -1,7 +1,7 @@
 # beta_alpha — 产业链Beta / 个股Alpha 子系统
 
-自包含模块（对标 `range_trading/`）：模板、量化、Skill 编排、SSE、DDL、测试全部在本包内，
-对外只暴露稳定入口，平台其余部分（api/agent/registry/研报钩子）只 import 本包顶层名。
+自包含模块：模板、量化、Skill 编排、SSE、DDL、测试全部在本包内，
+对外只暴露稳定入口，平台其余部分（api/harness/registry/研报钩子）只 import 本包顶层名。
 
 ## 结构
 
@@ -24,7 +24,7 @@ beta_alpha/
 
 | 入口 | 消费方 |
 |---|---|
-| `beta_alpha.skills.beta.BetaSkill` / `alpha.AlphaSkill` | `agent/fin_graph.py`、`skills/registry.py`、CLI `python -m skills.beta_alpha.skills.beta\|alpha` |
+| `beta_alpha.skills.beta.BetaSkill` / `alpha.AlphaSkill` | `skills/registry.py`、CLI `python -m skills.beta_alpha.skills.beta\|alpha` |
 | `beta_alpha.streaming.stream_chain/stream_alpha` | `api/finance.py` SSE 分支（薄包装） |
 | `beta_alpha.analysis.chain_analysis` CLI | 量化速览 `python -m skills.beta_alpha.analysis.chain_analysis ai_compute` |
 | `beta_alpha.analysis.chain_extract.spawn_chain_extract` | `skills/report/skill.py` 深度提取后钩子 |
@@ -41,7 +41,7 @@ python -m skills.beta_alpha.skills.alpha "中际旭创的预期差"
 
 ## 约定
 
-- 分层契约不变：`skills/base.py` 的 `SkillContext`、`llm/client.py` 工厂、`storage/pg.py` 仍由上层框架提供
+- 分层契约不变：`skills/base.py` 的 `SkillContext`、`harness/llm.py` 工厂、`storage/pg.py` 仍由上层框架提供
 - 改分档阈值/单位归一/趋势判定：改纯函数（`assign_tier`/`to_yuan`/`classify_drift`）并补 tests
 - 新增产业链：在 `chains/` 加 YAML（规范见 `.agents/skills/beta-skill/references/chain-template-guide.md`）
 - 详细设计：`docs/agents/chain_beta_skill.md`

@@ -3,8 +3,8 @@ Daily incremental data-sync scheduler (asyncio background task; scheduler lives 
 long as the backend does).
 
 Schedule rules:
-- Runs on every trading day at 18:00 (Tushare ingests the day's data at 15:00-16:00;
-  pulling at 18:00 is the safe choice)
+- Runs on every trading day at 21:00 (Tushare ingests the day's data at 15:00-16:00;
+  pulling at 21:00 is the safe choice)
 - Incremental: last 5 trading days of quotes (daily/daily_basic/adj_factor) + current
   week's financials
 - Idempotent: safe to re-run (checkpoint resume + upsert)
@@ -71,12 +71,12 @@ class DailySyncScheduler:
         self.last_result: Optional[dict] = None
 
     def _next_run_time(self, now: Optional[datetime] = None) -> datetime:
-        """Compute the next run time (today 18:00 or tomorrow 18:00)."""
+        """Compute the next run time (today 21:00 or tomorrow 21:00)."""
         now = now or datetime.now()
         target = now.replace(hour=SYNC_HOUR, minute=SYNC_MINUTE,
                              second=0, microsecond=0)
         if now >= target:
-            # Already past today 18:00 -> tomorrow
+            # Already past today 21:00 -> tomorrow
             target += timedelta(days=1)
         return target
 

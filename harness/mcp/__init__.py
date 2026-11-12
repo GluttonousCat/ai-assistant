@@ -1,10 +1,10 @@
 # -*- encoding: utf-8 -*-
 """
-mcp/ — MCP tool layer: standardized tooling of the platform's 22 research capabilities (19 read-only + 3 write).
+harness/mcp/ — MCP tool layer: standardized tooling of the platform's 32 research capabilities (29 read-only + 3 write).
 
 - spec.py     ToolSpec convention (name/Chinese description/JSON Schema/handler)
 - registry.py registry (decorator registration / unified call / dual-protocol export)
-- tools/      22 tool implementations grouped into 6 domains (see tools/__init__.py comments)
+- tools/      32 tool implementations grouped into 5 domains (see tools/__init__.py comments)
 - server.py   stdio MCP server (JSON-RPC, zero dependencies)
 - bridge.py   OpenAI function-calling bridge (for the internal Agent Loop / deepseek)
 

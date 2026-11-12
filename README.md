@@ -4,24 +4,23 @@
 
 ## 功能
 
-- **用户系统**：JWT 登录注册（邀请码门槛），三级角色 —— 超级管理员（用户管理）/ 管理员（区间看板）/ 研究员
+- **用户系统**：JWT 登录注册（邀请码门槛），三级角色 —— 超级管理员（用户管理）/ 管理员（实时监控）/ 研究员
 - **Agent 问答**：自然语言 → 意图路由 → Text-to-SQL 财务查询 / 研报解读，SSE 流式打字机输出
 - **研报中心**：知识星球研报自动抓取入库，LLM 提取机构/标的/行业/地区/市场 + 评级与盈利预测，
   支持扫描件 PDF（视觉 OCR）、去重合并、多市场筛选
-- **区间看板**：震荡区间 + 趋势 + 动量矛三系统全市场扫描（管理员可见），含信号跟踪与回测
-- **数据调度**：交易日 21:00 Tushare 行情+财报增量；每日 07:00/23:00 研报抓取（下载一个即分析入库）
+- **数据调度**：交易日 21:00 Tushare 行情+财报增量；每日 00:00/12:00 研报抓取（下载一个即分析入库）
 
 ## 目录
 
 ```
-agent/      智能体域: 意图路由/工具循环 + skills/ + beta_alpha/ + content/
-mcp/        MCP 工具协议层 (stdio server, 21 工具)
+harness/    引擎层: loop/subagent/intent/session/trajectory/llm/mcp (MCP 工具协议层, stdio server, 32 工具)
+skills/     领域技能: fin_query / report / scanned_report / beta_alpha / content / research
 api/        路由 + JWT 鉴权中间件          tools/      爬虫 / 行情同步 / SQL guard / 视觉OCR
 core/       配置 / 安全 / 调度器 / LLM工厂  storage/    PG 连接池 + 全部 DDL
 web/        React 前端（登录/问答/研报）
 ```
 
-分层调用：`api → agent(skills/beta_alpha/content) → tools → storage`。新 Agent 请先读 [AGENTS.md](AGENTS.md)。
+分层调用：`api → harness(引擎)+skills(领域) → tools → storage`。新 Agent 请先读 [AGENTS.md](AGENTS.md)。
 
 ## 快速开始
 
@@ -48,7 +47,7 @@ python -m tools.market.sync_financial    # 财务三表 + 指标
 | 入口 | 内容 |
 |------|------|
 | [AGENTS.md](AGENTS.md) | Agent / 新成员第一入口（全貌 + 踩坑清单） |
-| [docs/README.md](docs/README.md) | 模块文档索引（登录 / 问答 / 研报 / 模型 / 安全 / 量化） |
+| [docs/README.md](docs/README.md) | 模块文档索引（登录 / 问答 / 研报 / 模型 / 安全） |
 
 ## 知识星球使用说明
 

@@ -8,25 +8,26 @@
 ### 1.1 技术栈与结构
 
 - **React 19 + Vite 8**，无 TypeScript / 无路由库 / 无 UI 组件库 / 无状态管理库——纯手写 JSX + CSS（轻量可控）
-- K 线图：lightweight-charts 5（区间看板弹层）
+- 折线图：lightweight-charts 5（问答结果日线序列）
 
 ```
 web/src/
 ├── main.jsx            # 入口 → Root
 ├── Root.jsx            # 登录态判定: 有 token → Platform, 无 → Login
 ├── Login.jsx           # 登录/注册页 (../frontend/login.md)
-├── Platform.jsx        # 主框架: 侧边导航 + 用户区 + hash 路由(#chat/#reports/#range)
+├── Platform.jsx        # 主框架: 侧边导航 + 用户区 + hash 路由(Agent/产业链/研报中心/实时监控/用户管理)
 ├── AgentChat.jsx       # Agent 问答 (chat.md)
 ├── Reports.jsx         # 研报中心 (reports.md)
-├── App.jsx             # 区间扫描看板 (embedded 模式嵌入平台)
+├── ChainView.jsx       # 产业链页
+├── UserAdmin.jsx       # 用户管理 (仅超级管理员)
+├── Monitor.jsx         # 实时监控 (adminOnly)
 ├── platformApi.js      # 平台 API 客户端 (JWT + SSE)
-├── api.js              # 区间看板 API 客户端 (带 JWT)
 └── index.css           # 全局主题 (CSS 变量体系)
 ```
 
 ### 1.2 页面路由
 
-hash 路由（`window.location.hash`）：`#chat`（默认）→ Agent 对话；`#reports` → 研报中心；`#range` → 区间看板。刷新保持当前页。
+hash 路由（`window.location.hash`）：`#chat`（默认）→ Agent 对话；`#reports` → 研报中心；产业链/实时监控/用户管理 各有对应 hash 入口。刷新保持当前页。
 
 ### 1.3 请求层约定
 
@@ -73,9 +74,9 @@ hash 路由（`window.location.hash`）：`#chat`（默认）→ Agent 对话；
 - 全部徽章（状态/市场/涨跌）从蓝/紫系改棕色系
 - 全站通过 `var(--accent)` 等变量引用，后续换色只改 `:root` 一处
 
-### 3.3 区间看板适配
+### 3.3 全站页面适配
 
-看板（App.jsx/Setup/Tracking）同用 index.css 变量自动换肤；`App.jsx` 支持 `embedded` 属性（嵌入平台时顶栏改为非 sticky）。
+各页面（Agent 问答/产业链/研报中心/实时监控/用户管理）同用 index.css 变量自动换肤。
 
 ## 四、历史问题与处理记录
 

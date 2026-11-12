@@ -4,12 +4,12 @@ Agent conversation loop (core of the new conversation entry point).
 
 Paradigm: LLM autonomous decision + MCP tool loop (replaces the old intent-routing + fixed pipelines)
   user -> [system(caliber knowledge + rules) + session history + user]
-       -> LLM (deepseek, function-calling, 18 read-only tools)
+       -> LLM (deepseek, function-calling, 29 read-only tools)
        -> tool execution (thread + timeout) -> result fed back -> decide again ... -> final Chinese answer
 
 Sandbox policy (read-only safety):
-- Only read_only=True tools are exposed (17; write tools like forge_chain never enter the conversation)
-- Per-tool timeout (default 120s, heavy scans 900s); on timeout an error is returned to the LLM instead of waiting
+- Only read_only=True tools are exposed (29; write tools like forge_chain never enter the conversation)
+- Per-tool timeout (default 120s, OCR 600s); on timeout an error is returned to the LLM instead of waiting
 - Cap on LLM decision rounds (MAX_ROUNDS); repeated calls of the same tool+args guard against infinite loops
 - Tool results are truncated before injection into the LLM (MAX_RESULT_CHARS); tools themselves cap row counts (df_payload)
 
@@ -56,7 +56,7 @@ DEFAULT_TOOL_TIMEOUT = int(_sb.get("agent.sandbox.default_tool_timeout", 120))
 def build_system_prompt() -> str:
     from datetime import date
     return f"""你是 Alpha Finance Radar 平台的投研助手 (今天是 {date.today().isoformat()})。
-平台有 A 股行情/财务三表/估值/主营构成/知识星球研报/产业链/量价扫描 全套数据, 你通过工具取数后回答。
+平台有 A 股行情/财务三表/估值/主营构成/知识星球研报/产业链 全套数据, 你通过工具取数后回答。
 
 【数据纪律 — 最高优先级】
 1. 平台内的任何数字 (行情/财务/研报/预测) 必须来自工具返回, 严禁凭记忆报数; 没查到就明说没数据

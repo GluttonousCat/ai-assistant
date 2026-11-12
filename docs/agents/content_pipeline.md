@@ -7,12 +7,12 @@
 
 ### 1.1 定位与链路
 
-把平台的数据资产（Tushare 财务/研报库/量化）变成**可发布的内容资产**：
+把平台的数据资产（Tushare 财务/研报库）变成**可发布的内容资产**：
 
 ```
                     ┌─ 对话: build_company_profile 工具直接返回
 上市公司画像 (纯数据) ─┼─ 公众号文章: write_article → output/articles/*.md (人工发布)
-  (十板块一次组装)     │   v2: 六模块成文 + matplotlib 配图五张 (图文结合)
+  (八板块一次组装)     │   v2: 六模块成文 + matplotlib 配图五张 (图文结合)
                       └─ PPT: 画像 → 任务书(LLM策划) → ../pptgen 出 .pptx
 研报主题 ────────────── 综述文章: write_article(topic) 多篇观点对比成文
 ```
@@ -22,7 +22,7 @@
 ```
 skills/content/  (智能体域子包, 见 AGENTS.md §2)
   profile.py   画像组装 (纯数据零 LLM): 内部全部 REGISTRY.call 复用 MCP 工具层;
-               十板块: 概况/主营/近N年财务/估值分位/预测分歧/兑现校验/风险/研报/形态
+               八板块: 概况/主营/近N年财务/估值分位/预测分歧/兑现校验/风险/研报
                + 行业坐标(申万二级 ROE 同业对比) + 十大股东(近5年变动)
                单板块失败降级不拖垮整体 (failed_sections 记录)
   charts.py    公众号配图五张 (matplotlib 静态图, 深色品牌风):
@@ -40,7 +40,7 @@ skills/content/  (智能体域子包, 见 AGENTS.md §2)
   cli.py       python -m skills.content profile|article|ppt
 ```
 
-MCP 工具 (mcp/tools/content.py): `build_company_profile`(只读, 全循环可用) +
+MCP 工具 (harness/mcp/tools/content.py): `build_company_profile`(只读, 全循环可用) +
 `write_article`(写类, 沙盒默认排除)。
 
 ### 1.3 关键设计
@@ -57,7 +57,7 @@ MCP 工具 (mcp/tools/content.py): `build_company_profile`(只读, 全循环可�
 - 公众号发布为人工操作 (md 粘贴编辑器); 微信草稿箱 API 属后续可选 (涉及凭据与外发确认)
 - 文章两种模式: 股票画像 (深而全, v2 六模块+配图) / 主题综述 (多空对比) — 覆盖栏目化运营的两种体裁
 - 六模块结构 2026-09-10 定稿 (用户三模块草稿 → 六模块): 速览/财务/估值/行业/研报/风险,
-  配图五张定点插入, 量化内容暂不入文 (用户决策)
+  配图五张定点插入
 
 ## 三、问题（历史问题与处理记录）
 

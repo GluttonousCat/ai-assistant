@@ -283,7 +283,7 @@ async def agent_chat(request: dict):
 # ---------- Data sync scheduling ----------
 @router.post("/admin/sync-today", tags=["admin"])
 async def sync_today():
-    """Manually trigger the daily incremental sync (the same job that runs automatically at 18:00 on trading days)"""
+    """Manually trigger the daily incremental sync (the same job that runs automatically at 21:00 on trading days)"""
     from jobs.scheduler import get_scheduler
     result = await get_scheduler().trigger_now()
     return {"status": "done", "result": result}
