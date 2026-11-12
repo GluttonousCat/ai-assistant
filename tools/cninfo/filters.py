@@ -1,32 +1,22 @@
 # -*- encoding: utf-8 -*-
-"""
-巨潮公告筛选纯函数 (无 IO, 可测)
-
-职责: 从查询结果中识别"正式定期报告全文", 排除摘要/英文版/更正版等干扰项。
-取舍说明: 更正/更新版本默认排除 (保留首发版本入库, 交叉核验以首发口径为准;
-若需追最终版, 元数据已留痕可按 title 人工定位)。
-"""
 from __future__ import annotations
 
 import re
 from typing import Dict, List, Optional
 
-# 标题含任一即排除 (非报告全文/干扰项)
 EXCLUDE_WORDS = (
     "摘要", "英文", "已取消", "取消", "更正", "更新", "修订", "补充",
     "提示性", "业绩说明会", "董监高", "审计", "督导", "问询", "回复",
     "意见", "制度", "决议", "摘要版", "备案", "鉴证",
 )
-# 英文年报标题特征 (如 '2024 ANNUAL REPORT')
+
 _EN_REPORT_MARK = re.compile(r"(ANNUAL|QUARTERLY|INTERIM)\s+REPORT", re.IGNORECASE)
 _YEAR_RE = re.compile(r"(19[89]\d|20\d{2})")
 
-# 标题词 -> 巨潮类别 (与查询 category 参数对应的后缀语义一致)
-# 顺序敏感: 半年度/季报在前, 年报最后 — "半年度报告" 含子串 "年度报告",
-# 先匹配短类别避免误归年报
+
 _CATEGORY_PATTERNS = (
-    ("yjdbg", ("第一季度报告", "一季报")),
-    ("sjdbg", ("第三季度报告", "三季报")),
+    ("yjdbg", ("第一季度报告", "一季度报告", "一季报")),
+    ("sjdbg", ("第三季度报告", "三季度报告", "三季报")),
     ("bndbg", ("半年度报告", "中报")),
     ("ndbg", ("年度报告", "年报")),
 )
@@ -60,8 +50,6 @@ def is_full_periodic_report(title: str) -> bool:
 
 
 def pick_full_report(announcements: List[Dict]) -> Optional[Dict]:
-    """从单次查询结果中选出报告全文 (类别最高优先: 年报 > 半年报 > 季报;
-    同类多条取 announcementTime 最新)"""
     full = [a for a in announcements
             if is_full_periodic_report(a.get("announcementTitle", ""))]
     if not full:
@@ -75,17 +63,13 @@ def pick_full_report(announcements: List[Dict]) -> Optional[Dict]:
 
 # 6 位代码前缀 -> 交易所后缀 (沪深北市场规则; 沪B 900/深B 200 一并覆盖)
 _TS_SUFFIX_RULES = (
-    (("60", "68", "90"), "SH"),              # 沪主板 / 科创板 / 沪B
-    (("00", "30", "20"), "SZ"),              # 深主板 / 创业板 / 深B
-    (("43", "83", "87", "88", "92"), "BJ"),  # 北交所
+    (("60", "68", "90"), "SH"),
+    (("00", "30", "20"), "SZ"),
+    (("43", "83", "87", "88", "92"), "BJ"),
 )
 
 
 def normalize_ts_code(stock: str) -> Optional[str]:
-    """'600519' / '600519.SH' -> '600519.SH'; 非 6 位代码或推不出后缀返回 None。
-
-    本模块只认证券代码 — 股票名称解析 (如 '中际旭创') 是调用方的词表职责。
-    """
     s = (stock or "").strip().upper()
     if re.match(r"^\d{6}\.(SH|SZ|BJ)$", s):
         return s

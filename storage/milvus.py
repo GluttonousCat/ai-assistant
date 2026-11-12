@@ -13,7 +13,6 @@ import yaml
 from pymilvus import DataType, MilvusClient
 
 from storage.milvus_schema import (
-    ensure_collection,
     new_schema,
     rebuild_collection,
     vector_index_params,
@@ -57,7 +56,7 @@ def milvus_config() -> Dict[str, Any]:
 
 
 def check_milvus_config(cfg: Dict[str, Any]) -> List[str]:
-    """配置检测: 返回问题清单 (空列表 = 通过)"""
+    """配置检测"""
     problems: List[str] = []
     uri = str(cfg.get("uri") or "")
     if not (uri.startswith("http://") or uri.startswith("https://")):
@@ -119,9 +118,6 @@ def milvus_ready() -> bool:
             _not_ready_warned = True
         return False
 
-
-# ---------- 通用执行器 (collection 须已由业务侧 ensure, 缺表由 Milvus 报错) ----------
-
 def insert_rows(collection: str, rows: List[Dict[str, Any]]) -> int:
     """插入"""
     if not rows:
@@ -138,10 +134,11 @@ def upsert_rows(collection: str, rows: List[Dict[str, Any]]) -> int:
     return int(res.get("upsert_count", len(rows))) \
         if isinstance(res, dict) else len(rows)
 
-def search_similar(collection: str, vector: Sequence[float], limit: int = 5,
-                   expr: Optional[str] = None,
-                   output_fields: Optional[List[str]] = None) -> List[Dict[str, Any]]:
-    """向量近邻检索"""
+def search_similar(
+        collection: str, vector: Sequence[float], limit: int = 5,
+        expr: Optional[str] = None, output_fields: Optional[List[str]] = None
+) -> List[Dict[str, Any]]:
+    """ANN"""
     res = get_milvus().search(
         collection_name=collection,
         data=[list(vector)],
@@ -156,9 +153,10 @@ def search_similar(collection: str, vector: Sequence[float], limit: int = 5,
         rows.append(row)
     return rows
 
-def fetch_by_expr(collection: str, expr: str,
-                  output_fields: Optional[List[str]] = None,
-                  limit: int = 100) -> List[Dict[str, Any]]:
+def fetch_by_expr(
+        collection: str, expr: str, output_fields: Optional[List[str]] = None,
+        limit: int = 100
+) -> List[Dict[str, Any]]:
     """标量过滤查询"""
     return list(get_milvus().query(
         collection_name=collection, filter=expr,
@@ -174,9 +172,6 @@ def count_rows(collection: str) -> int:
     stats = get_milvus().get_collection_stats(collection_name=collection)
     return int(stats.get("row_count", 0)) if isinstance(stats, dict) else 0
 
-
-# ---------- 状态/自检 ----------
-
 SMOKE_COLLECTION = "storage_smoke"
 
 def _status() -> None:
@@ -190,7 +185,7 @@ def _status() -> None:
     for name in sorted(client.list_collections()):
         logger.info(f"{name}: 行数={count_rows(name)}")
 
-def _smoke() -> int:
+def _smoke() -> int | None:
     """SDK 自检: 临时 collection 写入 -> 检索 -> 清理 (不碰业务数据)"""
     if not milvus_ready():
         logger.warning("Milvus 不可达, 冒烟终止 (exit 1)")

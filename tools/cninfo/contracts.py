@@ -183,6 +183,27 @@ def acceptance_check(kind: str, key: str, extracted: Optional[Dict]) -> Dict:
 
 # ---------------- 修复 Agent 任务简报 ----------------
 
+_REASON_TERM = re.compile(r"[\u4e00-\u9fff]{2,6}")
+
+
+def diagnostic_terms(key: str) -> List[str]:
+    """契约 must/accept 文本中的诊断关键词 (如 nonrecurring 的'合计') —
+    注入修复 Agent 的大纲扫描, 让"必须存在的东西"直接进入其视野
+    (跨页孤儿行/碎片表在标题层不可见, 靠内容词命中)。"""
+    c = CONTRACTS[key]
+    seen: List[str] = []
+    for text in (c.get("must") or []) + [c.get("accept") or ""]:
+        for t in _REASON_TERM.findall(text):
+            if t not in seen and t not in ("达标", "合法", "存在", "缺失", "整项", "整节"):
+                seen.append(t)
+    return seen[:8]
+
+
+def reason_terms(reason: str) -> List[str]:
+    """验收失败原因中的关键词 — 重试轮的注意力重定向 (平安实证: '缺合计行'→合计)。"""
+    return [t for t in _REASON_TERM.findall(reason or "")
+            if t not in ("达标", "合法", "存在", "缺失", "整项", "整节", "未过", "或")][:6]
+
 def repair_brief(kind: str, key: str) -> str:
     """契约 → Agent prompt 片段: 告诉修复 Agent 在找什么、什么算合格。"""
     c = CONTRACTS[key]

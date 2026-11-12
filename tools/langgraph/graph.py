@@ -43,7 +43,7 @@ pydantic; 裸 dict schema 下未声明的输入键不进通道 — 节点直通�
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, List, Optional
 
 try:                                    # 软导入: 缺 langgraph 时包仍可 import,
     from langgraph.graph import END, START, MessagesState, StateGraph

@@ -1,6 +1,6 @@
 # -*- encoding: utf-8 -*-
 """
-MCP 工具规范 (ToolSpec)
+MCP ToolSpec
 MCP Tool = name + description + JSON Schema + handler。
 """
 from __future__ import annotations

@@ -1,19 +1,5 @@
 # -*- encoding: utf-8 -*-
-"""
-巨潮资讯网 HTTP 客户端 (纯网络层, 无业务状态)
 
-端点 (公开, 无需登录):
-- POST /new/information/topSearch/query        证券代码 -> orgId
-- POST /new/hisAnnouncement/query              公告检索 (column=szse 沪深通用, 实测)
-- GET  static.cninfo.com.cn/<adjunctUrl>       PDF 下载
-
-反检测 (实测站点有限频抖动, ReadTimeout 常见):
-- 直连: trust_env=False 绕过系统代理 (国内站, 走代理反而超时)
-- 每请求随机间隔 min~max 秒; 失败指数退避重试
-- PDF 下载校验 %PDF 魔数 (防错误页存成假 PDF)
-
-自包含: 仅依赖 requests + 标准库, 可脱离项目独立使用。
-"""
 from __future__ import annotations
 
 import logging
@@ -28,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 SEARCH_URL = "http://www.cninfo.com.cn/new/information/topSearch/query"
 QUERY_URL = "http://www.cninfo.com.cn/new/hisAnnouncement/query"
-BULK_STOCK_URL = "http://www.cninfo.com.cn/new/data/szse_stock.json"   # 全市场 code->orgId 一次拿全
+BULK_STOCK_URL = "http://www.cninfo.com.cn/new/data/szse_stock.json"
 STATIC_BASE = "http://static.cninfo.com.cn"
 
 _HEADERS = {
@@ -49,22 +35,21 @@ def is_pdf_file(path) -> bool:
 
 
 class CninfoClient:
-    """巨潮 HTTP 客户端 (线程安全: 每实例独立 Session, 单线程串行使用)"""
-
-    def __init__(self, min_delay: float = 1.0, max_delay: float = 2.0,
-                 timeout: int = 25, retries: int = 4):
+    def __init__(
+            self, min_delay: float = 1.0, max_delay: float = 2.0,
+            timeout: int = 25, retries: int = 4
+    ):
         self.session = requests.Session()
-        self.session.trust_env = False     # 国内直连, 绕系统代理
+        self.session.trust_env = False
         self.session.headers.update(_HEADERS)
         self.min_delay = min_delay
         self.max_delay = max_delay
         self.timeout = timeout
         self.retries = retries
-        self._org_id_cache: Dict[str, str] = {}   # sec_code -> orgId (免重复打 topSearch)
-        self._stock_list: Optional[List[Dict]] = None   # szse_stock.json 全市场清单
+        self._org_id_cache: Dict[str, str] = {}
+        self._stock_list: Optional[List[Dict]] = None
 
     # ---------- 基础 ----------
-
     def _sleep(self) -> None:
         time.sleep(random.uniform(self.min_delay, self.max_delay))
 
@@ -85,11 +70,6 @@ class CninfoClient:
     # ---------- 公开能力 ----------
 
     def fetch_stock_list(self) -> List[Dict]:
-        """全市场证券清单一次拿全 (szse_stock.json, 巨潮前端搜索下拉的数据源)。
-
-        条目含 code/orgId/zwjc(简称)/pinyin。进程内只拉一次, orgId 并入内存缓存;
-        站点不可达返回空 list (调用方走降级)。
-        """
         if getattr(self, "_stock_list", None):
             return self._stock_list
         try:
@@ -113,13 +93,6 @@ class CninfoClient:
                 if it.get("code") and it.get("orgId")}
 
     def resolve_org_id(self, sec_code: str) -> Optional[str]:
-        """6 位证券代码 -> 巨潮 orgId。
-
-        四级策略 (topSearch 端点限流最敏感, 实测高频调用 504):
-        ① 内存缓存; ② 全量批量源 szse_stock.json (一次请求, 进程内缓存);
-        ③ topSearch 单只查询; ④ 沪市规则推导 (orgId = 'gssh0'+6位代码,
-        如 600519 -> gssh0600519; 深市 9900xxxx 无规律, 推导不可用)。
-        """
         if sec_code in self._org_id_cache:
             return self._org_id_cache[sec_code]
         self.fetch_org_map_bulk()
@@ -127,8 +100,8 @@ class CninfoClient:
             return self._org_id_cache[sec_code]
 
         org_id = None
-        j = self._post_json(SEARCH_URL,
-                            {"keyWord": sec_code, "maxSecNum": 5})
+        j = self._post_json(
+            SEARCH_URL, {"keyWord": sec_code, "maxSecNum": 5})
         items = j or []
         for it in items:
             if it.get("code") == sec_code:
@@ -143,17 +116,12 @@ class CninfoClient:
             self._org_id_cache[sec_code] = org_id
         return org_id
 
-    def query_announcements(self, sec_code: str, org_id: str,
-                            category: str = "category_ndbg_szsh",
-                            se_date: str = "2025-01-01~2025-12-31",
-                            page_size: int = 30) -> List[Dict]:
-        """公告检索 (翻页至尽)。返回巨潮原始 announcement 列表。
-
-        category: category_ndbg_szsh 年报 / bndbg 半年报 / yjdbg 一季报 /
-                  sjdbg 三季报; 缺省年报
-        se_date:  'YYYY-MM-DD~YYYY-MM-DD' 披露日期窗口
-                  (注意: N 年度报告在 N+1 年披露, 查 2024 年报窗口应跨到 2025)
-        """
+    def query_announcements(
+            self, sec_code: str, org_id: str,
+            category: str = "category_ndbg_szsh",
+            se_date: str = "2025-01-01~2025-12-31",
+            page_size: int = 30
+    ) -> List[Dict]:
         out: List[Dict] = []
         page = 1
         while True:
@@ -178,14 +146,6 @@ class CninfoClient:
     MAX_DL_ATTEMPTS = 40   # 单文件绝对尝试上限 (续传模式下大文件常需 5-10 次)
 
     def download_pdf(self, adjunct_url: str, dest: Path) -> Tuple[bool, int]:
-        """下载公告 PDF 到 dest。返回 (ok, size); 校验 %PDF 魔数。
-
-        大文件 (年报 30MB+) 实测常被服务端中途掐断, 每连接仅得 3-5MB, 故:
-        - 断点续传: 重试带 Range: bytes=N- 从 .part 尾部续传累加;
-          服务端不支持 Range (回 200 而非 206) 则整文件重下
-        - 有增量即前进: 断流但拿到了字节就不消耗重试名额,
-          连续 self.retries 次"零增量"才放弃
-        """
         tmp = dest.with_suffix(".part")
         strikes = 0
         for attempt in range(1, self.MAX_DL_ATTEMPTS + 1):
