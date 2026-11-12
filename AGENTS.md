@@ -26,14 +26,14 @@ core/        基础设施 (引擎与各层共用的地基, 不含业务):
              config(.env+yaml)/logger(按顶层包分桶)/security(JWT+bcrypt)/
              lifespan(调度器启停)/net/helpers·paths
 skills/      领域技能 (每技能一目录, 专业知识放 prompt):
-             trend(60F主趋势纯量化筛票/快照查询; 视频理念映射与研究边界见 docs/frontend/stock_dashboard.md) /
+             trend(60F启动段:首阳观察/第2—4推进阳线确认/逐根标记; 纯计算与快照查询见 docs/frontend/stock_dashboard.md) /
              fin_query(Text-to-SQL) / report(研报) / scanned_report(OCR) /
              beta_alpha(产业链Beta+个股Alpha: chains种子链/analysis/tests) /
              content(内容资产管线: 画像/公众号文章/PPT/年报解读) /
              research(研究生产线: 证据→十章草稿→成稿, 任务分派见 docs/research/tasks/)
 jobs/        sync_intraday(2026年60F入库/五指数成分并集/断点续传) / check_boundaries(分层检查) /
              scan_trend(全池离线筛票/原子发布) / repair_trend_factors(精确补缺真实复权因子,不推进日线水位线) /
-             任务层一体: scheduler(Tushare 21:00) / zsxq_scheduler(爬虫 00:00/12:00) /
+             任务层一体: scheduler(Tushare 17:00 Asia/Shanghai,交易日) / zsxq_scheduler(爬虫 00:00/12:00) /
              管线入口(daily_fetch_zxsq, sync_zxsq_to_pg, merge_report_duplicates, smoke) /
              health_sentinel(独立心跳哨兵: API探活+WS广播+自动拉起, 8209) /
              wecom_bot(企微智能机器人 wss 长连接桥接→本地Agent, 见 docs/agents/wecom_bot.md)
@@ -167,6 +167,7 @@ vision=qwen3.8-flash（deepseek 不收图片）。**思考开关由 `llm.enable_
 | 安全 | [docs/ops/security.md](docs/ops/security.md) | 分层防护/事件审计/加固清单 |
 | 结构优化方案 | [docs/ops/module_boundaries.md](docs/ops/module_boundaries.md) | 模块化单体/仓储收敛/DDL与Agent拆分/旧入口兼容；DDL/路由/执行/认证及财务查询已首轮收敛；遗留依赖登记并阻止新增 |
 | 行情与新闻选型 | [docs/ops/data_sources.md](docs/ops/data_sources.md) | 五组指数成分池/免费盘后分钟与付费实时/新闻快照；含价格/探测记录；2026年60F五指数并集已入库，新闻待接入 |
+| 日线定时采集 | [docs/ops/daily_sync.md](docs/ops/daily_sync.md) | 交易日上海时间17:00/跨时区/重启补漏/5交易日重叠回补；分钟采集与筛票独立 |
 | 数据处理 | [docs/ops/data_process.md](docs/ops/data_process.md) | 历史：同步全流程 |
 | 爬虫 | [docs/ops/spider.md](docs/ops/spider.md) | 历史：反检测设计 |
 | 产品全貌 | [docs/PRD.md](docs/PRD.md) | v1.0 需求与架构（部分过时，以本文件为准） |

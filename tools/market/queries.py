@@ -1,7 +1,7 @@
 """Read-only market queries used by API/Agent clients; no provider network I/O."""
 
 import re
-from storage.repositories.market import read_bars
+from storage.repositories.market import read_bars, latest_daily_date as latest_daily_date
 
 
 def query_intraday(

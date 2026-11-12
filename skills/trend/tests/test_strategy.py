@@ -6,6 +6,8 @@ import pytest
 from skills.trend.strategy import TrendConfig, indicators, screen
 from tools.market.trend_data import adjust_prices
 
+MATURE = TrendConfig(selection_mode="mature")
+
 
 def sample(days=90, direction=1):
     dates = pd.bdate_range("2026-01-05", periods=days)
@@ -30,7 +32,7 @@ def sample(days=90, direction=1):
 
 
 def test_smooth_rising_structure_becomes_pullback_candidate():
-    result = screen(sample())
+    result = screen(sample(), MATURE)
     assert result["eligible"]
     assert result["state"] == "回踩候选"
     assert all(c["passed"] for c in result["checks"])
@@ -47,7 +49,7 @@ def test_breakout_excludes_current_bar_from_resistance_and_requires_volume():
     out = indicators(f)
     assert out.iloc[-1].prior_high == f.high.iloc[-41:-1].max()
     assert out.iloc[-1].breakout
-    assert screen(f)["state"] == "突破候选"
+    assert screen(f, MATURE)["state"] == "突破候选"
     f.loc[f.index[-1], "volume"] = 0
     assert not indicators(f).iloc[-1].breakout
 
@@ -88,14 +90,14 @@ def test_flat_and_falling_prices_never_pass():
 def test_loose_risk_does_not_turn_into_tight_stop_to_force_a_candidate():
     f = sample()
     f.loc[f.index[-5], "low"] = 10
-    result = screen(f)
+    result = screen(f, MATURE)
     assert not result["eligible"]
     assert result["stop_price"] < 10
     assert not next(c for c in result["checks"] if c["key"] == "risk")["passed"]
 
 
 def test_gate_cannot_be_overridden_by_high_score():
-    result = screen(sample(), replace(TrendConfig(), min_daily_amount=1e12))
+    result = screen(sample(), replace(MATURE, min_daily_amount=1e12))
     assert result["score"] > 70
     assert not result["eligible"]
     assert "流动性" in result["reason"]

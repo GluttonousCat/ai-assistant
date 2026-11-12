@@ -36,8 +36,8 @@ export default function StockDashboard({ user }) {
     const search = query.trim().toUpperCase()
     return (snapshot?.data || []).filter((r) => (!search || `${r.name}${r.ts_code}`.toUpperCase().includes(search))
       && (!index || r.indices.includes(index))
-      && (mode === 'all' || mode === 'star' && stars.includes(r.ts_code) || mode === 'candidate' && r.eligible || mode === 'observe' && r.state === '趋势观察'))
-      .sort((a, b) => sort === 'efficiency' ? (b.metrics?.efficiency || 0) - (a.metrics?.efficiency || 0) : sort === 'risk' ? (a.risk_pct ?? 1e9) - (b.risk_pct ?? 1e9) : b.score - a.score || a.ts_code.localeCompare(b.ts_code))
+      && (mode === 'all' || mode === 'star' && stars.includes(r.ts_code) || mode === 'candidate' && r.eligible || mode === 'first' && r.state === '首阳观察' || mode === 'observe' && ['趋势观察', '等待启动', '启动已过'].includes(r.state)))
+      .sort((a, b) => sort === 'efficiency' ? (b.startup?.efficiency ?? b.metrics?.efficiency ?? 0) - (a.startup?.efficiency ?? a.metrics?.efficiency ?? 0) : sort === 'risk' ? (a.risk_pct ?? 1e9) - (b.risk_pct ?? 1e9) : b.score - a.score || a.ts_code.localeCompare(b.ts_code))
   }, [snapshot, query, index, mode, sort, stars])
   const selected = snapshot?.data.find((r) => r.ts_code === code)
   useEffect(() => {
@@ -58,11 +58,12 @@ export default function StockDashboard({ user }) {
   }
   function exportCsv() {
     const escape = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`
-    const csv = [['代码', '名称', '状态', '质量分', 'ER', 'ADX', '参考止损', '风险距离%', '筛选解释', '策略截止'], ...rows.map((r) => [r.ts_code, r.name, r.state, r.score, r.metrics?.efficiency, r.metrics?.adx, r.stop_price, r.risk_pct, r.reason, snapshot.as_of])].map((r) => r.map(escape).join(',')).join('\r\n')
+    const csv = [['代码', '名称', '状态', '质量分', '本段首阳时间', '推进阳线数', '启动总根数', '本段效率', 'ER20', 'ADX', '参考止损', '风险距离%', '筛选解释', '策略截止'], ...rows.map((r) => [r.ts_code, r.name, r.state, r.score, r.startup?.start, r.startup?.bullish_count, r.startup?.age_bars, r.startup?.efficiency, r.metrics?.efficiency, r.metrics?.adx, r.stop_price, r.risk_pct, r.reason, snapshot.as_of])].map((r) => r.map(escape).join(',')).join('\r\n')
     const url = URL.createObjectURL(new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' }))
     const a = document.createElement('a'); a.href = url; a.download = `60F筛选_${snapshot.as_of.slice(0, 10)}.csv`; a.click(); URL.revokeObjectURL(url)
   }
   const meta = snapshot?.metadata
+  const earlyMode = meta?.config?.selection_mode === 'early'
   const metrics = selected?.metrics
   const stale = snapshot && (new Date().getTime() - Date.parse(snapshot.as_of.replace(' ', 'T') + '+08:00')) > 4 * 86400e3
 
@@ -76,8 +77,8 @@ export default function StockDashboard({ user }) {
     {snapshot && <>
       <div className="trend-cards">
         <div><span>扫描股票池</span><strong>{meta.universe.toLocaleString()}<small>只</small></strong><p>五指数成分去重</p></div>
-        <div className="trend-card-gold"><span>规则通过</span><strong>{meta.eligible}<small>只</small></strong><p>突破 {meta.states['突破候选'] || 0} · 回踩 {meta.states['回踩候选'] || 0}</p></div>
-        <div><span>趋势观察</span><strong>{meta.states['趋势观察'] || 0}<small>只</small></strong><p>保留趋势，等待确认</p></div>
+        <div className="trend-card-gold"><span>{earlyMode ? '启动第2—4阳候选' : '规则通过'}</span><strong>{meta.eligible}<small>只</small></strong><p>{earlyMode ? `2阳 ${meta.states['启动第2阳'] || 0} · 3阳 ${meta.states['启动第3阳'] || 0} · 4阳 ${meta.states['启动第4阳'] || 0}` : `突破 ${meta.states['突破候选'] || 0} · 回踩 ${meta.states['回踩候选'] || 0}`}</p></div>
+        <div><span>{earlyMode ? '首阳观察' : '趋势观察'}</span><strong>{meta.states[earlyMode ? '首阳观察' : '趋势观察'] || 0}<small>只</small></strong><p>{earlyMode ? '启动待确认，不预判后续连阳' : '保留趋势，等待确认'}</p></div>
         <div><span>策略截止 · 上海时间</span><strong className="trend-date">{dateLabel(snapshot.as_of)}</strong><p>行情最新 {dateLabel(meta.data_latest)}</p></div>
       </div>
       {(stale || meta.data_latest.slice(0, 10) !== snapshot.as_of.slice(0, 10)) && <div className="trend-notice">{stale ? '当前为历史快照。' : ''} 复权因子截至 {meta.factor_latest}，策略只使用已完整验证的数据。刷新读取已发布结果；全池计算由离线任务完成。</div>}
@@ -85,7 +86,7 @@ export default function StockDashboard({ user }) {
         <aside className="trend-stock-panel">
           <div className="trend-search"><span>⌕</span><input aria-label="搜索股票" placeholder="搜索名称或代码" value={query} onChange={(e) => setQuery(e.target.value)} /></div>
           <select aria-label="指数成分池" value={index} onChange={(e) => setIndex(e.target.value)}><option value="">全部指数成分</option>{Object.entries(INDICES).map(([key, label]) => <option value={key} key={key}>{label}</option>)}</select>
-          <div className="trend-tabs">{[['candidate', '候选'], ['observe', '观察'], ['star', '自选'], ['all', '全部']].map(([key, label]) => <button key={key} className={mode === key ? 'active' : ''} onClick={() => setMode(key)}>{label}{key === 'star' ? ` ${stars.length}` : ''}</button>)}</div>
+          <div className="trend-tabs">{[['candidate', '候选'], ...(earlyMode ? [['first', '首阳']] : []), ['observe', '观察'], ['star', '自选'], ['all', '全部']].map(([key, label]) => <button key={key} className={mode === key ? 'active' : ''} onClick={() => setMode(key)}>{label}{key === 'star' ? ` ${stars.length}` : ''}</button>)}</div>
           <div className="trend-list-heading"><span>{rows.length} 只股票</span><select aria-label="排序" value={sort} onChange={(e) => setSort(e.target.value)}><option value="score">质量分排序</option><option value="efficiency">趋势效率排序</option><option value="risk">风险距离排序</option></select><button onClick={exportCsv} title="导出当前筛选" aria-label="导出当前筛选">↓</button></div>
           <div className="trend-stock-list">
             {rows.slice(0, 250).map((r) => <div className={`trend-stock-row ${code === r.ts_code ? 'selected' : ''}`} key={r.ts_code}>
@@ -99,7 +100,8 @@ export default function StockDashboard({ user }) {
         <div className="trend-detail-panel">
           {selected ? <>
             <div className="trend-stock-title"><div><h2>{selected.name} <small>{selected.ts_code}</small></h2><p>{selected.indices.map((i) => INDICES[i] || i).join(' / ')} <span>· 成分快照 {selected.membership_date}</span></p></div><span className={`trend-state ${selected.eligible ? 'passed' : ''}`}>{selected.state}</span></div>
-            <div className="trend-metrics"><div><span>截止价</span><b>{number(metrics?.close)}</b></div><div><span>趋势效率 ER</span><b>{number(metrics?.efficiency)}</b></div><div><span>趋势强度 ADX</span><b>{number(metrics?.adx, 1)}</b></div><div><span>20日日均成交额</span><b>{money(metrics?.daily_amount)}</b></div><div><span>参考止损 / 距离</span><b>{number(selected.stop_price)} <small>{number(selected.risk_pct)}%</small></b></div></div>
+            {earlyMode && selected.startup?.start && <p className="trend-startup-info">本段首阳 {dateLabel(selected.startup.start)} · 已推进 {selected.startup.bullish_count} 根阳线 / 共 {selected.startup.age_bars} 根K线</p>}
+            <div className="trend-metrics"><div><span>截止价</span><b>{number(metrics?.close)}</b></div><div><span>{earlyMode ? '本段推进效率' : '趋势效率 ER'}</span><b>{number(earlyMode ? selected.startup?.efficiency : metrics?.efficiency)}</b></div><div><span>{earlyMode ? '启动进度' : '趋势强度 ADX'}</span><b>{earlyMode ? selected.startup?.bullish_count ? `第 ${selected.startup.bullish_count} 阳` : '等待启动' : number(metrics?.adx, 1)}</b></div><div><span>20日日均成交额</span><b>{money(metrics?.daily_amount)}</b></div><div><span>参考止损 / 距离</span><b>{number(selected.stop_price)} <small>{number(selected.risk_pct)}%</small></b></div></div>
             <div className="trend-chart-shell">
               {chartBusy ? <div className="trend-placeholder">加载 {selected.name} 的60F K线…</div> : chartError ? <div className="trend-placeholder error" role="alert">{chartError}</div> : detail?.data.length ? <TrendChart data={detail.data} stop={selected.stop_price} config={meta.config} /> : <div className="trend-placeholder">没有可用的60F K线</div>}
             </div>
@@ -111,10 +113,10 @@ export default function StockDashboard({ user }) {
         </div>
       </section>
       <section className="trend-method"><button aria-expanded={rulesOpen} onClick={() => setRulesOpen(!rulesOpen)}><span>策略说明 <small>{snapshot.version} · 视频理念 → 可解释规则</small></span><span>{rulesOpen ? '−' : '+'}</span></button>{rulesOpen && <div>
-        <p>日线确认大方向 → 60F确认主趋势 → ER与ADX过滤杂乱走势 → 放量突破或回踩转强 → 用同周期ATR与结构低点设置参考风险边界。</p>
+        <p>{earlyMode ? '日线过滤大方向 → 回调或盘整后的首阳观察 → 第2—4根推进阳线确认 → 同周期结构与ATR控制风险。短暂整理不重置计数，超过早期窗口不再作为新启动推荐。' : '日线确认大方向 → 60F确认主趋势 → ER与ADX过滤杂乱走势 → 放量突破或回踩转强 → 用同周期ATR与结构低点设置参考风险边界。'}</p>
         <p>视频原例为期货。当前实现是面向A股做多的研究策略，未将“主力资金推动”当作可直接观测的事实；流畅度仅用价格路径效率和趋势强度近似。</p>
         <p>这里只使用60F与已完成日线，15F/30F精细择时尚未接入。参数是v1研究假设，尚未验证收益；成分股为已保存的日期快照，不是完整历史成员序列。A股实际执行需考虑T+1、涨跌停、滑点及交易费用。</p>
-        <p>当前参数：EMA {meta.config.fast}/{meta.config.slow}，ER≥{meta.config.min_efficiency}，ADX≥{meta.config.min_adx}，突破量比≥{meta.config.min_volume_ratio}，偏离≤{meta.config.max_extension_atr}ATR，风险距离≤{meta.config.max_risk_pct}%。已记录 {meta.states['数据待补'] || 0} 只数据待补。</p>
+        <p>当前参数：EMA {meta.config.fast}/{meta.config.slow}，{earlyMode ? `首阳实体≥${meta.config.startup_body_atr}ATR、量比≥${meta.config.startup_volume_ratio}，本段效率≥${meta.config.startup_min_efficiency}；不强等ADX/20根ER确认` : `ER≥${meta.config.min_efficiency}，ADX≥${meta.config.min_adx}，突破量比≥${meta.config.min_volume_ratio}`}，偏离≤{meta.config.max_extension_atr}ATR，风险距离≤{meta.config.max_risk_pct}%。已记录 {meta.states['数据待补'] || 0} 只数据待补。</p>
       </div>}</section>
     </>}
   </div>

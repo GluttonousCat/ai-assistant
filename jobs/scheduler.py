@@ -3,8 +3,7 @@ Daily incremental data-sync scheduler (asyncio background task; scheduler lives 
 long as the backend does).
 
 Schedule rules:
-- Runs on every trading day at 21:00 (Tushare ingests the day's data at 15:00-16:00;
-  pulling at 21:00 is the safe choice)
+- Runs on every trading day at 17:00 Asia/Shanghai.
 - Incremental: last 5 trading days of quotes (daily/daily_basic/adj_factor) + current
   week's financials
 - Idempotent: safe to re-run (checkpoint resume + upsert)
@@ -15,25 +14,26 @@ Design:
   failures)
 - Manual trigger endpoint supported: /admin/sync-today
 """
+
 from __future__ import annotations
 
 import asyncio
-import time
 from datetime import date, datetime, timedelta
 from typing import Optional
+from zoneinfo import ZoneInfo
 
+from core.config import get_config as _cfg
 from core.logger import get_logger
 from tools.kline.calendar import is_trading_day
 
 logger = get_logger(__name__)
 
-# Schedule: 21:00 on every trading day (Tushare ingests the day's data at 15-16,
-# so 21:00 is safe)
-# Can be overridden via schedule.sync_hour in config.yaml
-from core.config import get_config as _cfg
-
-SYNC_HOUR = int(_cfg().get("schedule.sync_hour", 21))
+# Configurable local-market clock, independent of the host operating-system zone.
+SHANGHAI = ZoneInfo("Asia/Shanghai")
+SYNC_HOUR = int(_cfg().get("schedule.sync_hour", 17))
 SYNC_MINUTE = int(_cfg().get("schedule.sync_minute", 0))
+if not 0 <= SYNC_HOUR <= 23 or not 0 <= SYNC_MINUTE <= 59:
+    raise ValueError("schedule.sync_hour/sync_minute超出合法范围")
 # Incremental lookback window (trading days)
 BACKFILL_DAYS = 5
 # Financial-report announcement lookback (calendar days; covers weekend/holiday
@@ -41,9 +41,18 @@ BACKFILL_DAYS = 5
 FIN_BACKFILL_DAYS = 10
 
 
+def _market_time(now: Optional[datetime] = None) -> datetime:
+    if now is None:
+        return datetime.now(SHANGHAI)
+    return (
+        now.replace(tzinfo=SHANGHAI) if now.tzinfo is None else now.astimezone(SHANGHAI)
+    )
+
+
 def _run_financial_incremental(days: int) -> dict:
     """Thread-pool entry: incremental financial-statement sync (blocking)."""
     from tools.market.sync_financial import run_financial_incremental
+
     return run_financial_incremental(days=days)
 
 
@@ -51,6 +60,7 @@ def _run_dividend_daily(days: int) -> int:
     """Thread-pool entry: per-day incremental dividends/bonus shares
     (3 channels x days days = 3*days calls)."""
     from tools.market.sync_financial import run_dividend_daily
+
     return run_dividend_daily(days=days)
 
 
@@ -58,6 +68,7 @@ def _run_disclosure_daily(days: int) -> int:
     """Thread-pool entry: per-day incremental report disclosure dates
     (2 channels x days days)."""
     from tools.market.sync_financial import run_disclosure_daily
+
     return run_disclosure_daily(days=days)
 
 
@@ -71,26 +82,31 @@ class DailySyncScheduler:
         self.last_result: Optional[dict] = None
 
     def _next_run_time(self, now: Optional[datetime] = None) -> datetime:
-        """Compute the next run time (today 21:00 or tomorrow 21:00)."""
-        now = now or datetime.now()
-        target = now.replace(hour=SYNC_HOUR, minute=SYNC_MINUTE,
-                             second=0, microsecond=0)
+        """Next trading-day slot in Shanghai time, including weekends/holidays."""
+        now = _market_time(now)
+        target = now.replace(
+            hour=SYNC_HOUR, minute=SYNC_MINUTE, second=0, microsecond=0
+        )
         if now >= target:
-            # Already past today 21:00 -> tomorrow
+            target += timedelta(days=1)
+        while not is_trading_day(target.date()):
             target += timedelta(days=1)
         return target
 
     def _seconds_until(self, target: datetime) -> float:
-        return max(0.0, (target - datetime.now()).total_seconds())
+        return max(0.0, (_market_time(target) - _market_time()).total_seconds())
 
-    async def _run_sync(self, include_financial: bool = True,
-                        start: Optional[date] = None,
-                        end: Optional[date] = None) -> dict:
+    async def _run_sync(
+        self,
+        include_financial: bool = True,
+        start: Optional[date] = None,
+        end: Optional[date] = None,
+    ) -> dict:
         """Run one incremental sync (quotes + optional financial announcements)."""
         logger.info("开始每日增量同步")
         from tools.market.sync_tushare import TusharePgSyncer
 
-        end = end or date.today()
+        end = end or _market_time().date()
         # Look back N trading days (or use the caller-specified start)
         if start is None:
             start = end
@@ -105,7 +121,9 @@ class DailySyncScheduler:
             # One run covers multiple tables (internally reuses
             # connection/whitelist/calendar); blocking IO goes to the thread pool
             result = await asyncio.to_thread(
-                syncer.run, start, end,
+                syncer.run,
+                start,
+                end,
                 ["daily", "daily_basic", "adj_factor"],
             )
         except Exception as e:
@@ -117,7 +135,8 @@ class DailySyncScheduler:
         if include_financial:
             try:
                 fin_result = await asyncio.to_thread(
-                    _run_financial_incremental, FIN_BACKFILL_DAYS)
+                    _run_financial_incremental, FIN_BACKFILL_DAYS
+                )
                 if isinstance(result, dict):
                     result["financial"] = fin_result
             except Exception as e:
@@ -128,8 +147,7 @@ class DailySyncScheduler:
             # Dividend/bonus-share increment: per-day batch over three channels
             # (ann_date/imp_ann_date/ex_date), 6 calls per day
             try:
-                div_rows = await asyncio.to_thread(
-                    _run_dividend_daily, 2)
+                div_rows = await asyncio.to_thread(_run_dividend_daily, 2)
                 if isinstance(result, dict):
                     result["dividend"] = div_rows
             except Exception as e:
@@ -140,8 +158,7 @@ class DailySyncScheduler:
             # Disclosure-date increment: per-day over two channels (ann_date =
             # planned announcement/changes, actual_date = actual disclosure)
             try:
-                dis_rows = await asyncio.to_thread(
-                    _run_disclosure_daily, 2)
+                dis_rows = await asyncio.to_thread(_run_disclosure_daily, 2)
                 if isinstance(result, dict):
                     result["disclosure_date"] = dis_rows
             except Exception as e:
@@ -149,7 +166,7 @@ class DailySyncScheduler:
                 if isinstance(result, dict):
                     result["disclosure_date"] = {"error": str(e)}
 
-        self.last_run = datetime.now()
+        self.last_run = _market_time()
         self.last_result = result
         logger.info(f"每日增量同步完成: {result}")
         return result
@@ -158,12 +175,12 @@ class DailySyncScheduler:
     def _expected_latest_trade_date(now: Optional[datetime] = None) -> Optional[date]:
         """
         Compute the latest trading date whose data 'should already be ingested':
-        - After 16:00 on a trading day -> today (Tushare ingests the day's data at 15-16)
+        - At/after the configured market slot on a trading day -> today
         - Otherwise                     -> previous trading day
         """
-        now = now or datetime.now()
+        now = _market_time(now)
         d = now.date()
-        if is_trading_day(d) and now.hour >= 16:
+        if is_trading_day(d) and (now.hour, now.minute) >= (SYNC_HOUR, SYNC_MINUTE):
             return d
         d -= timedelta(days=1)
         for _ in range(20):  # covers the longest holidays
@@ -179,7 +196,7 @@ class DailySyncScheduler:
         backfill it immediately (covers: downtime during the scheduled slot /
         weekend restarts / post-holiday restarts / missed runs due to PG being
         unreachable — all scenarios). Quotes only (minutes-level work); financials
-        are left to the routine 21:00 task.
+        are left to the routine scheduled task.
         """
         expected = self._expected_latest_trade_date()
         if expected is None:
@@ -187,16 +204,17 @@ class DailySyncScheduler:
             return
 
         try:
-            from storage.pg import PgClient
-            with PgClient() as pg:
-                row = pg.fetch_one("SELECT MAX(trade_date) m FROM stock.daily")
-                latest = row["m"] if row else None
+            from tools.market.queries import latest_daily_date
+
+            latest = await asyncio.to_thread(latest_daily_date)
         except Exception as e:
             logger.error(f"启动自检查询失败 (PG 不可达?): {e}")
             return
 
         if latest is not None and latest >= expected:
-            logger.info(f"启动自检: 行情已最新 (daily 至 {latest} >= 应有 {expected}), 无需补漏")
+            logger.info(
+                f"启动自检: 行情已最新 (daily 至 {latest} >= 应有 {expected}), 无需补漏"
+            )
             return
 
         # Gap start: the day after the DB's latest; with no data, look back 10
@@ -216,8 +234,7 @@ class DailySyncScheduler:
             f"立即补齐 {start} ~ {expected}"
         )
         try:
-            await self._run_sync(include_financial=False,
-                                 start=start, end=expected)
+            await self._run_sync(include_financial=False, start=start, end=expected)
         except Exception as e:
             logger.error(f"启动补漏失败: {e}")
 
@@ -231,28 +248,16 @@ class DailySyncScheduler:
 
         while not self._stop_event.is_set():
             next_run = self._next_run_time()
-            # Run on trading days only
-            if is_trading_day(next_run.date()):
-                wait = self._seconds_until(next_run)
-                logger.info(f"下次增量同步: {next_run} (等待 {wait:.0f}s)")
+            wait = self._seconds_until(next_run)
+            logger.info(f"下次增量同步: {next_run} (等待 {wait:.0f}s)")
+            try:
+                await asyncio.wait_for(self._stop_event.wait(), timeout=wait)
+                break
+            except asyncio.TimeoutError:
                 try:
-                    await asyncio.wait_for(
-                        self._stop_event.wait(), timeout=wait
-                    )
-                    break  # stop signal received
-                except asyncio.TimeoutError:
                     await self._run_sync()
-            else:
-                # Non-trading day -> skip to tomorrow
-                wait = self._seconds_until(next_run)
-                logger.debug(f"非交易日 {next_run.date()}, 等待 {wait:.0f}s")
-                try:
-                    await asyncio.wait_for(
-                        self._stop_event.wait(), timeout=wait
-                    )
-                    break
-                except asyncio.TimeoutError:
-                    continue
+                except Exception:
+                    logger.exception("定时增量同步失败；保留调度任务，下一交易日继续")
 
     def start(self):
         """Start the scheduler task."""

@@ -52,6 +52,7 @@
 .trend-stock-title p span { color: #7c786d; }
 .trend-state { font-size: 11px; border: 1px solid #494134; color: #aca393; padding: 6px 12px; border-radius: 5px; white-space: nowrap; }
 .trend-state.passed { color: var(--trend-gold); border-color: #655035; background: #2a2215; }
+.trend-startup-info { font-size: 11px; color: #b79c70; margin: 14px 0 0; line-height: 1.7; }
 .trend-metrics { display: grid; grid-template-columns: .8fr .9fr 1fr 1.2fr 1.3fr; gap: 12px; padding: 22px 0; }
 .trend-metrics span { display: block; color: #938b7d; font-size: 10px; }
 .trend-metrics b { display: block; font-size: 17px; font-weight: 500; margin-top: 9px; font-variant-numeric: tabular-nums; }

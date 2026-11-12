@@ -3,6 +3,7 @@
 FastAPI application lifecycle management
 On startup: init auth schema + daily incremental sync schedulers; on shutdown: release resources
 """
+
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
@@ -25,6 +26,7 @@ async def lifespan(app: FastAPI):
     # startup — the error surfaces at login time)
     try:
         from core import security
+
         security.ensure_auth_schema()
         logger.info("认证模块已初始化 (auth.users)")
     except Exception as e:
@@ -38,7 +40,7 @@ async def lifespan(app: FastAPI):
             scheduler.start()
             logger.info(
                 f"每日增量同步调度器已启动 (交易日 "
-                f"{config.get('schedule.sync_hour', 21)}:{config.get('schedule.sync_minute', 0):02d})"
+                f"{config.get('schedule.sync_hour', 17)}:{config.get('schedule.sync_minute', 0):02d} Asia/Shanghai)"
             )
         except Exception as e:
             logger.warning(f"增量调度器启动失败 (非致命): {e}")
@@ -48,12 +50,15 @@ async def lifespan(app: FastAPI):
     if config.get("zsxq_schedule.enabled", True):
         try:
             from jobs.zsxq_scheduler import get_zsxq_scheduler
+
             get_zsxq_scheduler().start()
             logger.info("知识星球研报抓取调度器已启动")
         except Exception as e:
             logger.warning(f"知识星球调度器启动失败 (非致命): {e}")
 
-    logger.info(f"应用启动: {config.get('app.name', 'ai-assistant')} v{config.get('app.version', '2.0.0')}")
+    logger.info(
+        f"应用启动: {config.get('app.name', 'ai-assistant')} v{config.get('app.version', '2.0.0')}"
+    )
     yield
 
     # Stop schedulers
@@ -63,6 +68,7 @@ async def lifespan(app: FastAPI):
         pass
     try:
         from jobs.zsxq_scheduler import get_zsxq_scheduler
+
         await get_zsxq_scheduler().stop()
     except Exception:
         pass

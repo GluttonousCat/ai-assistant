@@ -6,6 +6,12 @@ from psycopg2.extras import execute_values
 from storage.pg import PgClient, _normalize_row
 
 
+def latest_daily_date():
+    with PgClient(read_only=True) as pg:
+        row = pg.fetch_one("SELECT max(trade_date) AS latest FROM stock.daily")
+        return row["latest"] if row else None
+
+
 def save_memberships(frame: pd.DataFrame) -> None:
     with PgClient() as pg:
         pg.upsert_df(frame, "stock", "index_membership_snapshot",

@@ -85,7 +85,7 @@ def scan(as_of: str | None = None, cfg: TrendConfig = TrendConfig()):
         "start": start,
         "price_basis": "forward_asof",
         "universe_basis": "当时可用的最近成分快照；不是逐日历史成员回放",
-        "method": "视频理念的量化代理；阈值是本项目v1假设，尚未验证超额收益",
+        "method": "60F启动段：首阳观察、第2—4根推进阳线确认；参数为v2研究假设，尚未验证超额收益",
     }
     if all(r["state"] == "数据待补" for r in rows):
         raise ValueError(

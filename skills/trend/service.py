@@ -4,7 +4,7 @@ import json
 import pandas as pd
 
 from tools.market.trend_data import adjusted_bars, adjust_prices, load_dashboard
-from skills.trend.strategy import TrendConfig, indicators
+from skills.trend.strategy import TrendConfig, evaluated_bars
 
 
 def dashboard(run_id=None, include_rows=True):
@@ -19,7 +19,14 @@ def stock_detail(code: str, start: str, end: str, config: dict | None = None):
     if issue:
         for c in ("open", "high", "low", "close", "volume", "amount"):
             frame[c] = pd.to_numeric(frame[c], errors="coerce")
-    data = indicators(frame, TrendConfig(**(config or {})))
+    settings = dict(config or {})
+    # v1 snapshots have no mode field; retain their mature-trend interpretation.
+    if config is not None:
+        settings.setdefault("selection_mode", "mature")
+    data = evaluated_bars(frame, TrendConfig(**settings))
+    if issue:
+        data["eligible"] = False
+        data["first_watch"] = False
     cols = [
         "bar_end",
         "open",
@@ -33,6 +40,12 @@ def stock_detail(code: str, start: str, end: str, config: dict | None = None):
         "atr",
         "adx",
         "efficiency",
+        "startup_start",
+        "startup_count",
+        "startup_age",
+        "startup_efficiency",
+        "eligible",
+        "first_watch",
     ]
     clean = (
         data[cols]

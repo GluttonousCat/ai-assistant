@@ -285,7 +285,7 @@ async def agent_chat(request: dict):
 # ---------- Data sync scheduling ----------
 @router.post("/admin/sync-today", tags=["admin"], dependencies=[Depends(require_admin)])
 async def sync_today():
-    """Manually trigger the daily incremental sync (the same job that runs automatically at 21:00 on trading days)"""
+    """Manually trigger the daily job scheduled at 17:00 Asia/Shanghai."""
     from jobs.scheduler import get_scheduler
     result = await get_scheduler().trigger_now()
     return {"status": "done", "result": result}
@@ -300,4 +300,6 @@ async def scheduler_status():
         "running": s._task is not None and not s._task.done(),
         "last_run": s.last_run.isoformat() if s.last_run else None,
         "last_result": s.last_result,
+        "next_run": s._next_run_time().isoformat(),
+        "time_zone": "Asia/Shanghai",
     }
