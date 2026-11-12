@@ -3,20 +3,13 @@ from __future__ import annotations
 
 import logging
 import os
-import random
 import threading
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 import yaml
-from pymilvus import DataType, MilvusClient
-
-from storage.milvus_schema import (
-    new_schema,
-    rebuild_collection,
-    vector_index_params,
-)
+from pymilvus import MilvusClient
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +20,7 @@ _not_ready_warned = False
 
 @lru_cache(maxsize=1)
 def _yaml_milvus() -> Dict[str, Any]:
-    """config.yaml 的 milvus 段 (进程内读一次; 文件缺失/无该段返回空 dict)"""
+    """config.yaml milvus section (read once per process; missing file/section yields an empty dict)"""
     path = Path(__file__).resolve().parent.parent / "config.yaml"
     try:
         with open(path, encoding="utf-8") as f:
@@ -40,7 +33,7 @@ def _yaml_milvus() -> Dict[str, Any]:
 
 
 def milvus_config() -> Dict[str, Any]:
-    """Milvus 连接配置: env MILVUS_* > config.yaml milvus 段 > 默认值 (env > yaml)"""
+    """Milvus connection config: env MILVUS_* > config.yaml milvus section > defaults (env > yaml)"""
     def _pick(env_key: str, yaml_key: str, default: Any) -> Any:
         v = os.environ.get(env_key)
         if v not in (None, ""):
@@ -56,7 +49,7 @@ def milvus_config() -> Dict[str, Any]:
 
 
 def check_milvus_config(cfg: Dict[str, Any]) -> List[str]:
-    """配置检测"""
+    """Config validation"""
     problems: List[str] = []
     uri = str(cfg.get("uri") or "")
     if not (uri.startswith("http://") or uri.startswith("https://")):
@@ -71,7 +64,7 @@ def check_milvus_config(cfg: Dict[str, Any]) -> List[str]:
 
 
 def get_milvus():
-    """取 Milvus 单例实例"""
+    """Get the singleton Milvus client"""
     global _client
     if _client is not None:
         return _client
@@ -96,7 +89,7 @@ def get_milvus():
         return _client
 
 def close_milvus() -> None:
-    """关闭连接"""
+    """Close the connection"""
     global _client
     with _lock:
         if _client is not None:
@@ -107,7 +100,7 @@ def close_milvus() -> None:
             _client = None
 
 def milvus_ready() -> bool:
-    """探活"""
+    """Liveness probe"""
     global _not_ready_warned
     try:
         get_milvus()
@@ -119,7 +112,7 @@ def milvus_ready() -> bool:
         return False
 
 def insert_rows(collection: str, rows: List[Dict[str, Any]]) -> int:
-    """插入"""
+    """Insert rows"""
     if not rows:
         return 0
     res = get_milvus().insert(collection_name=collection, data=rows)
@@ -127,7 +120,7 @@ def insert_rows(collection: str, rows: List[Dict[str, Any]]) -> int:
         if isinstance(res, dict) else len(rows)
 
 def upsert_rows(collection: str, rows: List[Dict[str, Any]]) -> int:
-    """按主键 upsert"""
+    """Upsert by primary key"""
     if not rows:
         return 0
     res = get_milvus().upsert(collection_name=collection, data=rows)
@@ -138,7 +131,7 @@ def search_similar(
         collection: str, vector: Sequence[float], limit: int = 5,
         expr: Optional[str] = None, output_fields: Optional[List[str]] = None
 ) -> List[Dict[str, Any]]:
-    """ANN"""
+    """ANN search"""
     res = get_milvus().search(
         collection_name=collection,
         data=[list(vector)],
@@ -157,51 +150,17 @@ def fetch_by_expr(
         collection: str, expr: str, output_fields: Optional[List[str]] = None,
         limit: int = 100
 ) -> List[Dict[str, Any]]:
-    """标量过滤查询"""
+    """Scalar-filtered query"""
     return list(get_milvus().query(
         collection_name=collection, filter=expr,
         output_fields=output_fields or ["*"], limit=limit))
 
 def delete_by_expr(collection: str, expr: str) -> int:
-    """按标量过滤删除"""
+    """Delete by scalar filter"""
     res = get_milvus().delete(collection_name=collection, filter=expr)
     return int(res.get("delete_count", 0)) if isinstance(res, dict) else 0
 
 def count_rows(collection: str) -> int:
-    """行数"""
+    """Row count"""
     stats = get_milvus().get_collection_stats(collection_name=collection)
     return int(stats.get("row_count", 0)) if isinstance(stats, dict) else 0
-
-SMOKE_COLLECTION = "storage_smoke"
-
-def _status() -> None:
-    ready = milvus_ready()
-    logger.info(f"Milvus 探活: {'OK' if ready else '不可达 (向量功能将降级)'}")
-    if not ready:
-        return
-    client = get_milvus()
-    cfg = milvus_config()
-    logger.info(f"uri={cfg['uri']} db={cfg['db_name']} embed_dim={cfg['embed_dim']}")
-    for name in sorted(client.list_collections()):
-        logger.info(f"{name}: 行数={count_rows(name)}")
-
-def _smoke() -> int | None:
-    """SDK 自检: 临时 collection 写入 -> 检索 -> 清理 (不碰业务数据)"""
-    if not milvus_ready():
-        logger.warning("Milvus 不可达, 冒烟终止 (exit 1)")
-        return 1
-    dim = milvus_config()["embed_dim"]
-    schema = new_schema()
-    schema.add_field("id", DataType.VARCHAR, is_primary=True, max_length=32)
-    schema.add_field("embedding", DataType.FLOAT_VECTOR, dim=dim)
-    client = get_milvus()
-    rebuild_collection(client, SMOKE_COLLECTION, schema, vector_index_params(client))
-    try:
-        vec = [random.random() for _ in range(dim)]
-        n = upsert_rows(SMOKE_COLLECTION, [{"id": "smoke", "embedding": vec}])
-        hits = search_similar(SMOKE_COLLECTION, vec, limit=1)
-        top = f"top1 distance={hits[0]['distance']:.4f}" if hits else "未命中"
-        logger.info(f"写入 {n} 行, 检索 {len(hits)} ({top}) —— SDK 冒烟通过")
-        return 0
-    finally:
-        client.drop_collection(SMOKE_COLLECTION)

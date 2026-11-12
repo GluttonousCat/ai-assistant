@@ -1,7 +1,7 @@
 # -*- encoding: utf-8 -*-
 """
-FastAPI 应用生命周期管理
-启动时初始化 MySQL 连接池 + 每日增量同步调度器, 关闭时释放资源
+FastAPI application lifecycle management
+On startup: init auth schema + daily incremental sync schedulers; on shutdown: release resources
 """
 from __future__ import annotations
 
@@ -18,10 +18,11 @@ logger = get_logger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """应用生命周期: 初始化与清理资源"""
+    """Application lifecycle: initialize and clean up resources"""
     config = get_config()
 
-    # 初始化认证 (幂等建 auth.users 表 + 种子管理员; 失败不阻塞启动, 登录时再报错)
+    # Init auth (idempotently create auth.users + seed admin; failure does not block
+    # startup — the error surfaces at login time)
     try:
         from core import security
         security.ensure_auth_schema()
@@ -29,7 +30,8 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"认证初始化失败 (登录功能不可用): {e}")
 
-    # 启动每日增量同步调度器 (交易日 schedule.sync_hour 自动回填, 可用 schedule.enabled 关闭)
+    # Start the daily incremental sync scheduler (auto backfills trading days at
+    # schedule.sync_hour; can be disabled via schedule.enabled)
     if config.get("schedule.enabled", True):
         try:
             scheduler = get_scheduler()
@@ -41,7 +43,8 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"增量调度器启动失败 (非致命): {e}")
 
-    # 启动知识星球研报抓取调度器 (每日 07:00/23:00 抓取+同步+LLM提取, 启动补跑兜底)
+    # Start the zsxq report crawler scheduler (daily 07:00/23:00 fetch + sync +
+    # LLM extraction, with a startup catch-up pass as a safety net)
     if config.get("zsxq_schedule.enabled", True):
         try:
             from jobs.zsxq_scheduler import get_zsxq_scheduler
@@ -50,14 +53,15 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"知识星球调度器启动失败 (非致命): {e}")
 
-    # 启动每日 21:30 区间+趋势扫描调度器 (当天日K由 21:00 调度已同步)
+    # Start the daily 21:30 range+trend scan scheduler (the day's daily bars are
+    # already synced by the 21:00 job)
     try:
         from api.range_api import start_scheduler as start_range_scheduler
         start_range_scheduler()
     except Exception as e:
         logger.warning(f"区间扫描调度器启动失败 (非致命): {e}")
 
-    # 启动时检测落后并补跑 (应对关机/睡眠导致定时器错过)
+    # Detect staleness at startup and catch up (handles timers missed by shutdown/sleep)
     try:
         from api.range_api import catchup_if_stale
         catchup_if_stale()
@@ -67,7 +71,7 @@ async def lifespan(app: FastAPI):
     logger.info(f"应用启动: {config.get('app.name', 'ai-assistant')} v{config.get('app.version', '2.0.0')}")
     yield
 
-    # 停止调度器
+    # Stop schedulers
     try:
         await get_scheduler().stop()
     except Exception:

@@ -1,56 +1,58 @@
 #!/usr/bin/env python3
 """
-通用工具函数
+Common utility functions
 """
 import re
 from datetime import datetime, timedelta
 
 
 def clean_cookie(cookie: str) -> str:
-    """清理Cookie字符串"""
+    """Clean up a cookie string"""
     if not cookie:
         return ""
 
-    # 去除首尾空白和引号
+    # Strip surrounding whitespace and quotes
     cookie = cookie.strip().strip('"\'')
 
-    # 处理bytes类型
+    # Handle bytes input
     if isinstance(cookie, bytes):
         cookie = cookie.decode('utf-8')
 
-    # 去除前缀b'或b"
+    # Strip a b' or b" prefix
     if cookie.startswith("b'") and cookie.endswith("'"):
         cookie = cookie[2:-1]
     elif cookie.startswith('b"') and cookie.endswith('"'):
         cookie = cookie[2:-1]
 
-    # 处理转义字符
+    # Unescape escaped characters
     cookie = cookie.replace('\\n', '').replace('\\"', '"').replace("\\'", "'")
 
-    # 确保分号后有空格
+    # Ensure a space after every semicolon
     cookie = '; '.join(part.strip() for part in cookie.split(';'))
 
     return cookie
 
 
 def decrement_time(iso_time: str, milliseconds: int = 1) -> str:
-    """ISO时间减去指定毫秒"""
+    """Subtract the given milliseconds from an ISO time"""
     dt = datetime.fromisoformat(iso_time.replace('+0800', '+08:00'))
     dt = dt - timedelta(milliseconds=milliseconds)
     return dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + '+0800'
 
 
 def sanitize_filename(filename: str) -> str:
-    """清理文件名，移除非法字符"""
+    """Sanitize a filename, removing illegal characters"""
     safe = "".join(c for c in filename if c.isalnum() or c in '._-（）()[]{} ')
     return safe or "unnamed"
 
 
 def is_chinese_translated(name: str) -> bool:
     """
-    判定是否知识星球的中文翻译版文件 (如 '中文版-高盛-xxx.pdf').
-    平台策略: 只保留英文/原版研报, 中文版在下载/入库层过滤.
-    匹配: 以「中文版」开头 (含 【中文版】/(中文版) 变体), 或分隔符包裹的 -中文版- / 中文版.pdf 尾缀.
+    Detect a Chinese-translated zsxq file (e.g. '中文版-高盛-xxx.pdf').
+    Platform policy: keep only English/original reports; Chinese translations
+    are filtered at the download/ingest layer.
+    Match: starts with 「中文版」 (including 【中文版】/(中文版) variants), or a
+    delimiter-wrapped -中文版- / a 中文版.pdf suffix.
     """
     n = (name or "").strip()
     if not n:
@@ -60,8 +62,9 @@ def is_chinese_translated(name: str) -> bool:
     return bool(re.search(r"[-_－—·]中文版([-_.．]|$)", n))
 
 
-# 常见投行/券商 英文名 -> 中文通用名 (机构字段与展示标题统一用中文;
-# AI 从英文原版提取出的机构名经此归一)
+# Common investment banks/brokers: English name -> common Chinese name
+# (org field and display titles use Chinese uniformly; org names extracted
+#  by AI from English originals are normalized through this map)
 ORG_CN_MAP = {
     "goldman sachs": "高盛", "gs": "高盛", "gse": "高盛",
     "morgan stanley": "摩根士丹利", "ms": "摩根士丹利",
@@ -86,8 +89,9 @@ ORG_CN_MAP = {
 
 def normalize_org_name(name: str) -> str:
     """
-    机构名归一: 英文名 -> 中文通用名 (大小写/多余空格不敏感).
-    未命中映射的原文返回; 空返回空串.
+    Normalize an org name: English name -> common Chinese name
+    (case/extra-whitespace insensitive). Unmapped input is returned as-is;
+    empty input returns an empty string.
     """
     n = (name or "").strip()
     if not n:
@@ -97,13 +101,13 @@ def normalize_org_name(name: str) -> str:
 
 
 def strip_zsxq_tags(text: str) -> str:
-    """清理知识星球话题文本中的富文本标签
-    例: <e type="web" href="https%3A%2F%2F...">百度网盘</e> → 百度网盘(链接)
+    """Strip rich-text tags from zsxq topic text
+    Example: <e type="web" href="https%3A%2F%2F...">百度网盘</e> -> 百度网盘(link)
     """
     if not text:
         return text
 
-    # <e type="web" href="url">显示文本</e> → 显示文本(链接: url)
+    # <e type="web" href="url">label</e> -> label(link: url)
     def _replace_web(m):
         label = m.group(2) or ""
         url = m.group(1) or ""
@@ -111,6 +115,6 @@ def strip_zsxq_tags(text: str) -> str:
 
     text = re.sub(r'<e\s+type="web"\s+href="([^"]*)"[^>]*>(.*?)</e>', _replace_web, text, flags=re.S)
 
-    # 移除其余所有标签
+    # Remove all remaining tags
     text = re.sub(r"<[^>]+>", "", text)
     return text.strip()

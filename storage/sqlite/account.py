@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-账号数据库模块
-合并 accounts_manager.py 和 accounts_sql_manager.py
+Account database module
+Consolidates accounts_manager.py and accounts_sql_manager.py
 """
 import time
 import threading
@@ -11,13 +11,13 @@ from storage.sqlite.base import BaseDatabase
 
 
 class AccountDatabase(BaseDatabase):
-    """账号数据库"""
+    """Account database"""
 
     _instance = None
     _lock = threading.Lock()
 
     def __new__(cls, db_path: str = "accounts.db"):
-        """单例模式"""
+        """Singleton pattern"""
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
@@ -31,8 +31,8 @@ class AccountDatabase(BaseDatabase):
         super().__init__(db_path)
 
     def _init_tables(self):
-        """初始化表结构"""
-        # 账号表
+        """Initialize the table schema"""
+        # Accounts table
         self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS accounts (
                 id TEXT PRIMARY KEY,
@@ -43,7 +43,7 @@ class AccountDatabase(BaseDatabase):
             )
         ''')
 
-        # 群组-账号映射表
+        # Group-to-account mapping table
         self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS group_account_map (
                 group_id TEXT PRIMARY KEY,
@@ -54,14 +54,14 @@ class AccountDatabase(BaseDatabase):
         self.conn.commit()
 
     def add_account(self, cookie: str, name: str = None) -> Dict[str, Any]:
-        """添加账号"""
+        """Add an account"""
         if not cookie or not cookie.strip():
             raise ValueError("cookie不能为空")
 
         account_id = f"acc_{int(time.time() * 1000)}"
         name = name or f"账号{self._get_count() + 1}"
 
-        # 如果是第一个账号，设为默认
+        # The first account becomes the default
         is_default = self._get_count() == 0
 
         self.cursor.execute('''
@@ -73,7 +73,7 @@ class AccountDatabase(BaseDatabase):
         return {'id': account_id, 'name': name, 'is_default': is_default}
 
     def get_account(self, account_id: str, mask_cookie: bool = True) -> Optional[Dict]:
-        """获取账号"""
+        """Get an account"""
         self.cursor.execute('SELECT * FROM accounts WHERE id = ?', (account_id,))
         row = self.cursor.fetchone()
         if not row:
@@ -82,19 +82,19 @@ class AccountDatabase(BaseDatabase):
         return self._row_to_dict(row, mask_cookie)
 
     def get_default_account(self, mask_cookie: bool = True) -> Optional[Dict]:
-        """获取默认账号"""
+        """Get the default account"""
         self.cursor.execute('SELECT * FROM accounts WHERE is_default = TRUE')
         row = self.cursor.fetchone()
         if row:
             return self._row_to_dict(row, mask_cookie)
 
-        # 没有默认账号，返回第一个
+        # No default account: fall back to the first one
         self.cursor.execute('SELECT * FROM accounts LIMIT 1')
         row = self.cursor.fetchone()
         return self._row_to_dict(row, mask_cookie) if row else None
 
     def get_account_for_group(self, group_id: str, mask_cookie: bool = True) -> Optional[Dict]:
-        """获取群组对应的账号"""
+        """Get the account bound to a group"""
         self.cursor.execute(
             'SELECT account_id FROM group_account_map WHERE group_id = ?',
             (str(group_id),)
@@ -107,7 +107,7 @@ class AccountDatabase(BaseDatabase):
         return self.get_default_account(mask_cookie)
 
     def assign_group_account(self, group_id: str, account_id: str) -> bool:
-        """分配群组到账号"""
+        """Bind a group to an account"""
         self.cursor.execute('SELECT 1 FROM accounts WHERE id = ?', (account_id,))
         if not self.cursor.fetchone():
             return False
@@ -121,19 +121,19 @@ class AccountDatabase(BaseDatabase):
         return True
 
     def list_accounts(self, mask_cookie: bool = True) -> List[Dict]:
-        """列出所有账号"""
+        """List all accounts"""
         self.cursor.execute('SELECT * FROM accounts ORDER BY created_at')
         return [self._row_to_dict(row, mask_cookie) for row in self.cursor.fetchall()]
 
     def delete_account(self, account_id: str) -> bool:
-        """删除账号"""
+        """Delete an account"""
         self.cursor.execute('DELETE FROM accounts WHERE id = ?', (account_id,))
         self.cursor.execute('DELETE FROM group_account_map WHERE account_id = ?', (account_id,))
         self.conn.commit()
         return self.cursor.rowcount > 0
 
     def set_default(self, account_id: str) -> bool:
-        """设置默认账号"""
+        """Set the default account"""
         self.cursor.execute('UPDATE accounts SET is_default = FALSE')
         self.cursor.execute(
             'UPDATE accounts SET is_default = TRUE WHERE id = ?',
@@ -143,22 +143,22 @@ class AccountDatabase(BaseDatabase):
         return self.cursor.rowcount > 0
 
     def _get_count(self) -> int:
-        """获取账号数量"""
+        """Get the account count"""
         self.cursor.execute('SELECT COUNT(*) FROM accounts')
         return self.cursor.fetchone()[0]
 
     def _now_iso(self) -> str:
-        """当前ISO时间"""
+        """Current ISO time"""
         return time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime())
 
     def _mask_cookie(self, cookie: str) -> str:
-        """掩码显示Cookie"""
+        """Mask a cookie for display"""
         if not cookie or len(cookie) < 8:
             return ""
         return f"***{cookie[-8:]}"
 
     def _row_to_dict(self, row: tuple, mask_cookie: bool) -> Dict[str, Any]:
-        """行转字典"""
+        """Row to dict"""
         cookie = row[2]
         return {
             'id': row[0],

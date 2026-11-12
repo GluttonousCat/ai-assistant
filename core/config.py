@@ -1,9 +1,9 @@
 # -*- encoding: utf-8 -*-
 """
-统一配置管理
-- config.yaml: 非敏感配置
-- .env:        敏感密钥 (OPENAI_API_KEY / TUSHARE_TOKEN / PG_* / ZSXQ_* ...)
-优先级: 环境变量 > config.yaml
+Unified configuration management
+- config.yaml: non-sensitive config
+- .env:        secrets (OPENAI_API_KEY / TUSHARE_TOKEN / PG_* / ZSXQ_* ...)
+Priority: environment variables > config.yaml
 """
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ import yaml
 
 
 def _find_project_root() -> Path:
-    """向上查找包含 config.yaml 的项目根目录"""
+    """Walk upward to locate the project root containing config.yaml"""
     current = Path(__file__).resolve().parent
     for _ in range(6):
         if (current / "config.yaml").exists():
@@ -28,7 +28,7 @@ def _find_project_root() -> Path:
 
 
 def _load_dotenv(path: Path) -> None:
-    """轻量 .env 加载 (不依赖 python-dotenv)"""
+    """Lightweight .env loader (no python-dotenv dependency)"""
     if not path.exists():
         return
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -42,7 +42,7 @@ def _load_dotenv(path: Path) -> None:
 
 
 class Config:
-    """统一配置入口 (单例)"""
+    """Unified configuration entry (singleton)"""
 
     _instance: Optional["Config"] = None
     _lock = threading.Lock()
@@ -68,9 +68,9 @@ class Config:
             with open(config_file, "r", encoding="utf-8") as f:
                 self._yaml = yaml.safe_load(f) or {}
 
-    # ---------- 通用读取 ----------
+    # ---------- generic getters ----------
     def get(self, key: str, default: Any = None) -> Any:
-        """读取 config.yaml, 支持点号路径: 'llm.model'"""
+        """Read config.yaml; supports dot paths: 'llm.model'"""
         value: Any = self._yaml
         for part in key.split("."):
             if isinstance(value, dict) and part in value:
@@ -80,10 +80,10 @@ class Config:
         return value
 
     def env(self, key: str, default: Any = None) -> Any:
-        """读取环境变量 (.env)"""
+        """Read an environment variable (.env)"""
         return os.environ.get(key, default)
 
-    # ---------- 常用快捷访问 ----------
+    # ---------- common shortcuts ----------
     @property
     def openai_api_key(self) -> str:
         return self.env("OPENAI_API_KEY", "")
@@ -96,17 +96,17 @@ class Config:
     def llm_model(self) -> str:
         return self.env("LLM_MODEL", self.get("llm.models.default.model", "gpt-4o"))
 
-    # ---------- LLM 多模型路由 ----------
+    # ---------- LLM multi-model routing ----------
     def llm_model_for(self, purpose: str) -> str:
-        """按用途取模型名: llm.models.<purpose>.model, 不存在回落 default.
-        环境变量 LLM_MODEL 兼容旧配置 (作为 default 的覆盖)."""
+        """Get model name by purpose: llm.models.<purpose>.model, falls back to default when absent.
+        Env var LLM_MODEL stays compatible with legacy config (overrides default)."""
         if purpose in ("", "default"):
             return self.llm_model
         model = self.get(f"llm.models.{purpose}.model")
         return model if model else self.llm_model
 
     def llm_model_override(self, purpose: str) -> Optional[Dict[str, str]]:
-        """按用途取 api_key/base_url 覆盖 (缺省用全局 .env 配置)"""
+        """Get per-purpose api_key/base_url override (defaults to the global .env config)"""
         if purpose in ("", "default"):
             return None
         entry = self.get(f"llm.models.{purpose}")
@@ -131,7 +131,8 @@ class Config:
     def wecom_bot_secret(self) -> str:
         return self.env("WECOM_BOT_SECRET", "")
 
-    # PG/Milvus 连接配置已内联至 storage 包 (pg.py: pg_config / milvus_schema.py: milvus_config, 进程 env 直读)
+    # PG/Milvus connection config has been inlined into the storage package
+    # (pg.py: pg_config / milvus.py: milvus_config, reads process env directly)
 
     @property
     def zsxq_cookie(self) -> str:
@@ -142,6 +143,6 @@ class Config:
         return self.env("ZSXQ_GROUP_ID", "")
 
 
-# 便捷函数
+# Convenience function
 def get_config() -> Config:
     return Config()

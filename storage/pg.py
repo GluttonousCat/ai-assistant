@@ -17,14 +17,16 @@ logger = logging.getLogger(__name__)
 
 _CONN_KW = dict(
     application_name="ai-assistant",
-    # TCP keepalive: 网络黑洞(静默丢包)时 psycopg2 的 execute() 读 socket 无超时会永久阻塞
-    # (2026-10-11 回填实挂 40+ 分钟无异常); 30s 探测 x 3 次失败 -> ~60s 内断连抛错, 交上层重试
+    # TCP keepalive: on a network black hole (silent packet loss) psycopg2's execute()
+    # reads the socket with no timeout and blocks forever (the 2026-10-11 backfill hung
+    # 40+ min with no error); 30s probes x 3 failures -> disconnect error within ~60s,
+    # retried by upper layers
     keepalives=1, keepalives_idle=30, keepalives_interval=10, keepalives_count=3,
 )
 
 
 def pg_config() -> Dict[str, Any]:
-    """PG 连接配置 dict (进程 env 直读; .env 由应用侧 core.config 统一加载)"""
+    """PG connection config dict (reads process env directly; .env is loaded app-side by core.config)"""
     return {
         "host": os.environ.get("PG_HOST", "127.0.0.1"),
         "port": int(os.environ.get("PG_PORT", 5432)),
@@ -35,7 +37,7 @@ def pg_config() -> Dict[str, Any]:
 
 
 def check_pg_config(cfg: Dict[str, Any]) -> List[str]:
-    """配置检测: 返回问题清单 (空列表 = 通过)"""
+    """Config validation: return a problem list (empty list = pass)"""
     problems: List[str] = []
     for key in ("host", "user", "database"):
         if not str(cfg.get(key) or "").strip():
@@ -50,7 +52,7 @@ def check_pg_config(cfg: Dict[str, Any]) -> List[str]:
 
 
 class PgPool:
-    """PG 连接池 (单例; ThreadedConnectionPool + 类锁, 多线程/asyncio.to_thread 并发安全)"""
+    """PG connection pool (singleton; ThreadedConnectionPool + class lock, safe for multithreading/asyncio.to_thread)"""
     _instance: Optional["PgPool"] = None
     _lock = threading.Lock()
     _pool: Optional[ThreadedConnectionPool] = None
@@ -66,20 +68,22 @@ class PgPool:
     @classmethod
     def init(cls, config: Optional[Dict[str, Any]] = None,
              minconn: int = 2, maxconn: int = 32) -> None:
-        """初始化连接池 (可重复调用, 仅首次生效; 并发安全)"""
+        """Initialize the pool (repeat calls allowed, only the first takes effect; concurrency-safe)"""
         cfg = config or pg_config()
         for problem in check_pg_config(cfg):
             logger.warning(f"PG 配置异常: {problem}")
         with cls._lock:
             if cls._pool is not None:
-                # 连接串变化时重建
+                # Rebuild when the connection config changed
                 if cls._config == cfg:
                     return
                 cls._close_locked()
             cls._config = dict(cfg)
             try:
-                # search_path: 让无 schema 前缀的表名可解析 (LLM 生成 SQL 常省略 schema)
-                # statement_timeout: 服务端兜底, 防 DDL/长查询持锁拖死池
+                # search_path: resolves table names without schema prefix
+                # (LLM-generated SQL often omits the schema)
+                # statement_timeout: server-side guard so DDL/long queries holding
+                # locks cannot starve the pool
                 conn_options = ("-c search_path=stock,fin,public "
                                 "-c statement_timeout=180000")
                 cls._pool = ThreadedConnectionPool(
@@ -100,7 +104,7 @@ class PgPool:
 
     @classmethod
     def get_conn(cls, pool_wait_retries: int = 60, pool_wait_sec: float = 0.1):
-        """借连接; 池耗尽时短退避等待 (并发尖峰), 连接级故障才整池重建"""
+        """Borrow a connection; on pool exhaustion wait with short backoff (concurrency spikes); only connection-level failures rebuild the pool"""
         assert cls._pool is not None, "PG 连接池未初始化, 请先调用 PgPool.init()"
         import time
         from psycopg2.pool import PoolError
@@ -109,11 +113,14 @@ class PgPool:
             try:
                 return cls._pool.getconn()
             except PoolError as e:
-                # 池耗尽 ≠ 池坏了: 等待归还, 绝不触发重建 (重建会让等待者雪崩)
+                # Pool exhausted != pool broken: wait for a return, never rebuild
+                # (a rebuild would avalanche the waiters)
                 last = e
                 time.sleep(pool_wait_sec)
             except Exception as e:
-                # 连接级失败才重建 (锁内串行, 防多线程重复重建; init 自带锁须在锁外调)
+                # Rebuild only on connection-level failure (serialized under lock to
+                # avoid duplicate rebuilds across threads; init has its own lock so it
+                # must be called outside)
                 logger.warning(f"获取 PG 连接失败, 尝试重建连接池: {e}")
                 with cls._lock:
                     cls._close_locked()
@@ -133,7 +140,7 @@ class PgPool:
 
     @classmethod
     def _close_locked(cls) -> None:
-        """关闭池 (调用方须持 _lock)"""
+        """Close the pool (caller must hold _lock)"""
         if cls._pool is not None:
             try:
                 cls._pool.closeall()
@@ -143,10 +150,10 @@ class PgPool:
 
 
 class PgClient:
-    """PG 单据客户端 (上下文管理器)"""
+    """PG single-ticket client (context manager)"""
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
-        # 自动初始化连接池
+        # Auto-initialize the connection pool
         if PgPool._pool is None:
             PgPool.init(config)
         self.conn = None
@@ -154,19 +161,20 @@ class PgClient:
 
     def __enter__(self) -> "PgClient":
         self.conn = PgPool.get_conn()
-        # 连接健康检查: 网络断开后的池内连接已失效, 检测到则换新
+        # Connection health check: pooled connections may be dead after a network
+        # drop; swap in a fresh one when detected
         try:
             cur = self.conn.cursor()
             cur.execute("SELECT 1")
             cur.close()
-            self.conn.rollback()  # 清除 SELECT 1 产生的事务状态
+            self.conn.rollback()  # clear the transaction state opened by SELECT 1
         except Exception:
             logger.warning("PG 池内连接已失效, 丢弃并换新")
             try:
                 self.conn.close()
             except Exception:
                 pass
-            PgPool.put_conn(self.conn, close=True)  # 坏连接显式剔除, 不回可用池
+            PgPool.put_conn(self.conn, close=True)  # explicitly discard the bad connection, keep it out of the usable pool
             self.conn = PgPool.get_conn()
         self.conn.autocommit = False
         self.cur = self.conn.cursor()
@@ -176,7 +184,8 @@ class PgClient:
         conn_broken = False
         try:
             if exc_type is not None:
-                # 连接级错误 (断网/服务端断开) 无需回滚, 标记坏连接
+                # Connection-level errors (network drop/server disconnect) need no
+                # rollback; mark the connection as broken
                 msg = str(exc_val) if exc_val else ""
                 if "server closed" in msg or "connection" in msg.lower():
                     conn_broken = True
@@ -196,7 +205,7 @@ class PgClient:
             except Exception:
                 pass
             if conn_broken:
-                # 坏连接直接关闭, 不放回池
+                # Close broken connections outright; never return them to the pool
                 try:
                     self.conn.close()
                 except Exception:
@@ -205,28 +214,28 @@ class PgClient:
             else:
                 PgPool.put_conn(self.conn)
 
-    # ---------- DDL / 通用执行 ----------
+    # ---------- DDL / generic execution ----------
     def execute(self, sql: str, params: Optional[Sequence] = None) -> int:
-        """执行任意 SQL, 返回影响行数"""
+        """Execute arbitrary SQL, return the affected row count"""
         self.cur.execute(sql, params)
         return self.cur.rowcount
 
     def executemany(self, sql: str, seq_of_params: Sequence[Sequence]) -> int:
-        """批量执行"""
+        """Batch execution"""
         psycopg2.extras.execute_batch(self.cur, sql, seq_of_params)
         return self.cur.rowcount
 
     def create_schema(self, schema: str) -> None:
-        """创建 schema (不存在则创建)"""
+        """Create a schema (if not exists)"""
         self.cur.execute(
             f'CREATE SCHEMA IF NOT EXISTS "{schema}"'
         )
 
     def ensure_table(self, sql: str) -> None:
-        """执行建表 DDL (IF NOT EXISTS)"""
+        """Run table-creation DDL (IF NOT EXISTS)"""
         self.cur.execute(sql)
 
-    # ---------- 查询 ----------
+    # ---------- queries ----------
     def fetch_all(self, sql: str, params: Optional[Sequence] = None,
                   as_dict: bool = True) -> List[Dict[str, Any]]:
         self.cur.execute(sql, params)
@@ -241,12 +250,12 @@ class PgClient:
         return rows[0] if rows else None
 
     def fetch_df(self, sql: str, params: Optional[Sequence] = None) -> pd.DataFrame:
-        """查询返回 DataFrame"""
+        """Query returning a DataFrame"""
         self.cur.execute(sql, params)
         cols = [d[0] for d in self.cur.description]
         return pd.DataFrame(self.cur.fetchall(), columns=cols)
 
-    # ---------- 工具方法 ----------
+    # ---------- utilities ----------
     def table_exists(self, schema: str, table: str) -> bool:
         self.cur.execute(
             "SELECT 1 FROM information_schema.tables "
@@ -256,7 +265,7 @@ class PgClient:
         return self.cur.fetchone() is not None
 
     def table_row_count(self, schema: str, table: str) -> int:
-        """表的行数估计/精确值 (精确值较大时用 reltuples 加速)"""
+        """Estimated/exact table row count (reltuples for speed on large tables)"""
         self.cur.execute(
             "SELECT reltuples::bigint FROM pg_class WHERE oid = to_regclass(%s)",
             (f'"{schema}"."{table}"',),
@@ -267,7 +276,7 @@ class PgClient:
         return int(row[0]) if row[0] is not None else 0
 
     def get_columns(self, schema: str, table: str) -> List[Dict[str, Any]]:
-        """获取表的列信息"""
+        """Get a table's column info"""
         self.cur.execute(
             "SELECT column_name, data_type FROM information_schema.columns "
             "WHERE table_schema=%s AND table_name=%s ORDER BY ordinal_position",
@@ -278,8 +287,8 @@ class PgClient:
     def upsert_df(self, df: pd.DataFrame, schema: str, table: str,
                   conflict_keys: Sequence[str]) -> int:
         """
-        DataFrame UPSERT (按主键冲突更新)
-        df 的列名需与表列名一致
+        DataFrame UPSERT (update on primary-key conflict)
+        df column names must match the table's column names
         """
         if df is None or df.empty:
             return 0
@@ -292,10 +301,10 @@ class PgClient:
             f'"{c}" = EXCLUDED."{c}"' for c in columns if c not in conflict_keys
         )
 
-        # NaN 转 None (PG 不接受 NaN float)
+        # NaN -> None (PG rejects NaN floats)
         df = df.where(pd.notna(df), None)
         rows = [tuple(r) for r in df[columns].itertuples(index=False, name=None)]
-        # 将 pandas 类型转为原生类型 (int64 -> int 等)
+        # Convert pandas types to native Python types (int64 -> int etc.)
         rows = [_normalize_row(r) for r in rows]
 
         if update_cols:
@@ -314,7 +323,7 @@ class PgClient:
         return len(rows)
 
     def insert_df(self, df: pd.DataFrame, schema: str, table: str) -> int:
-        """DataFrame 批量插入 (冲突即忽略, 用于幂等回填)"""
+        """DataFrame batch insert (conflicts ignored; for idempotent backfill)"""
         if df is None or df.empty:
             return 0
         df = df.copy()
@@ -334,7 +343,7 @@ class PgClient:
 
 
 def _normalize_row(row: Tuple) -> Tuple:
-    """将 pandas/numpy 标量转为原生 Python 类型"""
+    """Convert pandas/numpy scalars to native Python types"""
     out = []
     for v in row:
         if isinstance(v, (pd.Timestamp, pd.Timedelta)):
@@ -352,6 +361,6 @@ def _normalize_row(row: Tuple) -> Tuple:
     return tuple(out)
 
 
-# 便捷函数
+# Convenience function
 def get_pg(cfg: Optional[Dict[str, Any]] = None) -> PgClient:
     return PgClient(cfg)

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-文件数据库模块
-整合原 zsxq_file_database.py 核心功能
+File database module
+Consolidates the core functionality of the former zsxq_file_database.py
 """
 from typing import Dict, Any, Optional, List
 from datetime import datetime
@@ -10,11 +10,11 @@ from storage.sqlite.base import BaseDatabase
 
 
 class FilesDatabase(BaseDatabase):
-    """文件数据库"""
+    """File database"""
 
     def _init_tables(self):
-        """初始化表结构"""
-        # 文件表
+        """Initialize the table schema"""
+        # Files table
         self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS files (
                 file_id INTEGER PRIMARY KEY,
@@ -31,7 +31,7 @@ class FilesDatabase(BaseDatabase):
             )
         ''')
 
-        # 文件收集日志
+        # File collection log
         self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS collection_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -47,7 +47,7 @@ class FilesDatabase(BaseDatabase):
 
     def add_file(self, file_id: int, topic_id: int, name: str, size: int,
                  file_hash: str = '', download_count: int = 0, create_time: str = ''):
-        """添加文件记录"""
+        """Add a file record"""
         self.cursor.execute('''
             INSERT OR IGNORE INTO files
             (file_id, topic_id, name, size, hash, download_count, create_time)
@@ -55,7 +55,7 @@ class FilesDatabase(BaseDatabase):
         ''', (file_id, topic_id, name, size, file_hash, download_count, create_time))
 
     def get_pending_files(self, limit: int = 1, order_by: str = 'create_time DESC') -> List[tuple]:
-        """获取待下载文件 (排除音频等非研报文件)"""
+        """Get files pending download (excludes audio and other non-report files)"""
         self.cursor.execute(f'''
             SELECT file_id, name, size, download_count, create_time
             FROM files
@@ -71,7 +71,7 @@ class FilesDatabase(BaseDatabase):
         return self.cursor.fetchall()
 
     def get_retry_files(self, limit: int = 3) -> List[tuple]:
-        """获取失败待重试文件 (最近失败优先; 失败次数<=5 防无限重试)"""
+        """Get failed files to retry (most recent failure first; fail_count<=5 prevents infinite retries)"""
         self.cursor.execute('''
             SELECT file_id, name, size, download_count, create_time
             FROM files
@@ -83,7 +83,7 @@ class FilesDatabase(BaseDatabase):
         return self.cursor.fetchall()
 
     def update_status(self, file_id: int, status: str, local_path: str = None):
-        """更新下载状态"""
+        """Update the download status"""
         if status == 'failed':
             self.cursor.execute('''
                 UPDATE files SET download_status='failed',
@@ -107,7 +107,7 @@ class FilesDatabase(BaseDatabase):
             ''', (status, file_id))
 
     def get_stats(self) -> Dict[str, int]:
-        """获取统计"""
+        """Get statistics"""
         stats = {'files': 0, 'pending': 0, 'completed': 0, 'failed': 0}
 
         self.cursor.execute('SELECT COUNT(*) FROM files')
@@ -125,11 +125,11 @@ class FilesDatabase(BaseDatabase):
         return stats
 
     def commit(self):
-        """提交事务"""
+        """Commit the transaction"""
         self.conn.commit()
 
     def get_time_range(self) -> Dict[str, Any]:
-        """获取文件时间范围"""
+        """Get the file time range"""
         self.cursor.execute('''
             SELECT MIN(create_time), MAX(create_time), COUNT(*)
             FROM files WHERE create_time IS NOT NULL
@@ -147,7 +147,7 @@ class FilesDatabase(BaseDatabase):
         }
 
     def get_completed_files(self, limit: int = 500) -> List[Dict]:
-        """获取已下载完成文件 (供同步 PG 研报库)"""
+        """Get downloaded/completed files (for syncing into the PG report store)"""
         self.cursor.execute('''
             SELECT file_id, topic_id, name, size, hash, local_path, create_time
             FROM files
@@ -159,7 +159,7 @@ class FilesDatabase(BaseDatabase):
         return [dict(zip(cols, row)) for row in self.cursor.fetchall()]
 
     def get_file_by_id(self, file_id: int) -> Optional[Dict]:
-        """按 ID 获取文件"""
+        """Get a file by ID"""
         self.cursor.execute("SELECT * FROM files WHERE file_id = ?", (file_id,))
         row = self.cursor.fetchone()
         if not row:
@@ -168,7 +168,7 @@ class FilesDatabase(BaseDatabase):
         return dict(zip(cols, row))
 
     def start_collection_log(self) -> int:
-        """开始收集日志"""
+        """Start a collection log"""
         self.cursor.execute(
             "INSERT INTO collection_log (start_time) VALUES (?)",
             (datetime.now().isoformat(),)
@@ -177,7 +177,7 @@ class FilesDatabase(BaseDatabase):
         return self.cursor.lastrowid
 
     def end_collection_log(self, log_id: int, total: int, new_files: int):
-        """结束收集日志"""
+        """Finish a collection log"""
         self.cursor.execute('''
             UPDATE collection_log
             SET end_time = ?, total_files = ?, new_files = ?, status = 'completed'

@@ -18,7 +18,7 @@ def new_schema(auto_id: bool = False, enable_dynamic_field: bool = False):
 def vector_index_params(
         client, field: str = "embedding", metric_type: str = "COSINE",
         index_type: str = "HNSW", **params):
-    """向量索引参数"""
+    """Vector index params"""
     index_params = client.prepare_index_params()
     kw = {"M": 16, "efConstruction": 200}
     kw.update(params)

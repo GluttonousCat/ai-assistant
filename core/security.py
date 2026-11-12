@@ -1,15 +1,17 @@
 # -*- encoding: utf-8 -*-
 """
-认证与安全 (JWT + bcrypt)
+Authentication & security (JWT + bcrypt)
 
-- 用户表: auth.users (启动时幂等建表; 默认管理员账号从环境变量 seed)
-- 密码哈希: bcrypt (cost 12)
-- 令牌: HS256 JWT, 过期时间可配 (config.yaml auth.token_expire_hours, 默认 12h)
-- 密钥: .env AUTH_SECRET (未配置时用临时随机密钥, 重启即全部失效)
+- User table: auth.users (created idempotently at startup; default admin account
+  seeded from environment variables)
+- Password hashing: bcrypt (cost 12)
+- Tokens: HS256 JWT, expiry configurable (config.yaml auth.token_expire_hours,
+  default 12h)
+- Secret: .env AUTH_SECRET (if unset, a temporary random secret is used and all
+  login sessions invalidate on restart)
 """
 from __future__ import annotations
 
-import os
 import secrets
 import time
 from dataclasses import dataclass
@@ -41,7 +43,7 @@ CREATE TABLE IF NOT EXISTS auth.users (
 
 
 # ============================================================
-# 密码
+# Password
 # ============================================================
 
 def hash_password(plain: str) -> str:
@@ -60,7 +62,7 @@ def verify_password(plain: str, hashed: str) -> bool:
 # ============================================================
 
 def _secret() -> str:
-    """签名密钥: 优先 .env AUTH_SECRET; 未配置则进程内随机 (重启全失效, 提示配置)"""
+    """Signing secret: prefer .env AUTH_SECRET; if unset, a per-process random secret (all sessions lost on restart; log a hint)"""
     secret = get_config().env("AUTH_SECRET", "")
     if not secret:
         if not getattr(_secret, "_warned", False):
@@ -93,7 +95,7 @@ def create_token(user_id: int, username: str, role: str) -> str:
 
 
 def decode_token(token: str) -> Optional[TokenPayload]:
-    """校验并解析 JWT, 无效/过期返回 None"""
+    """Verify and parse the JWT; return None when invalid/expired"""
     try:
         data = jwt.decode(token, _secret(), algorithms=[_ALGO])
         return TokenPayload(user_id=int(data["sub"]), username=data["username"],
@@ -103,19 +105,20 @@ def decode_token(token: str) -> Optional[TokenPayload]:
 
 
 # ============================================================
-# 用户存储 (auth.users)
+# User storage (auth.users)
 # ============================================================
 
 def ensure_auth_schema() -> None:
-    """幂等建表 + 首次部署种子管理员"""
+    """Idempotently create tables + seed the admin on first deployment"""
     from storage.pg import PgClient
     with PgClient() as pg:
         pg.execute("CREATE SCHEMA IF NOT EXISTS auth")
         pg.execute(DDL_USERS)
 
-        # 种子管理员仅在【用户表完全为空】时创建（首次部署引导用）。
-        # 不再"admin 不存在就重建"——那会导致删除弱口令账号后重启自动复活。
-        # 日常管理员任命走 POST /api/auth/users/{id}/role（admin 操作）。
+        # The seed admin is created only when the user table is completely empty
+        # (first-deployment bootstrap). No more "recreate when admin is missing" —
+        # that would auto-resurrect a deleted weak-password account on restart.
+        # Day-to-day admin appointment goes through POST /api/auth/users/{id}/role (admin action).
         cfg = get_config()
         admin_user = cfg.env("AUTH_ADMIN_USER", "admin")
         admin_pwd = cfg.env("AUTH_ADMIN_PASSWORD", "admin123")
@@ -151,7 +154,7 @@ def create_user(username: str, password: str, role: str = "user",
 
 
 def authenticate(username: str, password: str) -> Optional[Dict[str, Any]]:
-    """校验用户名密码; 成功返回用户行 (含 token), 失败返回 None"""
+    """Verify username/password; return the user row on success (caller issues the token), None on failure"""
     user = get_user(username)
     if not user or not user.get("is_active"):
         return None

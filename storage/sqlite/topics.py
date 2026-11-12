@@ -1,21 +1,19 @@
 #!/usr/bin/env python3
 """
-话题数据库模块
-整合原 zsxq_database.py 核心功能
+Topic database module
+Consolidates the core functionality of the former zsxq_database.py
 """
-import sqlite3
 from typing import Dict, Any, Optional, List
-from datetime import datetime, timezone, timedelta
 
 from storage.sqlite.base import BaseDatabase
 
 
 class TopicsDatabase(BaseDatabase):
-    """话题数据库"""
+    """Topic database"""
 
     def _init_tables(self):
-        """初始化表结构"""
-        # 群组表
+        """Initialize the table schema"""
+        # Groups table
         self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS groups (
                 group_id INTEGER PRIMARY KEY,
@@ -26,7 +24,7 @@ class TopicsDatabase(BaseDatabase):
             )
         ''')
 
-        # 用户表
+        # Users table
         self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
@@ -39,7 +37,7 @@ class TopicsDatabase(BaseDatabase):
             )
         ''')
 
-        # 话题表
+        # Topics table
         self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS topics (
                 topic_id INTEGER PRIMARY KEY,
@@ -57,7 +55,7 @@ class TopicsDatabase(BaseDatabase):
             )
         ''')
 
-        # 评论表
+        # Comments table
         self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS comments (
                 comment_id INTEGER PRIMARY KEY,
@@ -71,7 +69,7 @@ class TopicsDatabase(BaseDatabase):
             )
         ''')
 
-        # 图片表
+        # Images table
         self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS images (
                 image_id INTEGER PRIMARY KEY,
@@ -84,7 +82,7 @@ class TopicsDatabase(BaseDatabase):
             )
         ''')
 
-        # 话题内文件附件表 (知识星球帖子可直接附带文件, 多为研报/PDF)
+        # In-topic file attachments (zsxq posts can carry files directly, mostly reports/PDF)
         self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS topic_files (
                 file_id INTEGER PRIMARY KEY,
@@ -103,40 +101,40 @@ class TopicsDatabase(BaseDatabase):
         self.conn.commit()
 
     def topic_exists(self, topic_id: int) -> bool:
-        """检查话题是否存在"""
+        """Check whether a topic exists"""
         self.cursor.execute('SELECT 1 FROM topics WHERE topic_id = ?', (topic_id,))
         return self.cursor.fetchone() is not None
 
     def import_topic(self, topic_data: Dict[str, Any]):
-        """导入话题"""
+        """Import a topic"""
         topic_id = topic_data.get('topic_id')
         if not topic_id:
             return
 
-        # 导入群组
+        # Import the group
         group = topic_data.get('group', {})
         if group:
             self._upsert_group(group)
 
-        # 导入用户
+        # Import the user
         talk = topic_data.get('talk', {})
         if talk and 'owner' in talk:
             self._upsert_user(talk['owner'])
 
-        # 导入话题
+        # Import the topic
         self._upsert_topic(topic_data)
 
-        # 导入话题内文件附件
+        # Import in-topic file attachments
         if talk:
             self.import_topic_files(topic_id, talk.get('files', []))
 
-        # 导入评论
+        # Import comments
         comments = topic_data.get('show_comments', [])
         if comments:
             self.import_comments(topic_id, comments)
 
     def _upsert_group(self, group: Dict):
-        """插入或更新群组"""
+        """Insert or update a group"""
         self.cursor.execute('''
             INSERT OR REPLACE INTO groups (group_id, name, type, background_url)
             VALUES (?, ?, ?, ?)
@@ -148,7 +146,7 @@ class TopicsDatabase(BaseDatabase):
         ))
 
     def _upsert_user(self, user: Dict):
-        """插入或更新用户"""
+        """Insert or update a user"""
         self.cursor.execute('''
             INSERT OR REPLACE INTO users (user_id, name, alias, avatar_url, location, description)
             VALUES (?, ?, ?, ?, ?, ?)
@@ -162,7 +160,7 @@ class TopicsDatabase(BaseDatabase):
         ))
 
     def _upsert_topic(self, topic: Dict):
-        """插入或更新话题"""
+        """Insert or update a topic"""
         talk = topic.get('talk', {})
         self.cursor.execute('''
             INSERT OR REPLACE INTO topics
@@ -184,7 +182,7 @@ class TopicsDatabase(BaseDatabase):
         ))
 
     def import_comments(self, topic_id: int, comments: List[Dict]):
-        """导入评论"""
+        """Import comments"""
         for comment in comments:
             comment_id = comment.get('comment_id')
             if not comment_id:
@@ -209,7 +207,7 @@ class TopicsDatabase(BaseDatabase):
             ))
 
     def import_topic_files(self, topic_id: int, files: List[Dict]):
-        """导入话题内文件附件 (研报/PDF 等)"""
+        """Import in-topic file attachments (reports/PDF etc.)"""
         for f in files:
             file_id = f.get('file_id') or f.get('id')
             if not file_id:
@@ -239,7 +237,7 @@ class TopicsDatabase(BaseDatabase):
 
     def get_topic_files(self, topic_id: int = None, status: str = None,
                         limit: int = 100) -> List[Dict]:
-        """查询话题附件, 支持按文件类型/下载状态筛选"""
+        """Query topic attachments; supports filtering by file type/download status"""
         sql = "SELECT * FROM topic_files WHERE 1=1"
         params = []
         if topic_id is not None:
@@ -256,7 +254,7 @@ class TopicsDatabase(BaseDatabase):
         return [dict(zip(cols, row)) for row in self.cursor.fetchall()]
 
     def update_topic_file_status(self, file_id: int, status: str, local_path: str = None):
-        """更新附件下载状态"""
+        """Update an attachment's download status"""
         if local_path:
             self.cursor.execute(
                 "UPDATE topic_files SET download_status = ?, local_path = ? WHERE file_id = ?",
@@ -268,7 +266,7 @@ class TopicsDatabase(BaseDatabase):
 
     def get_report_candidates(self, file_types=('pdf', 'doc', 'docx', 'txt', 'md'),
                               limit: int = 500) -> List[Dict]:
-        """获取可作为研报的附件 (按后缀过滤)"""
+        """Get attachments usable as reports (filtered by extension)"""
         like_clause = " AND ("
         like_clause += " OR ".join("lower(name) LIKE ?" for _ in file_types)
         like_clause += ")"
@@ -283,7 +281,7 @@ class TopicsDatabase(BaseDatabase):
         return [dict(zip(cols, row)) for row in self.cursor.fetchall()]
 
     def get_stats(self) -> Dict[str, int]:
-        """获取统计"""
+        """Get statistics"""
         stats = {}
         for table in ['topics', 'users', 'comments', 'images', 'topic_files']:
             try:
@@ -294,7 +292,7 @@ class TopicsDatabase(BaseDatabase):
         return stats
 
     def get_time_range(self) -> Dict[str, Any]:
-        """获取时间范围"""
+        """Get the time range"""
         self.cursor.execute('SELECT COUNT(*) FROM topics')
         total = self.cursor.fetchone()[0]
 
@@ -312,7 +310,7 @@ class TopicsDatabase(BaseDatabase):
         }
 
     def get_topic(self, topic_id: int) -> Optional[Dict]:
-        """按 ID 获取话题 (含全文)"""
+        """Get a topic by ID (full text included)"""
         self.cursor.execute("SELECT * FROM topics WHERE topic_id = ?", (topic_id,))
         row = self.cursor.fetchone()
         if not row:
@@ -321,7 +319,7 @@ class TopicsDatabase(BaseDatabase):
         return dict(zip(cols, row))
 
     def fetch_topics_after(self, min_topic_id: int = 0, limit: int = None) -> List[Dict]:
-        """按主键递增拉取话题, 用于同步全量"""
+        """Fetch topics in ascending primary-key order; for full syncs"""
         sql = "SELECT * FROM topics WHERE topic_id > ? ORDER BY topic_id ASC"
         params: list = [min_topic_id]
         if limit:
@@ -332,7 +330,7 @@ class TopicsDatabase(BaseDatabase):
         return [dict(zip(cols, row)) for row in self.cursor.fetchall()]
 
     def get_topic_files_after(self, min_file_id: int = 0, limit: int = None) -> List[Dict]:
-        """按主键递增拉取附件, 用于同步全量"""
+        """Fetch attachments in ascending primary-key order; for full syncs"""
         sql = "SELECT * FROM topic_files WHERE file_id > ? ORDER BY file_id ASC"
         params: list = [min_file_id]
         if limit:
@@ -343,5 +341,5 @@ class TopicsDatabase(BaseDatabase):
         return [dict(zip(cols, row)) for row in self.cursor.fetchall()]
 
     def commit(self):
-        """提交事务"""
+        """Commit the transaction"""
         self.conn.commit()

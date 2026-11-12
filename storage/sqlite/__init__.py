@@ -1,5 +1,5 @@
 """
-SQLite 数据持久化层 (知识星球)
+SQLite persistence layer (zsxq)
 """
 from storage.sqlite.base import BaseDatabase
 from storage.sqlite.topics import TopicsDatabase

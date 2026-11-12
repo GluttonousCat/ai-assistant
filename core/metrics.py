@@ -1,13 +1,15 @@
 # -*- encoding: utf-8 -*-
 """
-进程内指标注册表 (Agent 实时监控数据源)
+In-process metrics registry (data source for the Agent live monitor)
 
-- 纯内存 dict/计数器 + threading.Lock; API 服务重启即清零, 面板口径 =
-  "自服务启动以来" (uptime 同时下发)。无落盘无外部依赖。
-- 数据入口: harness/loop.py (会话/漏斗/轮次/工具), harness/llm.py (LLM 调用/耗时/tokens);
-  record() 全吞异常 —— 监控绝不影响主链路。
-- 数据出口: api/monitor_api.py 每 2s snapshot() 经 SSE 推前端。
-- 指标按 local date 键控, 跨天自动翻零 (今日口径)。
+- Pure in-memory dicts/counters + threading.Lock; counters reset when the API
+  service restarts, so the dashboard scope = "since service start" (uptime is
+  sent alongside). No persistence, no external dependencies.
+- Ingestion: harness/loop.py (sessions/funnel/rounds/tools), harness/llm.py
+  (LLM calls/latency/tokens); record() swallows all exceptions — monitoring
+  must never affect the main path.
+- Egress: api/monitor_api.py pushes snapshot() to the frontend over SSE every 2s.
+- Metrics are keyed by local date and roll over to zero at midnight (today scope).
 """
 from __future__ import annotations
 
@@ -21,17 +23,17 @@ _LOCK = threading.Lock()
 _STARTED_AT = time.time()
 
 _day: str = date.today().isoformat()
-_counters: Dict[str, int] = {}                 # 通用计数 (sessions/tool_calls/llm_fails…)
+_counters: Dict[str, int] = {}                 # generic counters (sessions/tool_calls/llm_fails...)
 _funnel: Dict[str, int] = {"fast": 0, "subagent": 0, "full": 0}
 _tools: Dict[str, Dict[str, int]] = {}         # {tool: {calls, fails, ms}}
 _llm: Dict[str, Dict[str, int]] = {}           # {purpose: {calls, fails, ms, pt, ct}}
 _sessions: Dict[str, Dict[str, Any]] = {}      # {sid: {start,text,path,rounds,tools,status,updated}}
-_events: deque = deque(maxlen=150)             # 监控页事件流 (环形)
+_events: deque = deque(maxlen=150)             # monitor page event stream (ring buffer)
 
-# 进入事件流的事件类型 (其余只进计数器/会话表)
+# Event types that enter the event stream (all others only hit counters/session table)
 _STREAMED = {"session_start", "session_end", "tool", "llm_fail", "error"}
 
-_SESSION_IDLE_S = 1800  # 活跃会话判定窗口 (30min 无更新移出)
+_SESSION_IDLE_S = 1800  # active-session window (evicted after 30min without updates)
 
 
 def _rollover() -> None:
@@ -44,7 +46,7 @@ def _rollover() -> None:
 
 
 def record(event: str, **data: Any) -> None:
-    """统一埋点入口; 任何异常吞掉 (监控代码的故障不允许波及业务)"""
+    """Unified instrumentation entry; any exception is swallowed (a monitoring failure must never leak into business)"""
     try:
         with _LOCK:
             _rollover()
@@ -116,7 +118,7 @@ def record(event: str, **data: Any) -> None:
 
 
 def snapshot() -> Dict[str, Any]:
-    """全量状态 (监控 SSE 每 2s 取一次; 值均为浅拷贝)"""
+    """Full state (polled by monitor SSE every 2s; values are shallow copies)"""
     with _LOCK:
         _rollover()
         now = time.time()

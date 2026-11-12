@@ -1,12 +1,12 @@
 # -*- encoding: utf-8 -*-
 """
-数据库基类
+Database base class
 """
 import sqlite3
 
 
 class BaseDatabase:
-    """数据库基类"""
+    """Database base class"""
 
     def __init__(self, db_path: str):
         self.db_path = db_path
@@ -15,18 +15,18 @@ class BaseDatabase:
         self._init_tables()
 
     def _init_tables(self):
-        """初始化表结构，子类实现"""
+        """Initialize the table schema; implemented by subclasses"""
         raise NotImplementedError
 
     def close(self):
-        """关闭数据库连接"""
+        """Close the database connection"""
         if self.conn:
             self.conn.close()
 
     def __del__(self):
-        """析构时关闭连接"""
+        """Close the connection on destruction"""
         self.close()
 
     def get_stats(self) -> dict:
-        """获取数据库统计信息"""
+        """Get database statistics"""
         raise NotImplementedError

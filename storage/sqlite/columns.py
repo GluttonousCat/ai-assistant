@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
-专栏数据库模块
-简化版，保留核心功能
+Column (zhuanlan) database module
+Simplified version, core functionality only
 """
 from storage.sqlite.base import BaseDatabase
 
 
 class ColumnsDatabase(BaseDatabase):
-    """专栏数据库"""
+    """Column (zhuanlan) database"""
 
     def _init_tables(self):
-        """初始化表结构"""
-        # 专栏表
+        """Initialize the table schema"""
+        # Columns table
         self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS columns (
                 column_id INTEGER PRIMARY KEY,
@@ -23,7 +23,7 @@ class ColumnsDatabase(BaseDatabase):
             )
         ''')
 
-        # 专栏文章表
+        # Column articles table
         self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS column_articles (
                 article_id INTEGER PRIMARY KEY,
@@ -38,7 +38,7 @@ class ColumnsDatabase(BaseDatabase):
         self.conn.commit()
 
     def get_stats(self) -> dict:
-        """获取统计"""
+        """Get statistics"""
         stats = {'columns': 0, 'articles': 0}
         try:
             self.cursor.execute('SELECT COUNT(*) FROM columns')
