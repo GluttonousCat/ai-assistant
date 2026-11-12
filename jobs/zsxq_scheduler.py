@@ -1,17 +1,21 @@
 # -*- encoding: utf-8 -*-
 """
-知识星球研报每日抓取调度器 (asyncio 后台任务, 随后端常驻)
+Zhixingqiu research-report daily crawl scheduler (asyncio background task; lives
+with the backend process).
 
-调度规则:
-- 每天 12:00 与 24:00 各执行一轮
-- 每轮流程:
-    1. 爬取最新话题 (增量, 研报核心观点文本附在话题里)
-    2. 收集文件列表 (增量) + 下载待下载文件 (限额, 反检测间隔)
-    3. 同步到 PG 研报库 (fin.report_meta / report_forecast)
-    4. 对未分析研报跑 LLM 结构化提取 (限额, 控制成本)
-- 幂等: 重复执行安全 (话题/文件按 ID 查重, PG 同步断点续传, 提取按 analysis_status)
-- 启动补跑: 若开机晚于 07:00 且当天首轮未执行 (用户 ~6:30 开机, 服务器随登录自启),
-  启动时立即补跑一轮, 保证早上打开平台就有最新研报
+Schedule rules:
+- One round at 12:00 and 24:00 each day
+- Round flow:
+    1. Crawl the latest topics (incremental; report core-view text lives in topics)
+    2. Collect the file list (incremental) + download pending files (limited,
+       anti-detection intervals)
+    3. Sync to the PG report warehouse (fin.report_meta / report_forecast)
+    4. Run LLM structured extraction on un-analyzed reports (limited, cost control)
+- Idempotent: safe to re-run (topics/files deduplicated by ID, PG sync resumes from
+  checkpoints, extraction gated by analysis_status)
+- Startup catch-up: if the machine boots after 07:00 and the day's first round has
+  not run (user powers on ~6:30; the server auto-starts at login), run one round
+  immediately at startup so the platform has the latest reports in the morning
 """
 from __future__ import annotations
 
@@ -24,18 +28,19 @@ from core.logger import get_logger
 
 logger = get_logger(__name__)
 
-# 调度时点 (可通过 config.yaml zsxq_schedule 覆盖; hour 取值 0-23, 24 会被归一化为 0)
+# Schedule slots (overridable via config.yaml zsxq_schedule; hour domain 0-23,
+# 24 is normalized to 0)
 RUN_HOURS = [12, 0]
-# 每轮 LLM 提取上限 (控制 token 成本; 23:00 那轮多跑一些)
+# Per-round LLM extraction cap (token cost control; the 23:00 round runs more)
 EXTRACT_LIMITS = {7: 8, 23: 15}
-# 每轮文件下载上限
+# Per-round file-download cap
 MAX_FETCH_FILES = 15
-# 每轮 LLM Analysis (轻量元数据) 上限 — 秒级/篇, 放宽
+# Per-round LLM Analysis (lightweight metadata) cap — seconds per report, relaxed
 META_ANALYSIS_LIMIT = 40
 
 
 class ZSXQScheduleScheduler:
-    """知识星球研报每日抓取调度器"""
+    """Zhixingqiu research-report daily crawl scheduler."""
 
     def __init__(self):
         self._task: Optional[asyncio.Task] = None
@@ -47,13 +52,15 @@ class ZSXQScheduleScheduler:
         cfg = get_config()
         hours = cfg.get("zsxq_schedule.run_hours")
         if isinstance(hours, list) and hours:
-            # hour 合法域 0-23: 24 之类归一化为 0 (曾致 replace(hour=24) 抛
-            # ValueError -> 调度协程静默死亡, 启动补跑与后续轮次全部失效)
+            # hour valid domain is 0-23: values like 24 are normalized to 0 (this
+            # once made replace(hour=24) raise ValueError -> the scheduling
+            # coroutine died silently, killing the startup catch-up and all
+            # subsequent rounds)
             self.run_hours = sorted({int(h) % 24 for h in hours})
         else:
             self.run_hours = RUN_HOURS
 
-    # ---------- 时间计算 ----------
+    # ---------- Time computation ----------
     def _next_run(self, now: Optional[datetime] = None) -> datetime:
         now = now or datetime.now()
         for h in self.run_hours:
@@ -66,9 +73,9 @@ class ZSXQScheduleScheduler:
     def _seconds_until(self, target: datetime) -> float:
         return max(0.0, (target - datetime.now()).total_seconds())
 
-    # ---------- 单轮执行 ----------
+    # ---------- Round execution ----------
     def _run_round(self, hour: int) -> dict:
-        """同步执行一轮抓取 (在线程池中运行)"""
+        """Run one crawl round synchronously (executed in the thread pool)."""
         cfg = get_config()
         group_id = cfg.zsxq_group_id
         if not group_id:
@@ -84,7 +91,8 @@ class ZSXQScheduleScheduler:
         result = {"time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                   "group": group_id, "hour": hour}
 
-        # 1+2: 爬话题 + 收集/下载文件 (复用 daily_fetch_zxsq.run_once)
+        # 1+2: crawl topics + collect/download files (reuses
+        # daily_fetch_zxsq.run_once)
         try:
             from jobs.daily_fetch_zxsq import run_once
             fetch = run_once(
@@ -99,7 +107,8 @@ class ZSXQScheduleScheduler:
             logger.error(f"知识星球抓取失败: {e}")
             result["fetch"] = {"error": str(e)}
 
-        # 3: LLM Analysis 元数据提取 (机构/标的/行业/地区/市场 -> 表格列; 轻量秒级)
+        # 3: LLM Analysis metadata extraction (org/target/industry/region/market
+        #    -> table columns; lightweight, seconds per report)
         try:
             from tools.finance.report_meta_analysis import analyze_pending
             if get_config().openai_api_key:
@@ -111,7 +120,7 @@ class ZSXQScheduleScheduler:
             logger.error(f"LLM Analysis 失败: {e}")
             result["meta_analysis"] = {"error": str(e)}
 
-        # 4: LLM 深度提取 (评级/盈利预测/观点/tags)
+        # 4: LLM deep extraction (rating/forecasts/views/tags)
         try:
             from skills.base import SkillContext
             from skills.report.skill import ReportSkill
@@ -126,7 +135,9 @@ class ZSXQScheduleScheduler:
             logger.error(f"研报 LLM 提取失败: {e}")
             result["extract"] = {"error": str(e)}
 
-        # 5: 早间轮末生成每日研报晨报 (output/daily_digest/YYYY-MM-DD.md; 失败不影响主轮)
+        # 5: at the end of the morning round, generate the daily digest
+        #    (output/daily_digest/YYYY-MM-DD.md; failure does not affect the main
+        #    round)
         if hour == self.run_hours[0]:
             try:
                 from jobs.daily_digest import generate
@@ -140,19 +151,22 @@ class ZSXQScheduleScheduler:
         return result
 
     async def _run_round_async(self, hour: int) -> dict:
-        """异步包装: 重活放线程池, 不阻塞事件循环"""
+        """Async wrapper: heavy work goes to the thread pool, not blocking the
+        event loop."""
         return await asyncio.to_thread(self._run_round, hour)
 
-    # ---------- 启动补跑 ----------
+    # ---------- Startup catch-up ----------
     async def _catchup_if_missed(self):
         """
-        启动补跑: 用户 ~6:30 开机, 服务器随登录自启.
-        若启动时已过今日某调度时点且该轮未执行 -> 立即补跑最近错过的一轮.
-        (23:00 的轮次由常驻进程正常触发, 一般不会错过; 主要兜 07:00)
+        Startup catch-up: user powers on ~6:30; the server auto-starts at login.
+        If a scheduled slot has already passed today and that round has not run ->
+        immediately run the most recently missed round.
+        (The 23:00 round is normally triggered by the resident process and rarely
+        missed; this mainly covers 07:00.)
         """
         now = datetime.now()
         today = now.date()
-        # 找今天已到点但未跑的最近一轮
+        # Find the latest round today whose slot has passed but which has not run
         missed_hour = None
         for h in reversed(self.run_hours):
             if now >= now.replace(hour=h, minute=0, second=0, microsecond=0):
@@ -169,13 +183,14 @@ class ZSXQScheduleScheduler:
         except Exception as e:
             logger.error(f"[知识星球] 补跑失败: {e}")
 
-    # ---------- 调度循环 ----------
+    # ---------- Scheduling loop ----------
     async def _loop(self):
         logger.info(f"[知识星球] 研报抓取调度器已启动 (每日 {'/'.join(f'{h:02d}:00' for h in self.run_hours)})")
         try:
             await self._catchup_if_missed()
         except Exception as e:
-            # 补跑阶段异常绝不杀循环 (曾因配置非法静默死亡, 全部调度失效)
+            # An exception in the catch-up phase must never kill the loop (an
+            # invalid config once killed it silently, disabling all scheduling)
             logger.error(f"[知识星球] 启动补跑异常 (调度继续): {e}")
 
         while not self._stop_event.is_set():
@@ -189,13 +204,13 @@ class ZSXQScheduleScheduler:
             logger.info(f"[知识星球] 下次抓取: {next_run} (等待 {wait:.0f}s)")
             try:
                 await asyncio.wait_for(self._stop_event.wait(), timeout=wait)
-                break  # 停止信号
+                break  # stop signal
             except asyncio.TimeoutError:
                 hour = next_run.hour
                 try:
                     result = await self._run_round_async(hour)
                     self._done[f"{next_run.date()}:{hour}"] = datetime.now()
-                    # 清理 7 天前的状态
+                    # Clean up state older than 7 days
                     cutoff = (datetime.now() - timedelta(days=7)).date()
                     self._done = {k: v for k, v in self._done.items()
                                   if datetime.strptime(k.split(":")[0], "%Y-%m-%d").date() >= cutoff}
@@ -219,12 +234,12 @@ class ZSXQScheduleScheduler:
         logger.info("[知识星球] 研报抓取调度器已停止")
 
     async def trigger_now(self, hour: Optional[int] = None) -> dict:
-        """手动立即触发一轮"""
+        """Manually trigger one round immediately."""
         h = hour if hour is not None else datetime.now().hour
         return await self._run_round_async(h)
 
 
-# 单例
+# Singleton
 _scheduler: Optional[ZSXQScheduleScheduler] = None
 
 

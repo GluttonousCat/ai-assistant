@@ -1,33 +1,40 @@
 # -*- encoding: utf-8 -*-
 """
-企业微信「智能机器人」长连接桥接 — 把本地 Agent 问答接入企微会话
+WeCom (Enterprise WeChat) "smart bot" long-connection bridge — plugs the local
+Agent Q&A into WeCom conversations.
 
-方向: 本进程主动外拨企微 wss (无需公网 IP/域名/回调URL), 企微把 @机器人 的消息
-从长连接推下来, 进程内直调 harness.loop.run_agent_stream 生成回答, 以「内容
-刷新式」流式回复逐帧写回同一条企微消息。
+Direction: this process dials out to WeCom's wss (no public IP/domain/callback URL
+needed); WeCom pushes @bot messages down the long connection, the process calls
+harness.loop.run_agent_stream in-process to produce the answer, and writes it back
+frame by frame to the same WeCom message in "content-refresh" streaming style.
 
-协议依据: 企微官方 @wecom/aibot-node-sdk (src/ws.ts / types/api.ts):
-  认证帧   {"cmd":"aibot_subscribe","headers":{"req_id"},"body":{"bot_id","secret"}}
-  心跳帧   {"cmd":"ping","headers":{"req_id"}}   每30s
-  收消息   {"cmd":"aibot_msg_callback","body":{"msgid","chattype","chatid?",
-            "from":{"userid"},"msgtype","text":{"content"}}}
-  事件     {"cmd":"aibot_event_callback",...}    (enter_chat 等, 忽略)
-  流式回复 {"cmd":"aibot_respond_msg","headers":{"req_id":<透传收到的req_id>},
-            "body":{"msgtype":"stream","stream":{"id","finish","content"}}}
-  约束: content≤20480字节/帧; 流式最长6分钟(超时强制收口); 单bot单连接(新顶旧);
-        同一用户并发交互≤3条(本桥按会话串行化)
+Protocol per the official WeCom @wecom/aibot-node-sdk (src/ws.ts / types/api.ts):
+  auth       {"cmd":"aibot_subscribe","headers":{"req_id"},"body":{"bot_id","secret"}}
+  heartbeat  {"cmd":"ping","headers":{"req_id"}}   every 30s
+  message    {"cmd":"aibot_msg_callback","body":{"msgid","chattype","chatid?",
+             "from":{"userid"},"msgtype","text":{"content"}}}
+  events     {"cmd":"aibot_event_callback",...}    (enter_chat etc., ignored)
+  streaming  {"cmd":"aibot_respond_msg","headers":{"req_id":<echo the received req_id>},
+             "body":{"msgtype":"stream","stream":{"id","finish","content"}}}
+  Constraints: content<=20480 bytes/frame; streaming at most 6 minutes (forced
+  close on timeout); one connection per bot (new replaces old); <=3 concurrent
+  interactions per user (this bridge serializes per session).
 
-企微网关两处非常规行为 (2026-10-27 实测, 故用 aiohttp 而非 websockets 库):
-  ① 其应答帧带 MASK 位 (RFC6455 禁止服务器帧掩码; websockets 严格解析即 1002 断连)
-  ② 不响应 WebSocket 协议层 ping, 只认上述 JSON 心跳 (websockets 默认保活 50s 超时)
+Two non-standard behaviors of the WeCom gateway (measured 2026-10-27; hence
+aiohttp instead of the websockets library):
+  (1) Its response frames carry the MASK bit (RFC6455 forbids masking server
+      frames; websockets' strict parsing drops the connection with 1002)
+  (2) It does not answer WebSocket-level pings, only the JSON heartbeat above
+      (websockets' default keepalive times out at 50s)
 
-会话: session_id="wecom-<chatid或userid>" — 每个企微群/私聊各自独立多轮记忆;
-      历史在**本进程内存**(harness.session, TTL 30min), 与 web 端会话互不相通。
+Sessions: session_id="wecom-<chatid or userid>" — each WeCom group/direct chat has
+      its own independent multi-turn memory; history lives in **this process's
+      memory** (harness.session, TTL 30min), disjoint from web sessions.
 
-用法:
-    .venv/Scripts/python.exe -m jobs.wecom_bot     # 前台常驻, Ctrl+C 退出
-    .env 配置: WECOM_BOT_ID / WECOM_BOT_SECRET
-    (企业微信 → 智能机器人 → API配置 → 使用长连接 页面获取)
+Usage:
+    .venv/Scripts/python.exe -m jobs.wecom_bot     # run in foreground; Ctrl+C to exit
+    .env settings: WECOM_BOT_ID / WECOM_BOT_SECRET
+    (from WeCom → smart bot → API config → use-long-connection page)
 """
 from __future__ import annotations
 
@@ -53,12 +60,12 @@ from core.logger import get_logger  # noqa: E402
 logger = get_logger(__name__)
 
 WSS_URL = "wss://openws.work.weixin.qq.com"
-HEARTBEAT_S = 30           # 官方心跳间隔
-DEAD_AFTER_S = 100         # 100s 无任何入帧判连接死亡(>3个心跳周期)
-STREAM_DEADLINE_S = 330    # 企微流式上限6分钟, 留余量强制收口
-PUSH_INTERVAL_S = 1.5      # delta 阶段刷新节流 (流式为全量刷新, 无需高频)
-MAX_CONTENT_BYTES = 20000  # 官方单帧 20480 字节, 留余量
-RETRY_MAX_S = 30           # 断线重连退避上限
+HEARTBEAT_S = 30           # official heartbeat interval
+DEAD_AFTER_S = 100         # no inbound frame for 100s -> connection considered dead (>3 heartbeat periods)
+STREAM_DEADLINE_S = 330    # WeCom streaming caps at 6 minutes; close early with headroom
+PUSH_INTERVAL_S = 1.5      # refresh throttle during the delta phase (streaming is full-refresh; no need for high frequency)
+MAX_CONTENT_BYTES = 20000  # official per-frame limit 20480 bytes; leave headroom
+RETRY_MAX_S = 30           # reconnect backoff cap
 
 
 def _req_id(prefix: str) -> str:
@@ -66,7 +73,9 @@ def _req_id(prefix: str) -> str:
 
 
 def _acquire_singleton_lock() -> bool:
-    """单实例守卫: 企微单bot单连接(新顶旧), 双实例会互踢断流 (2026-10-27 实踩)"""
+    """Single-instance guard: WeCom allows one connection per bot (new replaces
+    old); two instances kick each other and break the stream (hit in practice
+    2026-10-27)."""
     import ctypes
 
     lock = ROOT / "output" / "wecom_bot.lock"
@@ -81,13 +90,13 @@ def _acquire_singleton_lock() -> bool:
                 print(f"已有实例在运行 (PID {pid}); 单bot单连接, 双实例互踢, 先停旧再启新")
                 return False
         except Exception:
-            pass   # PID 已死/文件损坏 → 锁失效, 可抢
+            pass   # PID dead / lock file corrupted → lock invalid, may take over
     lock.write_text(str(os.getpid()))
     return True
 
 
 def _clip(text: str) -> str:
-    """按 utf-8 字节截到单帧上限内"""
+    """Clip to the per-frame byte limit, measured in utf-8 bytes."""
     if len(text.encode("utf-8")) <= MAX_CONTENT_BYTES:
         return text
     n = len(text)
@@ -101,7 +110,8 @@ def _md_cells(row: str) -> List[str]:
 
 
 def _wecom_md(text: str) -> str:
-    """企微气泡 Markdown 不支持表格(受限子集): 转"加粗表头+竖线行", 两列表转 key: value"""
+    """WeCom bubble Markdown has no table support (restricted subset): convert to
+    "bold header + pipe rows"; two-column tables become key: value lines."""
     lines = text.splitlines()
     out: List[str] = []
     i = 0
@@ -115,7 +125,7 @@ def _wecom_md(text: str) -> str:
                      if not all(re.fullmatch(r":?-{3,}:?", c) for c in _cells if c)]
             if block:
                 header, data = block[0], block[1:]
-                if len(header) == 2:   # 两列表 → key: value 行
+                if len(header) == 2:   # two-column table → key: value lines
                     out.extend(f"- **{h}**: {v}" for h, v in
                                ((r[0], r[1] if len(r) > 1 else "") for r in data))
                 else:
@@ -133,13 +143,13 @@ def _wecom_md(text: str) -> str:
 class WecomBotBridge:
     def __init__(self, bot_id: str, secret: str) -> None:
         self.bot_id, self.secret = bot_id, secret
-        self._send_lock = asyncio.Lock()               # 帧串行发(回复有序)
+        self._send_lock = asyncio.Lock()               # frames sent serially (ordered replies)
         self._session_locks: Dict[str, asyncio.Lock] = {}
-        self._seen_msgids: deque = deque(maxlen=256)    # 企微重推去重
+        self._seen_msgids: deque = deque(maxlen=256)    # dedupe WeCom message re-pushes
         self._last_recv = 0.0
         self._authed = False
 
-    # ---------- 发送原语 ----------
+    # ---------- Send primitives ----------
     async def _send(self, ws, frame: Dict[str, Any]) -> None:
         async with self._send_lock:
             await ws.send_str(json.dumps(frame, ensure_ascii=False))
@@ -153,7 +163,7 @@ class WecomBotBridge:
                                                   "finish": finish,
                                                   "content": _clip(_wecom_md(content))}}})
 
-    # ---------- 消息处理: 收问题 → 本地 Agent → 流式回复 ----------
+    # ---------- Message handling: incoming question → local Agent → streamed reply ----------
     async def _handle_message(self, ws, frame: Dict[str, Any]) -> None:
         body = frame.get("body") or {}
         req_id = (frame.get("headers") or {}).get("req_id", "")
@@ -171,7 +181,7 @@ class WecomBotBridge:
             return
         text = str((body.get("text") or {}).get("content") or "").strip()
         if body.get("chattype") == "group":
-            text = re.sub(r"^@\S+\s*", "", text)   # 群聊剥 @机器人 前缀
+            text = re.sub(r"^@\S+\s*", "", text)   # group chats: strip the @bot prefix
         if not text:
             return
 
@@ -196,7 +206,8 @@ class WecomBotBridge:
 
     async def _answer(self, ws, req_id: str, stream_id: str,
                       text: str, session_id: str) -> None:
-        """跑一轮 Agent: 阶段状态即时刷, 最终回答节流刷, 结束必发 finish=True"""
+        """Run one Agent round: stage status pushed immediately, final answer pushed
+        throttled, finish=True always sent at the end."""
         from harness.loop import run_agent_stream
 
         parts: List[str] = []
@@ -239,7 +250,8 @@ class WecomBotBridge:
                     await self._push_stream(ws, req_id, stream_id,
                                             f"执行失败: {data.get('message')}", True)
                     return
-                # data(表格)不外发; delta 阶段按时间节流刷新
+                # data (tables) is not sent out; delta phase refreshes are
+                # time-throttled
                 if parts and time.monotonic() - last_push >= PUSH_INTERVAL_S:
                     await flush("".join(parts))
                     last_push = time.monotonic()
@@ -258,7 +270,7 @@ class WecomBotBridge:
         logger.info("回答完成 session=%s 长度=%d 超时=%s",
                     session_id, len(answer), timed_out)
 
-    # ---------- 连接与心跳 ----------
+    # ---------- Connection and heartbeat ----------
     async def _heartbeat(self, ws) -> None:
         while True:
             await asyncio.sleep(HEARTBEAT_S)
@@ -272,13 +284,13 @@ class WecomBotBridge:
         hb = asyncio.create_task(self._heartbeat(ws))
         try:
             async for msg in ws:
-                if msg.type != aiohttp.WSMsgType.TEXT:   # CLOSE/CLOSING/ERROR → 结束迭代
+                if msg.type != aiohttp.WSMsgType.TEXT:   # CLOSE/CLOSING/ERROR → end iteration
                     logger.warning("非文本帧/关闭: %s", msg.type.name)
                     break
                 self._last_recv = time.monotonic()
                 frame = json.loads(msg.data)
                 cmd = frame.get("cmd") or ""
-                if not cmd:   # 认证/心跳 ack (errcode 随帧返回)
+                if not cmd:   # auth/heartbeat ack (errcode returned in-frame)
                     if frame.get("errcode"):
                         logger.warning("企微 ack 异常: errcode=%s %s",
                                        frame.get("errcode"), frame.get("errmsg"))
@@ -298,7 +310,7 @@ class WecomBotBridge:
     async def _safe_handle(self, ws, frame: Dict[str, Any]) -> None:
         try:
             await self._handle_message(ws, frame)
-        except Exception as e:  # noqa: BLE001 单条消息失败不拖垮连接
+        except Exception as e:  # noqa: BLE001 one failed message must not kill the connection
             logger.error("消息处理失败: %s", e, exc_info=True)
             try:
                 req_id = (frame.get("headers") or {}).get("req_id", "")
@@ -324,7 +336,7 @@ class WecomBotBridge:
                         logger.warning("连接结束, 准备重连")
             except asyncio.CancelledError:
                 raise
-            except Exception as e:  # noqa: BLE001 网络抖动一律退避重连
+            except Exception as e:  # noqa: BLE001 any network glitch -> backoff and reconnect
                 logger.warning("连接异常: %s; %ss 后重连", e, backoff)
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, RETRY_MAX_S)
@@ -333,7 +345,7 @@ class WecomBotBridge:
 def main() -> None:
     if not _acquire_singleton_lock():
         sys.exit(1)
-    get_config()  # 先加载 .env (OPENAI/PG 等)
+    get_config()  # load .env first (OPENAI/PG etc.)
     cfg = get_config()
     if not cfg.wecom_bot_id or not cfg.wecom_bot_secret:
         print("缺少配置: 请在项目根 .env 加入两行\n"

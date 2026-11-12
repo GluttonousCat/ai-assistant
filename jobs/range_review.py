@@ -1,19 +1,21 @@
 """
-日K Range 扫描结果审核工具: 三类分组图 + TOP10 确定性交易计划
+Daily-bar range scan review tool: three grouped chart pages + TOP10 certainty-based trade plans.
 
-用法:
+Usage:
     python scripts/range_review.py --date 20260817
-输出:
-    output/range_review/{date}_lower.png   下沿候选 (RangePos < 0.2, 做多观察区)
-    output/range_review/{date}_upper.png   上沿候选 (RangePos > 0.8, 观望/假突破区)
-    output/range_review/{date}_risk.png    趋势风险 (TrendRisk=MEDIUM, 需人工复核)
-    output/range_review/{date}_top10.png   TOP10 交易计划 (入场带/TP1/TP2/止损)
-    output/range_review/{date}_top10.csv   TOP10 明细表
+Output:
+    output/range_review/{date}_lower.png   lower-band candidates (RangePos < 0.2, long-watch zone)
+    output/range_review/{date}_upper.png   upper-band candidates (RangePos > 0.8, wait/false-breakout zone)
+    output/range_review/{date}_risk.png    trend risk (TrendRisk=MEDIUM, needs manual review)
+    output/range_review/{date}_top10.png   TOP10 trade plans (entry band/TP1/TP2/stop-loss)
+    output/range_review/{date}_top10.csv   TOP10 detail table
 
-交易计划口径 (指南第四十二、四十三章):
-    入场: 下沿带 [Lower+0.05w, Lower+0.20w]; 已在带内则现价可入, 否则挂回踩限价
-    TP1 = Range Mid (第一目标), TP2 = Upper (第二目标)
-    止损 = Lower - 0.5*ATR (Range Invalidity: 有效跌破下沿+缓冲, 非固定百分比)
+Trade plan conventions (guide chapters 42-43):
+    Entry: lower band [Lower+0.05w, Lower+0.20w]; if already inside the band, enter at
+    market, otherwise place a pullback limit order
+    TP1 = Range Mid (first target), TP2 = Upper (second target)
+    Stop-loss = Lower - 0.5*ATR (Range Invalidity: decisive break below the lower band
+    plus buffer, not a fixed percentage)
 """
 from __future__ import annotations
 
@@ -70,7 +72,7 @@ def zone_label(p: float) -> str:
 
 def draw_group(ax, rec: dict, bars: pd.DataFrame, name: str,
                plan: dict | None = None) -> None:
-    """单标的K线 + 30D分位区间 + (可选)交易计划线"""
+    """Single-symbol candlesticks + 30D percentile range + (optional) trade plan lines."""
     d = bars.tail(60).reset_index(drop=True)
     lo, up = rec["lower"], rec["upper"]
     mid, w = (lo + up) / 2.0, up - lo
@@ -139,7 +141,8 @@ def render_pages(records: list[dict], bars_all: pd.DataFrame, names: dict,
 
 
 def certainty_score(r: pd.Series) -> float:
-    """确定性评分 (做多视角): 分数 + 状态成熟度 + 低风险 + 贴下沿 + 反应强 + 触碰多 + 宽度适中"""
+    """Certainty score (long perspective): base score + state maturity + low risk +
+    closeness to lower band + strong reactions + many touches + moderate width."""
     s = r["range_score"]
     s += {"MATURE_RANGE": 8, "EARLY_TRADABLE_RANGE": 6,
           "RANGE_RENEWAL": 3, "RANGE_FORMATION": 0}.get(r["state"], 0)
@@ -153,14 +156,14 @@ def certainty_score(r: pd.Series) -> float:
 
 
 def build_plan(r: pd.Series) -> dict:
-    """交易计划: 入场带 / TP1=Mid / TP2=Upper / SL=Lower-0.5ATR"""
+    """Trade plan: entry band / TP1=Mid / TP2=Upper / SL=Lower-0.5ATR."""
     lo, up = r["lower"], r["upper"]
     mid, w = (lo + up) / 2.0, up - lo
     atr = r["natr"] / 100.0 * r["close"]
-    if r["range_pos"] <= 0.22:      # 已在下沿带内: 现价可分批入
+    if r["range_pos"] <= 0.22:      # Already inside the lower band: can enter at market in tranches
         entry_zone = (lo + 0.05 * w, lo + 0.22 * w)
         entry_ref = max(r["close"], lo + 0.05 * w)
-    else:                            # 中部偏下: 挂回踩限价, 不追
+    else:                            # Middle, below center: place a pullback limit order, don't chase
         entry_zone = (lo + 0.08 * w, lo + 0.25 * w)
         entry_ref = lo + 0.15 * w
     sl = lo - 0.5 * atr
@@ -200,7 +203,8 @@ def main() -> None:
     render_pages(risk_group, bars, names, f"output/range_review/{args.date}_risk.png",
                  f"{tag} 趋势风险复核 (TrendRisk=MEDIUM, 可能是趋势回调)")
 
-    # ---- TOP10: 做多视角确定性最高 (要求 pos<=0.45 保证到 Mid 有空间) ----
+    # ---- TOP10: highest long-perspective certainty (require pos<=0.45 to leave
+    #      room up to Mid) ----
     top = hq[hq["range_pos"] <= 0.45].sort_values("certainty", ascending=False).head(args.top)
     plans = {}
     rows = []

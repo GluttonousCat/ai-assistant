@@ -1,20 +1,25 @@
 # -*- encoding: utf-8 -*-
 """
-独立心跳哨兵 — API 服务的WS级健康监控 (与被监控者进程隔离, 它死哨兵活)
+Standalone heartbeat sentinel — WS-level health monitoring of the API service
+(process-isolated from the monitored service: if it dies, the sentinel lives on).
 
-背景: API 服务曾静默死亡 17 天无人发现 (监控页跑在 API 里, 哨兵死哨声也死)。
-设计:
-- 独立进程, 周期 GET /health; 状态变化 (up<->down) 即广播告警;
-- WebSocket 出口: 任何客户端连 ws://127.0.0.1:8209/ws 即收
-    {type:"hello"}   连接即给当前状态
-    {type:"beat"}    每次检查的心跳帧 (ok/延迟)
-    {type:"alert"}   up<->down 状态翻转
-    {type:"restart"} 自动拉起动作的记录
-- 自动拉起 (可关): 连续 fail-threshold 次失败后重启 API 进程, 冷却 10 分钟,
-  拉起前探测端口避免重复实例;
-- 浏览器打开 http://127.0.0.1:8209/ 即有一块最小状态页 (同文件内联)。
+Background: the API service once died silently for 17 days with nobody noticing
+(the monitor page ran inside the API; when it died, the watchdog's voice died too).
+Design:
+- Independent process, periodically GETs /health; broadcasts an alert on any state
+  change (up<->down);
+- WebSocket feed: any client connecting to ws://127.0.0.1:8209/ws receives
+    {type:"hello"}   current state, sent immediately on connect
+    {type:"beat"}    heartbeat frame per check (ok/latency)
+    {type:"alert"}   up<->down state flip
+    {type:"restart"} record of an auto-restart action
+- Auto-restart (disable-able): after fail-threshold consecutive failures, restart
+  the API process; 10-minute cooldown; probes the port before restarting to avoid
+  duplicate instances;
+- Opening http://127.0.0.1:8209/ in a browser shows a minimal status page
+  (inlined in this same file).
 
-启动 (detached):
+Start (detached):
     .venv/Scripts/python.exe -m jobs.health_sentinel
 CLI: --port 8209 --interval 10 --fail-threshold 3 --no-auto-restart
 """
@@ -75,7 +80,8 @@ def build_app(interval: float, fail_threshold: int, auto_restart: bool) -> FastA
             s.settimeout(1)
             return s.connect_ex(("127.0.0.1", 8208)) == 0
 
-    # ---- 企微机器人监护: 锁文件 PID 探活, 死亡自动拉起 (实证三次静默死亡) ----
+    # ---- WeCom bot supervision: liveness via lock-file PID, auto-restart on death
+    #      (three silent deaths observed in practice) ----
     def wecom_alive() -> bool:
         import ctypes
         import ctypes.wintypes as wt
@@ -99,16 +105,16 @@ def build_app(interval: float, fail_threshold: int, auto_restart: bool) -> FastA
             state["wecom_down"] = 0
             return
         state["wecom_down"] += 1
-        if state["wecom_down"] < 3:      # 连续3拍才动手 (避免启动间隙误杀)
+        if state["wecom_down"] < 3:      # Act only after 3 consecutive beats (avoid killing during startup gap)
             return
-        if state["wecom_down"] > 3:      # 已拉起过, 等它写锁 (给60s启动窗)
-            if state["wecom_down"] > 9:  # 9拍(~90s)仍死 → 再拉
+        if state["wecom_down"] > 3:      # Already restarted once; wait for it to write the lock (60s startup window)
+            if state["wecom_down"] > 9:  # Still dead after 9 beats (~90s) → restart again
                 state["wecom_down"] = 3
             return
         logger.error("[告警] wecom_bot 进程死亡, 自动拉起")
         await broadcast({"type": "alert", "event": "wecom_down", "ts": time.time()})
         (ROOT / "output" / "wecom_bot.lock").unlink(missing_ok=True)
-        subprocess.Popen(  # noqa: S603 固定命令行
+        subprocess.Popen(  # noqa: S603 fixed command line
             WECOM_CMD, cwd=str(ROOT),
             stdout=open(ROOT / "logs" / "wecom_bot.log", "ab"),
             stderr=subprocess.STDOUT,
@@ -130,7 +136,7 @@ def build_app(interval: float, fail_threshold: int, auto_restart: bool) -> FastA
                          "ts": time.time()})
         if ok != prev and prev is not None:
             now = time.time()
-            if ok:   # 恢复: 告警带宕机时长
+            if ok:   # Recovered: alert carries the downtime duration
                 down_s = round(now - state["t_down"]) if state["t_down"] else None
                 logger.warning(f"[告警] api_up (宕机 {down_s}s)")
                 await broadcast({"type": "alert", "event": "api_up",
@@ -147,7 +153,7 @@ def build_app(interval: float, fail_threshold: int, auto_restart: bool) -> FastA
                 and not port_listening()):
             state["last_restart"] = time.time()
             logger.error(f"[自动拉起] API 连续 {state['fails']} 次失检, 执行重启")
-            proc = subprocess.Popen(  # noqa: S603 固定命令行, 无外部输入
+            proc = subprocess.Popen(  # noqa: S603 fixed command line, no external input
                 RESTART_CMD, cwd=str(ROOT),
                 stdout=open(ROOT / "logs" / "api-server.out.log", "ab"),
                 stderr=open(ROOT / "logs" / "api-server.err.log", "ab"),
@@ -173,20 +179,20 @@ def build_app(interval: float, fail_threshold: int, auto_restart: bool) -> FastA
                 "type": "hello", "ok": state["ok"],
                 "fails": state["fails"], "ts": time.time()}))
             while True:
-                await ws.receive_text()      # 客户端 ping/保活, 内容忽略
+                await ws.receive_text()      # Client ping/keepalive; content ignored
         except WebSocketDisconnect:
             pass
         finally:
             clients.discard(ws)
 
-    @app.on_event("startup")   # noqa: deprecated-but-stable; 不为去警告重构
+    @app.on_event("startup")   # noqa: deprecated-but-stable; no refactor just to silence the warning
     async def _loop():
         async def run():
             while True:
                 try:
                     await tick()
                     await wecom_guard()
-                except Exception as e:  # noqa: BLE001 哨兵自身永不退出
+                except Exception as e:  # noqa: BLE001 the sentinel itself must never exit
                     logger.error(f"tick 异常: {e}")
                 await asyncio.sleep(interval)
         asyncio.create_task(run())

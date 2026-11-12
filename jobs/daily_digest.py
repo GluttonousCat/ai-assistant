@@ -1,14 +1,14 @@
 # -*- encoding: utf-8 -*-
 """
-每日研报晨报 (daily digest) — 早间爬虫轮末生成, 供用户每日阅读
+Daily research-report morning digest — generated at the end of the morning crawl round for daily reading.
 
-数据窗口: 昨日 06:00 以来入库的研报 (覆盖昨日 23:00 夜批 + 今晨 07:00 早批)
-输出: output/daily_digest/YYYY-MM-DD.md
-  今日概览 -> LLM 综述 -> 行业分组清单(标题/机构/标的/评级) -> 盈利预测要点 -> 管线积压
+Data window: reports ingested since yesterday 06:00 (covers yesterday's 23:00 night batch + today's 07:00 morning batch)
+Output: output/daily_digest/YYYY-MM-DD.md
+  today's overview -> LLM summary -> industry-grouped list (title/org/target/rating) -> forecast highlights -> pipeline backlog
 
-挂载: zsxq_scheduler._run_round 当日首个 run_hour 轮末 (失败不影响主轮结果)
-CLI: python -m jobs.daily_digest            # 昨日 06:00 以来的窗口
-     python -m jobs.daily_digest --days 3   # 手动回看更大窗口
+Mounted at: zsxq_scheduler._run_round, end of the day's first run_hour round (failure does not affect the main round's result)
+CLI: python -m jobs.daily_digest            # window since yesterday 06:00
+     python -m jobs.daily_digest --days 3   # manually review a larger window
 """
 from __future__ import annotations
 
@@ -25,19 +25,19 @@ from core.logger import get_logger
 logger = get_logger(__name__)
 
 OUT_DIR = "output/daily_digest"
-MAX_LIST_ROWS = 80          # 清单最多列出条数 (超出截断提示)
-MAX_LLM_LINES = 40          # LLM 综述输入最多条数 (控 token)
+MAX_LIST_ROWS = 80          # max rows listed (beyond this, truncate with a notice)
+MAX_LLM_LINES = 40          # max lines fed to the LLM summary (token control)
 
 
 def _window_start(days: int) -> datetime:
-    """数据窗口起点: N 天前的 06:00 (默认 1 = 昨日晨批之前, 覆盖夜批+今晨批)"""
+    """Window start: 06:00 N days ago (default 1 = before yesterday's morning batch, covering the night batch + today's morning batch)."""
     n = datetime.now()
     return (n - timedelta(days=days - 1)).replace(hour=6, minute=0,
                                                   second=0, microsecond=0)
 
 
 def fetch_reports(since: datetime) -> List[Dict[str, Any]]:
-    """窗口内入库的研报 + 关联盈利预测 (按入库时间升序)"""
+    """Reports ingested within the window + their associated forecasts (ascending by ingestion time)."""
     from storage.pg import PgClient
     with PgClient() as pg:
         rows = pg.fetch_all(
@@ -78,7 +78,7 @@ def _target_price(r: Dict[str, Any]) -> Optional[str]:
 
 
 def _llm_summary(reports: List[Dict[str, Any]]) -> str:
-    """LLM 综述: 每行一条(标题|机构|标的|评级|核心观点), 输出 3 段内中文综述"""
+    """LLM summary: one line per report (title|org|target|rating|core view), outputs a Chinese summary of up to 3 paragraphs."""
     lines = []
     for r in reports[:MAX_LLM_LINES]:
         parts = [f"《{r['title'] or r['file_name']}》",
@@ -115,14 +115,14 @@ def _llm_summary(reports: List[Dict[str, Any]]) -> str:
 
 
 def generate(days: int = 1) -> Path:
-    """生成晨报 MD 并落盘, 返回文件路径"""
-    get_config()   # 灌 .env 进程环境 (storage 直读 env; 未先调会连默认地址)
+    """Generate the digest markdown and write it to disk; returns the file path."""
+    get_config()   # Load .env into process env (storage reads env directly; without this call it would connect to the default address)
     since = _window_start(days)
     reports = fetch_reports(since)
     now = datetime.now()
     root = Path(get_config().root_dir)
 
-    # ---- 统计 ----
+    # ---- Statistics ----
     orgs = {r["org_name"] for r in reports if r["org_name"]}
     targets = {r["ts_code"] or r["target"] for r in reports
                if r["ts_code"] or r["target"]}
@@ -130,10 +130,10 @@ def generate(days: int = 1) -> Path:
     industries = Counter(r["industry"] or "未分类" for r in reports)
     analyzed = sum(1 for r in reports if r["analysis_status"] == "done")
 
-    # ---- LLM 综述 ----
+    # ---- LLM summary ----
     summary = _llm_summary(reports) if reports else "本期无新增研报。"
 
-    # ---- MD 组装 ----
+    # ---- Markdown assembly ----
     md: List[str] = []
     md.append(f"# 研报晨报 · {now:%Y-%m-%d}\n")
     md.append(f"> 生成于 {now:%H:%M} | 覆盖 {since:%Y-%m-%d %H:%M} 以来入库研报 "
@@ -152,7 +152,7 @@ def generate(days: int = 1) -> Path:
     md.append("## 今日综述\n")
     md.append(summary + "\n")
 
-    # ---- 行业分组清单 ----
+    # ---- Industry-grouped list ----
     md.append("## 研报清单 (按行业)\n")
     if not reports:
         md.append("本窗口无新增研报。\n")
@@ -183,7 +183,7 @@ def generate(days: int = 1) -> Path:
         if len(reports) > shown:
             md.append(f"…(其余 {len(reports) - shown} 篇见研报中心)\n")
 
-    # ---- 盈利预测要点 ----
+    # ---- Forecast highlights ----
     md.append("## 盈利预测要点\n")
     fc_rows = []
     for r in reports:
@@ -199,7 +199,7 @@ def generate(days: int = 1) -> Path:
         md.append(f"…(共 {len(fc_rows)} 条)")
     md.append("")
 
-    # ---- 管线积压 ----
+    # ---- Pipeline backlog ----
     from storage.pg import PgClient
     with PgClient() as pg:
         backlog = {b["extraction_status"]: b["c"] for b in pg.fetch_all(

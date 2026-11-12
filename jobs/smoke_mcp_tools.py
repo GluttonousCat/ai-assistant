@@ -1,12 +1,13 @@
 # -*- encoding: utf-8 -*-
 """
-MCP 工具全量冒烟测试
+Full MCP tool smoke test.
 
-用法:
-    .venv\\Scripts\\python.exe jobs/smoke_mcp_tools.py            # 快速档 (默认)
-    .venv\\Scripts\\python.exe jobs/smoke_mcp_tools.py --heavy   # 含全市场扫描/forge
+Usage:
+    .venv\\Scripts\\python.exe jobs/smoke_mcp_tools.py            # fast tier (default)
+    .venv\\Scripts\\python.exe jobs/smoke_mcp_tools.py --heavy   # incl. full-market scans / forge
 
-每个工具给一组代表性参数, 校验: 注册存在 / 调用不抛 / 信封结构 ok / data 非空。
+Each tool gets a representative set of parameters; checks: registered / call does
+not raise / envelope ok / data non-empty.
 """
 from __future__ import annotations
 
@@ -19,7 +20,7 @@ import time  # noqa: E402
 
 from harness.mcp.tools import REGISTRY  # noqa: E402
 
-# (工具名, 参数) -- 快速档: 秒级~十秒级
+# (tool name, args) -- fast tier: seconds to tens of seconds
 FAST_CASES = [
     ("resolve_stock", {"text": "宁德时代和茅台的最新研报"}),
     ("get_schema", {"keyword": "估值"}),
@@ -35,7 +36,7 @@ FAST_CASES = [
     ("query_main_business", {"stock": "中际旭创"}),
     ("valuation_percentile", {"stock": "贵州茅台", "years": 3}),
     ("search_reports", {"keyword": "光模块", "days": 365, "limit": 5}),
-    ("verify_forecasts", {"stock": "阳光电源"}),   # 现库内唯一有可回验期间的 A 股
+    ("verify_forecasts", {"stock": "阳光电源"}),   # currently the only A-share in the DB with a verifiable forecast period
     ("get_forecasts", {"stock": "中芯国际"}),
     ("list_chains", {}),
     ("analyze_chain", {"chain": "AI算力", "node": "光模块"}),
@@ -45,7 +46,8 @@ FAST_CASES = [
     ("detect_financial_risk", {"stock": "中际旭创"}),
 ]
 
-# 动态 report_id: 先检索一篇研报再读 (库内 id 不保证从 1 开始连续)
+# Dynamic report_id: search for one report first, then read it (in-DB ids are not
+# guaranteed to be contiguous from 1)
 def _first_report_id() -> int:
     env = REGISTRY.call("search_reports", {"keyword": "研报", "days": 0, "limit": 1})
     reports = (env.get("data") or {}).get("reports") or []
@@ -54,13 +56,13 @@ def _first_report_id() -> int:
         reports = (env.get("data") or {}).get("reports") or []
     return reports[0]["report_id"]
 
-# 重档: 分钟级 (LLM 生成 / 全市场扫描)
+# Heavy tier: minutes-level (LLM generation / full-market scans)
 HEAVY_CASES = [
     ("run_quant_scan", {"scan_type": "range", "top": 5}),
     ("run_quant_scan", {"scan_type": "trend", "top": 5}),
     ("run_quant_scan", {"scan_type": "setup"}),
     ("forge_chain", {"theme": "固态电池"}),
-    ("extract_document", {"file_path": "NOT_EXIST_FOR_TEST.pdf"}),  # 预期 ToolError
+    ("extract_document", {"file_path": "NOT_EXIST_FOR_TEST.pdf"}),  # expected ToolError
 ]
 
 

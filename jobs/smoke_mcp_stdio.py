@@ -1,14 +1,18 @@
 # -*- encoding: utf-8 -*-
 """
-Stdio MCP 端到端握手冒烟 (模拟外部 MCP 客户端: dsh / Claude Desktop / Cursor)
+Stdio MCP end-to-end handshake smoke test (simulates an external MCP client: dsh /
+Claude Desktop / Cursor).
 
-子进程拉起 `python -m harness.mcp.server`, 按 MCP 规范走完整线级握手:
+Spawns `python -m harness.mcp.server` as a subprocess and walks the full wire-level
+handshake per the MCP spec:
   initialize -> notifications/initialized -> tools/list -> tools/call
-校验: 协议版本与服务名回显 / 只读清单不含写类工具 / 真实调用返回 ok 信封。
-与 mcp/tests/test_server.py (进程内测 handle()) 互补, 验证的是真实 stdio 传输层
-(UTF-8 编码 / 逐行 JSON-RPC / stdout 纯净性), 任何 MCP 客户端接入走的都是这条路。
+Checks: protocol version and server name echoed / read-only listing contains no
+write tools / a real call returns an ok envelope.
+Complements mcp/tests/test_server.py (in-process handle() test) by verifying the
+real stdio transport layer (UTF-8 encoding / line-delimited JSON-RPC / stdout
+cleanliness) — the exact path any MCP client takes when connecting.
 
-用法 (项目根目录):
+Usage (from the project root):
     .venv\\Scripts\\python.exe jobs/smoke_mcp_stdio.py
     .venv\\Scripts\\python.exe jobs/smoke_mcp_stdio.py --tool get_schema --args-json '{\"keyword\": \"估值\"}'
 """
@@ -28,10 +32,12 @@ sys.path.insert(0, str(ROOT))
 
 def _rpc(proc: subprocess.Popen, req: Dict[str, Any],
          timeout: float = 60.0) -> Dict[str, Any]:
-    """发一条 JSON-RPC 请求并等对应 id 的响应 (notification 无回包, 单独发)"""
+    """Send one JSON-RPC request and wait for the response with the matching id
+    (notifications get no reply; send them separately)."""
     import threading
     box: Dict[str, Any] = {}
-    # 兜底超时: readline 阻塞读无法 interrupt, 用后台线程 + join(timeout)
+    # Fallback timeout: the blocking readline cannot be interrupted, so use a
+    # background thread + join(timeout)
     def _read():
         for line in proc.stdout:            # type: ignore[union-attr]
             line = line.strip()
@@ -82,13 +88,13 @@ def main() -> int:
         print(f"[smoke] initialize ok: {info['name']} v{info['version']} "
               f"(protocol {r['result']['protocolVersion']})")
 
-        # 2) notifications/initialized (无回包, 不炸即通过)
+        # 2) notifications/initialized (no reply; passing means it didn't blow up)
         assert proc.stdin is not None
         proc.stdin.write(json.dumps(
             {"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n")
         proc.stdin.flush()
 
-        # 3) tools/list — 只读闸门生效
+        # 3) tools/list — the read-only gate is in effect
         r = _rpc(proc, {"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
         names = [t["name"] for t in r["result"]["tools"]]
         assert "query_financials" in names, "核心工具缺失"
@@ -97,7 +103,7 @@ def main() -> int:
         print(f"[smoke] tools/list ok: {len(names)} 只读工具 "
               f"(forge_chain 等写类已隐藏)")
 
-        # 4) tools/call — 真实信封
+        # 4) tools/call — a real envelope
         r = _rpc(proc, {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
                         "params": {"name": args.tool,
                                    "arguments": json.loads(args.args_json)}})

@@ -1,16 +1,16 @@
 # -*- encoding: utf-8 -*-
 """
-Agent 全链路追踪演示: 从用户问题到最终回答, 每个环节的完整输入输出
+Agent full-chain tracing demo: complete inputs/outputs of every stage, from user question to final answer.
 
-链路: 用户问题 → 意图路由(域子Agent/全工具) → [LLM决策轮 <-> 工具调用]* → 最终回答
+Chain: user question → intent routing (domain subagent / full toolset) → [LLM decision round <-> tool call]* → final answer
 
-记录 (双钩子, 零侵入 loop 代码):
-  ① LLM 每轮: 可选工具清单 / 输入消息流 / 响应文本+tool_calls 原文
-  ② 工具每次: 完整入参与出参信封 (含 ok/elapsed/数据预览)
-输出: 终端分节打印 + 全量 JSON 落 output/agent_trace/
-     (SSE 事件流另由 harness.trajectory 自动落 logs/trajectories/)
+Recording (two hooks, zero intrusion into loop code):
+  (1) Each LLM round: offered tool list / input message stream / response text + raw tool_calls
+  (2) Each tool call: full input args and output envelope (incl. ok/elapsed/data preview)
+Output: sectioned terminal printing + full JSON to output/agent_trace/
+     (the SSE event stream is separately auto-persisted by harness.trajectory to logs/trajectories/)
 
-用法:
+Usage:
     .venv/Scripts/python.exe -m jobs.agent_trace_demo "中芯国际25年利润多少"
 """
 from __future__ import annotations
@@ -27,11 +27,11 @@ sys.path.insert(0, str(ROOT))
 
 from core.config import get_config  # noqa: E402
 
-get_config()  # 加载 .env (PG 连接等)
+get_config()  # Load .env (PG connection etc.)
 
 RECORD: dict = {"question": None, "llm_rounds": [], "tool_calls": [], "answer": None}
 OUT_DIR = ROOT / "output" / "agent_trace"
-_PRINT_LOCK = threading.Lock()  # 并行工具完成时序不定, 加锁防打印交错
+_PRINT_LOCK = threading.Lock()  # Parallel tool completions finish in nondeterministic order; lock to avoid interleaved printing
 
 
 def _short(v, n: int = 600) -> str:
@@ -44,14 +44,14 @@ def sec(title: str) -> None:
         print("\n" + "=" * 72 + f"\n== {title}\n" + "=" * 72, flush=True)
 
 
-# ---------- 钩子 1: LLM 决策轮 (完整请求/响应) ----------
+# ---------- Hook 1: LLM decision rounds (full request/response) ----------
 import harness.llm as llm_mod
 
 _real_get_agent_llm = llm_mod.get_agent_llm
 
 
 class _TracingLLM:
-    """包住 LLMClient.invoke_with_tools, 逐轮记录输入输出"""
+    """Wrap LLMClient.invoke_with_tools, recording inputs/outputs round by round."""
 
     def __init__(self, inner):
         self._inner = inner
@@ -68,7 +68,7 @@ class _TracingLLM:
                        if m.get("tool_calls") else {}),
                     **({"tool_call_id": m["tool_call_id"]}
                        if m.get("tool_call_id") else {})}
-                   for m in messages[1:]]}  # [1:] 跳过 system prompt (全文见JSON)
+                   for m in messages[1:]]}  # [1:] skips the system prompt (full text in JSON)
         sec(f"LLM 决策轮 #{self._round} 请求")
         print(f"  可选工具 ({len(rec['tools_offered'])} 个): "
               f"{', '.join(rec['tools_offered'])}")
@@ -97,7 +97,7 @@ class _TracingLLM:
 
 llm_mod.get_agent_llm = lambda **kw: _TracingLLM(_real_get_agent_llm(**kw))
 
-# ---------- 钩子 2: 工具执行 (完整入参/出参) ----------
+# ---------- Hook 2: tool execution (full args/result) ----------
 from harness.mcp.registry import MCPToolRegistry
 
 _real_call = MCPToolRegistry.call

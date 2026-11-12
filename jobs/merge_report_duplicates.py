@@ -1,20 +1,26 @@
 # -*- encoding: utf-8 -*-
 """
-研报去重合并: 知识星球同一研报常有多条记录 —
-    source='zsxq' (话题附件: PDF 原研报, 可能正文为空)
-    source='zsxq_topic' (话题文本: 中文解读 txt)
-    source='zsxq_file' (群文件: 含 mp3 音频)
-规则:
-    1. 每个 topic 保留 PDF 条目 (正文优先 PDF 提取文本, 空则并入话题解读文本);
-       保留优先级: 非中文翻译版 > 已分析(done) > 新记录 —— 删除对象集中在
-       中文版与未分析条目 (中文版与原版成对时只留原版);
-    2. 同 topic 的 zsxq_topic (txt) / zsxq_file(mp3) 条目删除 (内容已并入);
-    3. 无 PDF 的 topic: 保留 txt 解读条目 (source 改 'zsxq_topic_pdf_absent',
-       报表 API 仍不展示, 仅作溯源)。
-留痕 (防乒乓循环, 2026-09-03): 删除带 file_id 的条目前写入 fin.report_meta_merged;
-    sync 的幂等检查同时查留痕表 —— 物理删除过的文件不再被 _sync_group_files
-    (全量扫描) 重新插入。曾致同一图片型 PDF 入库→删除→重插→反复 OCR。
-用法: python -m scripts.merge_report_duplicates
+Research-report dedup merge: the same Zhixingqiu report often has multiple records —
+    source='zsxq' (topic attachment: original PDF report, body text may be empty)
+    source='zsxq_topic' (topic text: Chinese commentary txt)
+    source='zsxq_file' (group file: includes mp3 audio)
+Rules:
+    1. Keep one PDF entry per topic (body text prefers the PDF-extracted text; if
+       empty, merge in the topic commentary text);
+       keep priority: non-Chinese-translated > analyzed (done) > newer record —
+       deletions concentrate on Chinese translations and un-analyzed entries (when a
+       Chinese version pairs with the original, only the original is kept);
+    2. Delete the same topic's zsxq_topic (txt) / zsxq_file (mp3) entries (content
+       already merged);
+    3. Topics without a PDF: keep the txt commentary entry (source becomes
+       'zsxq_topic_pdf_absent'; the reports API still hides it, kept only for
+       traceability).
+Audit trail (anti ping-pong loop, 2026-09-03): before deleting an entry with a
+file_id, write it to fin.report_meta_merged; the sync's idempotent check also
+consults the audit table — physically deleted files are no longer re-inserted by
+_sync_group_files (full scan). This once caused the same image-only PDF to be
+ingested → deleted → re-inserted → OCR'd repeatedly.
+Usage: python -m scripts.merge_report_duplicates
 """
 from __future__ import annotations
 
@@ -32,14 +38,17 @@ logger = get_logger(__name__)
 
 
 def _ensure_merged_table() -> None:
-    """留痕表 DDL: 独立连接立即提交 (DDL 不进业务事务, 防锁表);
-    DDL 单一事实源在 storage.pg_schema (与 init_report_schema 同源)"""
+    """Audit-table DDL: independent connection, immediate commit (DDL must not run
+    inside a business transaction — prevents table locks);
+    single source of truth for DDL lives in storage.pg_schema (same source as
+    init_report_schema)."""
     with ddl_cursor() as cur:
         cur.execute(DDL_REPORT_MERGED)
 
 
 def _delete_row(pg: PgClient, r: dict) -> None:
-    """删除条目: 带 file_id 的先落留痕表 (防 sync 全量重插), 再级联删预测"""
+    """Delete an entry: entries with a file_id go to the audit table first (prevents
+    full-scan re-insertion by sync), then forecasts are deleted in cascade."""
     if r.get("file_id"):
         pg.execute(
             """INSERT INTO fin.report_meta_merged (file_id, report_id, topic_id, file_name)
@@ -52,7 +61,8 @@ def _delete_row(pg: PgClient, r: dict) -> None:
 
 
 def _keep_key(r: dict) -> tuple:
-    """保留优先级: PDF > 非中文翻译版 > 已分析 > 新记录 (升序, 小者保留)"""
+    """Keep priority: PDF > non-Chinese-translated > analyzed > newer record
+    (ascending; smallest sorts first and is kept)."""
     is_pdf = (r.get("source") == "zsxq" and (r.get("file_name") or "").lower().endswith(".pdf"))
     return (
         0 if is_pdf else 1,
@@ -65,7 +75,7 @@ def _keep_key(r: dict) -> tuple:
 def merge() -> dict:
     _ensure_merged_table()
     with PgClient() as pg:
-        # 1. 找出每个 topic 的全部条目
+        # 1. Find all entries of each topic
         topics = pg.fetch_all(
             """SELECT topic_id,
                       COUNT(*) AS n,
@@ -84,12 +94,13 @@ def merge() -> dict:
                 (t["topic_id"],))
             if not rows:
                 continue
-            rows.sort(key=_keep_key)  # 保留对象排最前
+            rows.sort(key=_keep_key)  # the entry to keep sorts first
 
             if t["pdf_n"] > 0:
-                # 保留第一个 PDF 条目
+                # Keep the first PDF entry
                 keep = rows[0]
-                # 正文: PDF 自身文本为空时, 借同 topic 的 txt 解读文本
+                # Body text: when the PDF's own text is empty, borrow the topic's
+                # txt commentary text
                 keep_text = keep.get("content_text") or ""
                 if not keep_text.strip():
                     donor = next((r for r in rows
@@ -100,12 +111,13 @@ def merge() -> dict:
                             "extraction_status='extracted' WHERE report_id=%s",
                             (donor["content_text"], donor["content_chars"], keep["report_id"]))
                         merged += 1
-                # 删除其余条目 (中文版/txt/mp3/重复pdf) — 留痕防重插
+                # Delete the remaining entries (Chinese versions/txt/mp3/duplicate
+                # pdf) — audit trail prevents re-insertion
                 for r in rows[1:]:
                     _delete_row(pg, r)
                     deleted += 1
             else:
-                # 无 PDF: 保留 txt 条目但标记 (报表 API 过滤)
+                # No PDF: keep the txt entry but mark it (filtered out by the reports API)
                 keep = rows[0]
                 if keep["source"] == "zsxq_topic":
                     pg.execute(
@@ -115,12 +127,14 @@ def merge() -> dict:
                     _delete_row(pg, r)
                     deleted += 1
 
-        # 2. 独立的 zsxq_topic 条目 (无同 topic 文件): 也标记为不展示
+        # 2. Standalone zsxq_topic entries (no files on the same topic): also mark
+        #    as not displayed
         pg.execute(
             """UPDATE fin.report_meta SET source='zsxq_topic_pdf_absent'
                WHERE source='zsxq_topic' AND topic_id NOT IN
                      (SELECT topic_id FROM fin.report_meta WHERE source='zsxq')""")
-        # 3. mp3 等音频: 删除 (不是研报; 留痕防重插)
+        # 3. mp3 and other audio: delete (not research reports; audit trail
+        #    prevents re-insertion)
         mp3 = pg.fetch_all(
             "SELECT report_id, topic_id, file_id, file_name FROM fin.report_meta "
             "WHERE file_name ILIKE '%.mp3'")

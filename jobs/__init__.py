@@ -1,3 +1,3 @@
 """
-任务层 (jobs): 定时调度器 (Tushare 21:00 / 研报 07:23 点) + 管线入口脚本
+Job layer (jobs): scheduled tasks (Tushare 21:00 / report crawl 07:23) + pipeline entry scripts.
 """

@@ -1,20 +1,23 @@
 # -*- encoding: utf-8 -*-
 """
-知识星球爬虫数据 → PG 研报仓库 同步脚本
+Zhixingqiu crawler data → PG research-report warehouse sync script.
 
-数据流:
+Data flow:
   output/{group_id}/topics_{group_id}.db (sqlite)
-    ├── topics 表         → fin.report_meta.title/text       (话题文本即研报正文)
-    └── topic_files 表    → fin.report_meta (file_path=本地下载文件, 提取正文)
-  output/{group_id}/downloads/*   → fin.report_meta (附件提取, 支持 pdf/docx/txt/md)
+    ├── topics table        → fin.report_meta.title/text      (topic text serves as the report body)
+    └── topic_files table   → fin.report_meta (file_path = locally downloaded file, extract body)
+  output/{group_id}/downloads/*   → fin.report_meta (attachment extraction; supports pdf/docx/txt/md)
 
-用法:
+Usage:
   python -m scripts.sync_zxsq_to_pg [--group <group_id>] [--only-args] [--limit N]
 
-特性:
-- 断点续传: fin.report_sync_meta 记录 last_topic_id, 重复执行只处理新增话题附件
-- 幂等: report_meta 按 (source='zsxq', topic_id) 去重, 重复同步只更新
-- 文本提取: 本地文件缺失时降级用话题 text 文本, extraction_status='pending' 待补
+Features:
+- Checkpoint resume: fin.report_sync_meta records last_topic_id; re-runs only process
+  newly added topic attachments
+- Idempotent: report_meta is deduplicated by (source='zsxq', topic_id); repeated
+  syncs only update
+- Text extraction: when the local file is missing, degrade to the topic's text;
+  extraction_status='pending' marks it for later backfill
 """
 from __future__ import annotations
 
@@ -40,22 +43,27 @@ from storage.sqlite.topics import TopicsDatabase
 from tools.finance.report_extractor import get_extractor
 from core.helpers import strip_zsxq_tags, is_chinese_translated
 
-# 幂等检查: 现存 OR 已被去重合并删除留痕 (留痕过的永不重插, 防
-# 入库→merge删除→全量sync重插→再分析 的乒乓循环)
+# Idempotency check: exists in report_meta OR was deleted by dedup-merge with an
+# audit-trail row (audited ones are never re-inserted, preventing the
+# ingest → merge-delete → full-sync re-insert → re-analyze ping-pong loop)
 _EXISTS_SQL = (
     f"SELECT 1 FROM fin.report_meta WHERE file_id=%s "
     f"UNION ALL SELECT 1 FROM fin.report_meta_merged WHERE file_id=%s LIMIT 1")
 from core.paths import PathManager
 
-# 研报文本提取的最大长度 (避免超大文件占满 PG 字段, 只保留头部核心内容)
+# Max length of extracted report text (avoids oversized files filling the PG
+# column; keeps only the head with the core content)
 MAX_TEXT_CHARS = 200_000
-# 研报正文最小字数下限 (低于此值视为非研报内容, 如纯提问/闲聊)
+# Minimum body-length threshold (below this it is treated as non-report content,
+# e.g. pure questions / chit-chat)
 MIN_REPORT_CHARS = 30
 
 
 def _nn(s):
-    """剥 NUL: 话题/PDF 提取文本偶带 \\x00, psycopg2 字符串字面量拒收,
-    曾致整批同步事务回滚 (17 天断档期的入库全卡在此, 2026-10-30 实证)"""
+    """Strip NUL chars: topic/PDF-extracted text occasionally contains \\x00, which
+    psycopg2 rejects in string literals; this once rolled back an entire sync batch
+    transaction (all ingestion during a 17-day outage window was stuck on this —
+    verified 2026-10-30)."""
     return s.replace("\x00", "") if isinstance(s, str) else s
 
 
@@ -70,21 +78,23 @@ class ZSXQ2PGSync:
         self.extractor = get_extractor()
         self.db = TopicsDatabase(self.db_path)
         self.files_db = FilesDatabase(self.files_db_path) if os.path.exists(self.files_db_path) else None
-        # 本次同步新入库的 report_id (run() 返回给下载流水线做单篇处理)
+        # report_ids newly ingested by this sync (returned by run() so the download
+        # pipeline can process each one individually)
         self._new_ids: list = []
 
-    # ---------- 同步主入口 ----------
+    # ---------- Sync main entry ----------
     def run(self) -> list:
         """
-        增量同步 sqlite -> PG. 返回本次新入库的 report_id 列表
-        (供下载流水线对刚入库的研报立即做单篇 LLM 分析).
+        Incremental sync sqlite -> PG. Returns the list of report_ids newly ingested
+        this run (for the download pipeline to run per-report LLM analysis on them
+        immediately).
         """
         if not os.path.exists(self.db_path) and self.files_db is None:
             logger.error(f"话题库/文件库均不存在: {self.db_path}")
             print("   请先运行爬虫: python -m cli.interactive 或 API /crawl/*")
             return []
 
-        # 部署 PG 表
+        # Deploy the PG tables
         with PgClient() as pg:
             init_report_schema(pg)
 
@@ -97,9 +107,9 @@ class ZSXQ2PGSync:
         self._print_summary()
         return self._new_ids
 
-    # ---------- 话题文本同步 ----------
+    # ---------- Topic-text sync ----------
     def _sync_topics(self):
-        """话题库中 topics 表 → report_meta (source='zsxq_topic')"""
+        """topics table of the topics DB → report_meta (source='zsxq_topic')."""
         with PgClient() as pg:
             last_topic_id = self._get_sync_marker(pg, "last_topic_id")
             total = 0
@@ -113,12 +123,13 @@ class ZSXQ2PGSync:
                 title = _nn((row.get("title") or "").strip())
                 create_time = row.get("create_time") or ""
 
-                # 研报准入: 空文本且无标题, 或文本过短 (非研报内容)
+                # Report admission: empty text with no title, or text too short
+                # (non-report content)
                 if (not text and not title) or len(text) < MIN_REPORT_CHARS:
                     skipped += 1
                     continue
 
-                # 幂等: 已同步过则跳过
+                # Idempotent: skip if already synced
                 exists = pg.fetch_one(
                     f"SELECT 1 FROM {T_REPORT_META} WHERE source='zsxq_topic' AND topic_id=%s",
                     (topic_id,),
@@ -144,9 +155,10 @@ class ZSXQ2PGSync:
             self._set_sync_marker(pg, "last_topic_id", value_int=max_topic_id)
             logger.info(f"📄 话题文本已同步 (本批次 {total} 条, 跳过 {skipped} 条短内容)")
 
-    # ---------- 附件同步 ----------
+    # ---------- Attachment sync ----------
     def _sync_files(self):
-        """话题库中 topic_files 表 → report_meta (source='zsxq'), 含文本提取"""
+        """topic_files table of the topics DB → report_meta (source='zsxq'),
+        including text extraction."""
         with PgClient() as pg:
             last_file_id = self._get_sync_marker(pg, "last_file_id")
             rows = self.db.get_topic_files_after(last_file_id, self.limit)
@@ -159,12 +171,14 @@ class ZSXQ2PGSync:
                 max_file_id = max(max_file_id, file_id)
                 name = _nn(row.get("name") or "")
 
-                # 中文翻译版不入库 (保留英文原版; 下载层已跳过, 此处兜底本地已有文件)
+                # Chinese-translated versions are not ingested (keep the English
+                # original; the download layer already skips them — this is a
+                # fallback for files already on disk)
                 if is_chinese_translated(name):
                     skipped_cn += 1
                     continue
 
-                # 已在库中/曾被合并删除? 幂等跳过
+                # Already in DB / previously merged-and-deleted? Idempotent skip
                 exists = pg.fetch_one(_EXISTS_SQL, (file_id, file_id))
                 if exists:
                     total += 1
@@ -205,7 +219,8 @@ class ZSXQ2PGSync:
             logger.info(f"📎 附件已同步 (本批次 {total} 个"
                   + (f", 跳过中文版 {skipped_cn} 个" if skipped_cn else "") + ")")
 
-            # 回填: 先同步时文件未下载 (pending), 现在文件已到 -> 提取正文更新
+            # Backfill: at first sync the file was not yet downloaded (pending);
+            # now that it has arrived -> extract body text and update
             backfilled = 0
             pendings = pg.fetch_all(
                 f"SELECT report_id, file_path FROM {T_REPORT_META} "
@@ -224,21 +239,27 @@ class ZSXQ2PGSync:
             if backfilled:
                 logger.info(f"📎 附件正文回填 {backfilled} 个 (此前文件未就绪)")
 
-    # ---------- 群文件同步 (files 库, 猫哥研报圈等以文件为主的群) ----------
+    # ---------- Group-file sync (files DB; file-centric groups like Maoge's
+    #      research-report circle) ----------
     def _sync_group_files(self):
-        """文件库中 files 表 → report_meta (source='zsxq_file'), 提取已下载文件文本"""
+        """files table of the files DB → report_meta (source='zsxq_file'); extracts
+        text of already-downloaded files."""
         from core.helpers import sanitize_filename
         if self.files_db is None:
             return
 
-        # 同步水位: 群文件用 file_id 记录 (独立于 topic_files 的 last_file_id)
+        # Sync watermark: group files are tracked by file_id (independent of
+        # topic_files' last_file_id)
         with PgClient() as pg:
             marker_key = f"group_file_id_{self.group_id}"
             last_file_id = self._get_sync_marker(pg, marker_key)
-            # 音频文件不入研报库 (mp3/m4a/wav/aac/flac)
+            # Audio files are not ingested into the report warehouse
+            # (mp3/m4a/wav/aac/flac)
             _audio_exts = ('.mp3', '.m4a', '.wav', '.aac', '.flac')
-            # 全量取 completed (不用水位线: 下载完成顺序与 file_id 无关,
-            # 水位线已越过的老文件完成后会被永久漏掉); 幂等靠下方 exists 检查
+            # Fetch ALL completed files (no watermark here: download completion
+            # order is unrelated to file_id, so an older file that completes after
+            # the watermark has passed would be missed forever); idempotency comes
+            # from the exists check below
             rows = [r for r in self.files_db.get_completed_files()
                     if not (r.get("name") or "").lower().endswith(_audio_exts)]
 
@@ -251,12 +272,14 @@ class ZSXQ2PGSync:
 
                 name = _nn(row.get("name") or "")
 
-                # 中文翻译版不入库 (保留英文原版)
+                # Chinese-translated versions are not ingested (keep the English
+                # original)
                 if is_chinese_translated(name):
                     skipped_cn += 1
                     continue
 
-                # 幂等: 文件已在库中/曾被合并删除则跳过
+                # Idempotent: skip if the file is already in the DB or was
+                # previously merged-and-deleted
                 exists = pg.fetch_one(_EXISTS_SQL, (file_id, file_id))
                 if exists:
                     continue
@@ -264,7 +287,8 @@ class ZSXQ2PGSync:
                 content, chars, status = self._extract(file_path, row)
                 content = _nn(content)
 
-                # 关联话题文本 (若 PDF 提取为空, 用话题文本兜底)
+                # Attach the topic text (if PDF extraction came up empty, fall
+                # back to the topic text)
                 if (not content or chars < MIN_REPORT_CHARS) and row.get("topic_id"):
                     topic = self.db.get_topic(row["topic_id"]) if os.path.exists(self.db_path) else None
                     if topic:
@@ -303,16 +327,17 @@ class ZSXQ2PGSync:
             logger.info(f"📁 群文件已同步 (本批次 {total} 个"
                   + (f", 跳过中文版 {skipped_cn} 个" if skipped_cn else "") + ")")
 
-    # ---------- 工具方法 ----------
+    # ---------- Helper methods ----------
     def _extract(self, file_path, row) -> tuple:
-        """返回 (text, chars, status)"""
+        """Returns (text, chars, status)."""
         if file_path and os.path.exists(file_path):
             text = self.extractor.extract(file_path)
             if text:
                 return text, len(text), "extracted"
             return None, 0, "failed"
 
-        # 文件未下载: 降级用话题文本 (若话题文本较长且像研报正文)
+        # File not downloaded: degrade to the topic text (if it is long enough to
+        # look like a report body)
         topic = self.db.get_topic(row.get("topic_id")) if row.get("topic_id") else None
         if topic:
             text = strip_zsxq_tags(topic.get("text") or "")
@@ -321,19 +346,20 @@ class ZSXQ2PGSync:
         return None, 0, "failed"
 
     def _resolve_local_path(self, row) -> str:
-        """附件本地路径: 先查 local_path, 再按 sanitize 后文件名猜, 最后原始名"""
+        """Local path of an attachment: first check local_path, then guess by the
+        sanitized filename, finally the raw filename."""
         from core.helpers import sanitize_filename
         local = row.get("local_path")
         if local and os.path.exists(local):
             return local
 
-        # 磁盘上的文件名是 sanitize 后的 (下载器存储)
+        # Files on disk are stored under their sanitized name (by the downloader)
         name = row.get("name") or ""
         guess = os.path.join(self.download_dir, sanitize_filename(name))
         if os.path.exists(guess):
             return guess
 
-        # 最后一个兜底: 原始名
+        # Last-resort fallback: the raw filename
         raw_guess = os.path.join(self.download_dir, name)
         return raw_guess if os.path.exists(raw_guess) else None
 
@@ -366,10 +392,10 @@ class ZSXQ2PGSync:
             row = pg.fetch_one(f"SELECT count(*) AS cnt FROM {T_REPORT_FORECAST}")
             print(f"  预测提取 (report_forecast): {row['cnt'] if row else 0:,}")
 
-    # ---------- 解析辅助 ----------
+    # ---------- Parsing helpers ----------
     @staticmethod
     def _parse_date(s) -> str:
-        """'2026-08-16T10:00:00+08:00' → '2026-08-16', 失败返回 None"""
+        """'2026-08-16T10:00:00+08:00' → '2026-08-16'; returns None on failure."""
         if not s:
             return None
         return s[:10] if len(s) >= 10 else s
@@ -380,7 +406,7 @@ class ZSXQ2PGSync:
 
     @staticmethod
     def _derive_title(name_or_text) -> str:
-        """从文件名或正文首行推导标题"""
+        """Derive a title from the filename or the first line of the body."""
         s = (name_or_text or "").strip()
         if not s:
             return ""

@@ -1,15 +1,19 @@
 """
-每日增量数据同步调度器 (asyncio 后台任务, 后端常驻即调度常驻)
+Daily incremental data-sync scheduler (asyncio background task; scheduler lives as
+long as the backend does).
 
-调度规则:
-- 每交易日 18:00 触发 (Tushare 15:00-16:00 入库当日数据, 18:00 拉取稳妥)
-- 增量: 最近 5 个交易日行情 (daily/daily_basic/adj_factor) + 当周财务
-- 幂等: 重复执行安全 (断点续传 + upsert)
+Schedule rules:
+- Runs on every trading day at 18:00 (Tushare ingests the day's data at 15:00-16:00;
+  pulling at 18:00 is the safe choice)
+- Incremental: last 5 trading days of quotes (daily/daily_basic/adj_factor) + current
+  week's financials
+- Idempotent: safe to re-run (checkpoint resume + upsert)
 
-设计:
-- asyncio task 挂在 FastAPI lifespan
-- 纯标准库, 无外部依赖 (不用 APScheduler, 避免网络安装失败)
-- 支持手动触发接口 /admin/sync-today
+Design:
+- asyncio task attached to the FastAPI lifespan
+- Pure standard library, no external deps (no APScheduler, avoiding network-install
+  failures)
+- Manual trigger endpoint supported: /admin/sync-today
 """
 from __future__ import annotations
 
@@ -23,38 +27,42 @@ from tools.kline.calendar import is_trading_day
 
 logger = get_logger(__name__)
 
-# 调度时间: 每交易日 21:00 (Tushare 15-16点入库当日, 21:00 稳妥)
-# 可通过 config.yaml 的 schedule.sync_hour 覆盖
+# Schedule: 21:00 on every trading day (Tushare ingests the day's data at 15-16,
+# so 21:00 is safe)
+# Can be overridden via schedule.sync_hour in config.yaml
 from core.config import get_config as _cfg
 
 SYNC_HOUR = int(_cfg().get("schedule.sync_hour", 21))
 SYNC_MINUTE = int(_cfg().get("schedule.sync_minute", 0))
-# 增量回溯天数 (交易日)
+# Incremental lookback window (trading days)
 BACKFILL_DAYS = 5
-# 财报公告回溯天数 (日历天; 覆盖周末/节假日公告堆积)
+# Financial-report announcement lookback (calendar days; covers weekend/holiday
+# announcement pile-ups)
 FIN_BACKFILL_DAYS = 10
 
 
 def _run_financial_incremental(days: int) -> dict:
-    """线程池入口: 财报增量同步 (阻塞操作)"""
+    """Thread-pool entry: incremental financial-statement sync (blocking)."""
     from tools.market.sync_financial import run_financial_incremental
     return run_financial_incremental(days=days)
 
 
 def _run_dividend_daily(days: int) -> int:
-    """线程池入口: 分红送股按日增量 (3通道 x days 天 = 3*days 次调用)"""
+    """Thread-pool entry: per-day incremental dividends/bonus shares
+    (3 channels x days days = 3*days calls)."""
     from tools.market.sync_financial import run_dividend_daily
     return run_dividend_daily(days=days)
 
 
 def _run_disclosure_daily(days: int) -> int:
-    """线程池入口: 财报披露日期按日增量 (2通道 x days 天)"""
+    """Thread-pool entry: per-day incremental report disclosure dates
+    (2 channels x days days)."""
     from tools.market.sync_financial import run_disclosure_daily
     return run_disclosure_daily(days=days)
 
 
 class DailySyncScheduler:
-    """每日增量同步调度器"""
+    """Daily incremental-sync scheduler."""
 
     def __init__(self):
         self._task: Optional[asyncio.Task] = None
@@ -63,12 +71,12 @@ class DailySyncScheduler:
         self.last_result: Optional[dict] = None
 
     def _next_run_time(self, now: Optional[datetime] = None) -> datetime:
-        """计算下次运行时间 (今天18:00 或 明天18:00)"""
+        """Compute the next run time (today 18:00 or tomorrow 18:00)."""
         now = now or datetime.now()
         target = now.replace(hour=SYNC_HOUR, minute=SYNC_MINUTE,
                              second=0, microsecond=0)
         if now >= target:
-            # 已过今天18:00 -> 明天
+            # Already past today 18:00 -> tomorrow
             target += timedelta(days=1)
         return target
 
@@ -78,12 +86,12 @@ class DailySyncScheduler:
     async def _run_sync(self, include_financial: bool = True,
                         start: Optional[date] = None,
                         end: Optional[date] = None) -> dict:
-        """执行一次增量同步 (行情 + 可选财报公告)"""
+        """Run one incremental sync (quotes + optional financial announcements)."""
         logger.info("开始每日增量同步")
         from tools.market.sync_tushare import TusharePgSyncer
 
         end = end or date.today()
-        # 回溯 N 个交易日 (或调用方指定的 start)
+        # Look back N trading days (or use the caller-specified start)
         if start is None:
             start = end
             back = 0
@@ -94,7 +102,8 @@ class DailySyncScheduler:
 
         syncer = TusharePgSyncer()
         try:
-            # 单次 run 多表 (内部复用连接/白名单/日历); 阻塞 IO 放线程池
+            # One run covers multiple tables (internally reuses
+            # connection/whitelist/calendar); blocking IO goes to the thread pool
             result = await asyncio.to_thread(
                 syncer.run, start, end,
                 ["daily", "daily_basic", "adj_factor"],
@@ -103,7 +112,8 @@ class DailySyncScheduler:
             logger.error(f"增量同步异常: {e}")
             result = {"error": str(e)}
 
-        # 财报增量: 拉取最近 FIN_BACKFILL_DAYS 天公告的财报 (放到线程池, 不阻塞事件循环)
+        # Financial-report increment: pull reports announced within the last
+        # FIN_BACKFILL_DAYS days (run in the thread pool, not blocking the event loop)
         if include_financial:
             try:
                 fin_result = await asyncio.to_thread(
@@ -115,7 +125,8 @@ class DailySyncScheduler:
                 if isinstance(result, dict):
                     result["financial"] = {"error": str(e)}
 
-            # 分红送股增量: 按日批量三通道 (ann_date/imp_ann_date/ex_date), 每日 6 次调用
+            # Dividend/bonus-share increment: per-day batch over three channels
+            # (ann_date/imp_ann_date/ex_date), 6 calls per day
             try:
                 div_rows = await asyncio.to_thread(
                     _run_dividend_daily, 2)
@@ -126,7 +137,8 @@ class DailySyncScheduler:
                 if isinstance(result, dict):
                     result["dividend"] = {"error": str(e)}
 
-            # 财报披露日期增量: 按日双通道 (ann_date 计划公告/变更, actual_date 实际披露)
+            # Disclosure-date increment: per-day over two channels (ann_date =
+            # planned announcement/changes, actual_date = actual disclosure)
             try:
                 dis_rows = await asyncio.to_thread(
                     _run_disclosure_daily, 2)
@@ -145,16 +157,16 @@ class DailySyncScheduler:
     @staticmethod
     def _expected_latest_trade_date(now: Optional[datetime] = None) -> Optional[date]:
         """
-        计算数据'应当已入库'的最新交易日:
-        - 交易日 16:00 后 -> 今天 (Tushare 15-16 点入库当日数据)
-        - 其他情况       -> 上一个交易日
+        Compute the latest trading date whose data 'should already be ingested':
+        - After 16:00 on a trading day -> today (Tushare ingests the day's data at 15-16)
+        - Otherwise                     -> previous trading day
         """
         now = now or datetime.now()
         d = now.date()
         if is_trading_day(d) and now.hour >= 16:
             return d
         d -= timedelta(days=1)
-        for _ in range(20):  # 覆盖最长长假
+        for _ in range(20):  # covers the longest holidays
             if is_trading_day(d):
                 return d
             d -= timedelta(days=1)
@@ -162,9 +174,12 @@ class DailySyncScheduler:
 
     async def _catchup_if_missed(self):
         """
-        启动自检补漏: 任意时间启动, 对比"应有最新交易日"与库内 daily 实际最新,
-        存在缺口则立即补齐 (覆盖: 调度时段宕机 / 周末重启 / 长假后重启 /
-        PG 不可达漏跑等全部场景). 只补行情 (分钟级); 财报留给 21:00 例行任务.
+        Startup self-check catch-up: whenever started, compare the 'expected latest
+        trading date' with the actual latest daily row in the DB; if there is a gap,
+        backfill it immediately (covers: downtime during the scheduled slot /
+        weekend restarts / post-holiday restarts / missed runs due to PG being
+        unreachable — all scenarios). Quotes only (minutes-level work); financials
+        are left to the routine 21:00 task.
         """
         expected = self._expected_latest_trade_date()
         if expected is None:
@@ -184,7 +199,8 @@ class DailySyncScheduler:
             logger.info(f"启动自检: 行情已最新 (daily 至 {latest} >= 应有 {expected}), 无需补漏")
             return
 
-        # 缺口起点: 库内最新次日; 无数据则回溯 10 个交易日
+        # Gap start: the day after the DB's latest; with no data, look back 10
+        # trading days
         if latest is not None:
             start = latest + timedelta(days=1)
         else:
@@ -206,15 +222,16 @@ class DailySyncScheduler:
             logger.error(f"启动补漏失败: {e}")
 
     async def _loop(self):
-        """调度循环"""
+        """Scheduling loop."""
         logger.info(f"增量同步调度器已启动 (每日 {SYNC_HOUR}:{SYNC_MINUTE:02d})")
 
-        # 启动自检: 对比应有最新交易日与库内实际, 有缺口立即补齐 (任意时间/周末/长假后均生效)
+        # Startup self-check: compare expected latest trading date with the DB;
+        # backfill any gap immediately (works at any start time, weekends, post-holiday)
         await self._catchup_if_missed()
 
         while not self._stop_event.is_set():
             next_run = self._next_run_time()
-            # 只在交易日跑
+            # Run on trading days only
             if is_trading_day(next_run.date()):
                 wait = self._seconds_until(next_run)
                 logger.info(f"下次增量同步: {next_run} (等待 {wait:.0f}s)")
@@ -222,11 +239,11 @@ class DailySyncScheduler:
                     await asyncio.wait_for(
                         self._stop_event.wait(), timeout=wait
                     )
-                    break  # 收到停止信号
+                    break  # stop signal received
                 except asyncio.TimeoutError:
                     await self._run_sync()
             else:
-                # 非交易日 -> 跳到明天
+                # Non-trading day -> skip to tomorrow
                 wait = self._seconds_until(next_run)
                 logger.debug(f"非交易日 {next_run.date()}, 等待 {wait:.0f}s")
                 try:
@@ -238,14 +255,14 @@ class DailySyncScheduler:
                     continue
 
     def start(self):
-        """启动调度任务"""
+        """Start the scheduler task."""
         if self._task is None or self._task.done():
             self._stop_event.clear()
             self._task = asyncio.create_task(self._loop())
             logger.info("每日增量调度器已启动")
 
     async def stop(self):
-        """停止调度任务"""
+        """Stop the scheduler task."""
         self._stop_event.set()
         if self._task and not self._task.done():
             try:
@@ -255,11 +272,11 @@ class DailySyncScheduler:
         logger.info("每日增量调度器已停止")
 
     async def trigger_now(self) -> dict:
-        """手动立即触发一次同步"""
+        """Manually trigger one sync immediately."""
         return await self._run_sync()
 
 
-# 单例
+# Singleton
 _scheduler: Optional[DailySyncScheduler] = None
 
 

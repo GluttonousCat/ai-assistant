@@ -1,18 +1,18 @@
 # -*- encoding: utf-8 -*-
 """
-每日定时抓取知识星球文件
+Daily scheduled fetch of Zhixingqiu (knowledge-planet) files.
 
-用途: 猫哥的研报圈等以文件为主的群组, 每天 7/23 二时段将当天新增文件下载到本地.
+Purpose: for file-centric groups such as Maoge's research-report circle, download each day's new files locally at the two daily slots 07:00/23:00.
 
-流程:
-  1. 收集文件列表 (增量, 只新增不在库中的文件)
-  2. 下载待下载文件 (每次限 N 个, 使用反检测强制间隔)
+Flow:
+  1. Collect the file list (incremental; only add files not yet in the DB)
+  2. Download pending files (limit N per run, using anti-detection forced intervals)
 
-用法:
-  python -m scripts.daily_fetch_zxsq --group 51288148188224 --max-fetch 10
-  python -m scripts.daily_fetch_zxsq --group 51288148188224 --max-fetch 10 --pages 5
+Usage:
+  python -m jobs.daily_fetch_zxsq --group 51288148188224 --max-fetch 10
+  python -m jobs.daily_fetch_zxsq --group 51288148188224 --max-fetch 10 --pages 5
 
-Windows 定时任务 (schtasks) / Linux cron 示例见文件末尾注释.
+Windows scheduled task (schtasks) / Linux cron examples: see the comments at the end of this file.
 """
 from __future__ import annotations
 
@@ -33,27 +33,31 @@ from core.paths import PathManager
 
 def _process_one_report(group_id: str) -> str:
     """
-    单篇研报入库流水线: PG 同步(增量, 拿到新入库 report_id)
-      → 新研报逐篇 [LLM 元数据 + 深度提取(评级/盈利预测/tags)]
-      → 去重合并.
-    在每个文件下载完成后立即调用, 不等整批结束 —— 深度提取跟上下载节奏,
-    每篇处理完即 analysis_status='done', 前端立即可用.
-    (图片型 PDF 由深度提取转后台 OCR, OCR 完成后自动接续提取, 见 ReportSkill)
-    返回 'ok' / 'noop' / 'error: ...' / 'ok+extracted N'
+    Per-report ingestion pipeline: PG sync (incremental, returns newly ingested report_ids)
+      → for each new report: [LLM metadata + deep extraction (rating/forecasts/tags)]
+      → dedup merge.
+    Called immediately after each file finishes downloading, not after the whole batch —
+    deep extraction keeps pace with the download cadence; each report becomes
+    analysis_status='done' as soon as processed and is immediately usable in the frontend.
+    (Image-only PDFs are routed by deep extraction to background OCR; extraction resumes
+    automatically after OCR completes — see ReportSkill)
+    Returns 'ok' / 'noop' / 'error: ...' / 'ok+extracted N'
     """
     new_ids: list = []
     try:
         from jobs.sync_zxsq_to_pg import ZSXQ2PGSync
         sync = ZSXQ2PGSync(str(group_id))
-        new_ids = sync.run() or []  # 增量水位线: 只处理新下载的文件, 秒级
+        new_ids = sync.run() or []  # Incremental watermark: only newly downloaded files are processed, seconds-fast
     except Exception as e:
         return f"error: pg_sync {e}"
 
     extracted = 0
     try:
         if new_ids:
-            # 只对刚入库的 PDF/docx 做单篇 LLM 分析 (精准定位, 不受旧积压影响);
-            # 话题文本条目 (txt) 由 merge 归并进同话题 PDF, 不单独消耗 LLM
+            # Run per-report LLM analysis only on just-ingested PDF/docx (precisely
+            # targeted, unaffected by old backlog);
+            # topic text entries (txt) are merged by merge() into the same topic's PDF
+            # and do not consume LLM calls separately
             from storage.pg import PgClient
             with PgClient() as pg:
                 rows = pg.fetch_all(
@@ -68,7 +72,7 @@ def _process_one_report(group_id: str) -> str:
                 for r in docs:
                     rid = r["report_id"]
                     try:
-                        analyze_report_meta(rid)  # 元数据秒级 (仅文件名)
+                        analyze_report_meta(rid)  # Metadata takes seconds (filename only)
                         ctx = ReportSkill()(SkillContext(user_input="", params={
                             "mode": "extract", "report_id": rid, "limit": 1}))
                         if ctx.error:
@@ -78,7 +82,7 @@ def _process_one_report(group_id: str) -> str:
                     except Exception as e:
                         logger.warning(f"研报 #{rid} 单篇分析失败: {e}")
         else:
-            # 无新文件: 顺手清理积压元数据 (最旧优先)
+            # No new files: opportunistically clear pending metadata (oldest first)
             from tools.finance.report_meta_analysis import analyze_pending
             analyze_pending(limit=5)
     except Exception as e:
@@ -96,7 +100,7 @@ def _process_one_report(group_id: str) -> str:
 
 def run_once(group_id: str, max_fetch: int = 10, max_pages: int = 10,
              download_only_files: bool = False, crawl_topics: bool = True) -> dict:
-    """执行一次抓取, 返回统计"""
+    """Run one fetch round; returns statistics."""
     cookie = get_config().zsxq_cookie
     if not cookie:
         logger.error("未配置 ZSXQ_COOKIE")
@@ -104,12 +108,14 @@ def run_once(group_id: str, max_fetch: int = 10, max_pages: int = 10,
 
     result = {"time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "group": group_id}
 
-    # 0. 顺带爬最新话题 (研报核心观点文本都附在话题里, 每天更新保持同步)
+    # 0. Also crawl the latest topics (research-report core-view text lives in the
+    #    topics; crawl daily to stay in sync)
     if crawl_topics:
         from tools.zsxq.crawler import ZSXQCrawler
         try:
             crawler = ZSXQCrawler(cookie, str(group_id))
-            # 话题爬取间隔走 config (zsxq.crawl_interval_min/max), 不再硬编码
+            # Topic crawl intervals come from config (zsxq.crawl_interval_min/max),
+            # no longer hardcoded
             _cfg = get_config()
             crawler.set_custom_intervals(
                 crawl_interval_min=float(_cfg.get("zsxq.crawl_interval_min", 1.5)),
@@ -121,23 +127,26 @@ def run_once(group_id: str, max_fetch: int = 10, max_pages: int = 10,
 
     dl = FileDownloader(cookie, str(group_id))
 
-    # 1. 收集文件列表
+    # 1. Collect the file list
     if not download_only_files:
         collect = dl.collect_files(max_pages=max_pages)
         result["collect"] = collect
 
-    # 2. 下载待下载文件 (逐个: 下载一个 → 立即分析入库; 长休眠与分析并行覆盖)
+    # 2. Download pending files (one by one: download one → immediately ingest and
+    #    analyze; long sleeps run in parallel with, and cover, the analysis time)
     before_stats = dl.db.get_stats()
     pending_before = before_stats.get("pending", 0)
     result["pending_before"] = pending_before
 
     processed = 0
     if pending_before > 0 and max_fetch > 0:
-        # 长休眠间隔由 FileDownloader 按 config 初始化 (zsxq.download_*),
-        # 分析耗时被长休眠自然覆盖 —— 此处不再硬编码覆盖
+        # Long-sleep intervals are initialized by FileDownloader from config
+        # (zsxq.download_*); analysis time is naturally covered by the long sleeps —
+        # no hardcoded overrides here anymore
         n_done = 0
         while n_done < max_fetch:
-            # 先重试此前失败的任务 (每轮最多 3 个, fail_count<=5), 再下新文件
+            # First retry previously failed tasks (at most 3 per round, fail_count<=5),
+            # then download new files
             retried = 0
             try:
                 for row in dl.db.get_retry_files(limit=3):
@@ -151,12 +160,12 @@ def run_once(group_id: str, max_fetch: int = 10, max_pages: int = 10,
             except Exception as e:
                 logger.warning(f"重试重置失败: {e}")
 
-            # 逐个下载 (download_pending 内部会按 pending 状态取)
+            # Download one by one (download_pending internally picks by pending status)
             stats = dl.download_pending(max_files=1)
             if stats.get("total", 0) == 0:
                 break
             n_done += 1
-            # 立即处理刚下载的文件
+            # Immediately process the just-downloaded file
             status = _process_one_report(group_id)
             processed += 1
             logger.info(f"🔬 已入库分析 {processed} 篇 ({status})")
@@ -167,7 +176,8 @@ def run_once(group_id: str, max_fetch: int = 10, max_pages: int = 10,
 
     dl.close()
 
-    # 3. 收尾: 兜底同步 + 深度提取 (拿到本轮漏网/去重后的研报)
+    # 3. Wrap-up: fallback sync + deep extraction (pick up reports missed this round
+    #    or produced by dedup)
     try:
         from jobs.sync_zxsq_to_pg import ZSXQ2PGSync
         sync = ZSXQ2PGSync(str(group_id))
@@ -194,7 +204,7 @@ def main():
         sys.exit(1)
 
     if args.check:
-        # 只检查: 列出当天文件
+        # Check only: list today's files
         _check_today(group_id)
         return
 
@@ -209,7 +219,7 @@ def main():
 
 
 def _check_today(group_id: str):
-    """检查今天新增的文件 (不下载)"""
+    """Check files added today (without downloading)."""
     pm = PathManager()
     db_path = pm.get_files_db_path(str(group_id))
     if not os.path.exists(db_path):

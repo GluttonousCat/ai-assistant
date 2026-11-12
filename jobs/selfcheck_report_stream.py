@@ -1,5 +1,5 @@
 # -*- encoding: utf-8 -*-
-"""extract_stream 事件流 mock 自检 (不连 PG / 不调 LLM)"""
+"""extract_stream event-stream mock self-check (no PG connection / no LLM calls)."""
 import sys, types
 sys.path.insert(0, '.')
 
@@ -42,12 +42,13 @@ class FakePg:
     def fetch_all(self, sql, args=None): return []
     def execute(self, sql, args=None):
         self.sqls.append((sql, args))
-        return 1  # rowcount (0 = 记录已被 merge 删除)
+        return 1  # rowcount (0 = the record was already deleted by merge)
 
 
 class FakeLLM:
     def stream(self, prompt, **kw):
-        # 思考开关由 LLMClient._default_kwargs 统一注入, 业务层不传 — kw 应为空
+        # The thinking toggle is injected uniformly by LLMClient._default_kwargs and
+        # never passed by business code — kw must be empty
         assert not kw, f"业务层不应传思考参数: {kw}"
         for i in range(0, len(FAKE_JSON), 40):
             yield FAKE_JSON[i:i + 40]
@@ -89,14 +90,14 @@ def run_case(name, row_over=None, patch_vision=None):
     return events, pg
 
 
-# 用例 1: 正常链路 (正文就绪 -> 流式提取 -> 解析 -> 入库 -> done)
+# Case 1: normal chain (body ready -> streaming extraction -> parse -> persist -> done)
 events, pg = run_case("normal")
 seq = [e["type"] for e in events]
 assert seq[0] == "stage" and events[-1]["type"] == "done", seq
 assert "delta" in seq and seq.count("data") == 1 and "error" not in seq, seq
 data_ev = [e for e in events if e["type"] == "data"][0]["data"]
 assert data_ev["forecast_count"] == 1 and data_ev["market"] == "A股", data_ev
-# 盈利预测必须入库: DELETE + INSERT fin.report_forecast
+# Forecasts must be persisted: DELETE + INSERT fin.report_forecast
 sqls = " || ".join(s for s, _ in pg.sqls)
 assert "DELETE FROM fin.report_forecast" in sqls, "forecast DELETE 未执行"
 assert "INSERT INTO fin.report_forecast" in sqls, "forecast INSERT 未执行"
@@ -104,17 +105,18 @@ assert "analysis_status='done'" in sqls, "analysis_status 未置 done"
 joined = "".join(e.get("text", "") for e in events if e["type"] == "delta")
 assert joined == FAKE_JSON, "delta 流拼接不完整"
 
-# 用例 2: 图片型 PDF -> 转 OCR 提示 + error (不标 failed)
+# Case 2: image-only PDF -> OCR handoff notice + error (not marked failed)
 events2, pg2 = run_case(
     "image-pdf",
     row_over={"content_chars": 0, "content_text": None, "file_path": "D:/x.pdf"},
     patch_vision=lambda row: False,
 )
 seq2 = [e["type"] for e in events2]
-assert seq2[-1] == "error" and "delta" not in seq2, seq2  # done 由 API 层补发
+assert seq2[-1] == "error" and "delta" not in seq2, seq2  # done is re-emitted by the API layer
 assert not any("analysis_status='failed'" in s for s, _ in pg2.sqls), "OCR 排队不应标 failed"
 
-# 用例 3: 提取期间记录被 merge 删除 (UPDATE rowcount=0) -> 丢弃结果, 不插 forecast
+# Case 3: record deleted by merge during extraction (UPDATE rowcount=0) ->
+# discard the result, do not insert forecasts
 skill3 = mod.ReportSkill()
 pg3 = FakePg()
 orig_exec = pg3.execute
@@ -123,7 +125,7 @@ def exec3(sql, args=None):
     pg3.sqls.append((sql, args))
     if sql.startswith("UPDATE fin.report_meta") and not state["dropped"]:
         state["dropped"] = True
-        return 0  # 模拟记录已被删除
+        return 0  # simulate the record having been deleted
     return 1
 pg3.execute = exec3
 mod.PgClient = lambda: pg3
