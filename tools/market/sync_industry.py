@@ -1,10 +1,11 @@
 """
-申万 (SW2021) 行业分类同步
-- index_classify: 一级/二级行业定义 (31 L1 + 134 L2 + L3)
-- stock_industry: 个股 -> 二级行业成分映射
+Shenwan (SW2021) industry classification sync
+- index_classify: L1/L2 industry definitions (31 L1 + 134 L2 + L3)
+- stock_industry: stock -> L2 industry membership mapping
 
-注意: Tushare 无"东财行业", 申万是 A 股权威行业标准.
-用法:
+Note: Tushare has no "Eastmoney industry"; Shenwan is the authoritative
+A-share industry standard.
+Usage:
     python -m tools.market.sync_industry
 """
 from __future__ import annotations
@@ -22,13 +23,13 @@ from storage.pg_schema import DDL_INDEX_CLASSIFY, DDL_STOCK_INDUSTRY
 
 logger = get_logger(__name__)
 
-API_SLEEP = 1.3  # index_member 接口限频较低
+API_SLEEP = 1.3  # index_member API has a lower rate limit
 
 SRC = "SW2021"
 
 
 def sync_classify(pro) -> int:
-    """同步行业分类表 (全部层级)"""
+    """Sync the industry classification table (all levels)"""
     df = pro.index_classify(level="L1", src=SRC)
     all_df = df
     time.sleep(API_SLEEP)
@@ -52,7 +53,7 @@ def sync_classify(pro) -> int:
 
 
 def sync_members(pro) -> int:
-    """同步二级行业成分股"""
+    """Sync L2 industry member stocks"""
     with PgClient() as pg:
         l2_codes = pg.fetch_all(
             "SELECT index_code FROM stock.index_classify "
@@ -95,7 +96,7 @@ def _concat(a, b):
 
 
 def backfill_stock_basic() -> int:
-    """将当前行业回填到 stock_basic (industry_l1/l2 冗余列)"""
+    """Backfill current industry into stock_basic (denormalized industry_l1/l2 columns)"""
     with PgClient() as pg:
         pg.execute("""
             ALTER TABLE stock.stock_basic

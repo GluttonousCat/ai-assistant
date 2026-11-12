@@ -1,5 +1,5 @@
 # -*- encoding: utf-8 -*-
-"""PDF 文本层提取 + 魔数校验"""
+"""PDF text-layer extraction + magic-number check"""
 from __future__ import annotations
 
 from core.logger import get_logger
@@ -8,7 +8,8 @@ logger = get_logger(__name__)
 
 
 def is_pdf_file(path: str) -> bool:
-    """%PDF 魔数校验 (防错误页/HTML 存成假 PDF; 供下载器等落盘后校验)"""
+    """%PDF magic-number check (guards against error pages / HTML saved as
+    fake PDFs; used by downloaders for post-save validation)"""
     try:
         with open(path, "rb") as f:
             return f.read(4) == b"%PDF"
@@ -17,9 +18,11 @@ def is_pdf_file(path: str) -> bool:
 
 
 def extract_text(path: str) -> str:
-    """PDF 文本层全文提取。降级链: fitz → pdfplumber → pypdf, 全败返回空串。
+    """Full PDF text-layer extraction. Fallback chain: fitz → pdfplumber →
+    pypdf; returns an empty string when all fail.
 
-    注意: 图片型/扫描件 PDF 文本层为空 (返回空串), 需走 ocr_pdf 视觉识别。
+    Note: image-based/scanned PDFs have an empty text layer (empty string
+    returned); route them to ocr_pdf for vision recognition.
     """
     try:
         import fitz
@@ -27,7 +30,7 @@ def extract_text(path: str) -> str:
             return "\n".join(p.get_text() for p in doc)
     except ImportError:
         pass
-    except Exception as e:  # noqa: BLE001 损坏文件降级链兜底
+    except Exception as e:  # noqa: BLE001 corrupted files fall through the chain
         logger.warning(f"fitz 提取失败, 降级 pdfplumber: {e}")
 
     try:

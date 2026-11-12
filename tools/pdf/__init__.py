@@ -1,22 +1,23 @@
 # -*- encoding: utf-8 -*-
 """
-PDF 通用工具层 (与领域无关的原语集)
+Generic PDF tool layer (domain-agnostic primitives).
 
-能力 (详细签名见各模块):
-    extract_text(path)            文本层全文 (fitz→pdfplumber→pypdf 降级链)
-    is_pdf_file(path)             %PDF 魔数校验
-    is_image_pdf(path)            图片型/扫描件判定 (零文本层+每页大图)
-    render_pages_png(path, ...)   页渲染 base64 PNG
-    ocr_pdf(path, prompt, vision_llm, ...)   视觉 OCR 整册识别 (prompt/视觉客户端必填)
-    ocr_page_png(b64, prompt, vision_llm)    单页视觉 OCR
-    extract_tables(path, ...)     pdfplumber 表格提取
+Capabilities (see each module for full signatures):
+    extract_text(path)            full text layer (fitz → pdfplumber → pypdf fallback chain)
+    is_pdf_file(path)             %PDF magic-number check
+    is_image_pdf(path)            image-based/scanned detection (empty text layer + image per page)
+    render_pages_png(path, ...)   render pages as base64 PNG
+    ocr_pdf(path, prompt, vision_llm, ...)   whole-document vision OCR (prompt/vision client are required)
+    ocr_page_png(b64, prompt, vision_llm)    single-page vision OCR
+    extract_tables(path, ...)     pdfplumber table extraction
 
-边界约定: 领域知识一律不进本层 ——
-    - 金融研报版式 prompt → skills/report/prompts.py (VISION_OCR_PROMPT)
-    - 视觉模型客户端由调用方注入 (vision_llm 参数, 如 harness.llm.get_vision_llm()),
-      本层不 import harness.llm
-    - 券商研报噪音清洗/多格式分派 → tools/finance/report_extractor.py
-    - 年报章节切片 → skills/content/annual_report.py
+Boundary convention: no domain knowledge ever enters this layer —
+    - financial research-report layout prompts → skills/report/prompts.py (VISION_OCR_PROMPT)
+    - the vision model client is injected by the caller (vision_llm param,
+      e.g. harness.llm.get_vision_llm()); this layer must not import
+      harness.llm
+    - broker-report noise cleaning / multi-format dispatch → tools/finance/report_extractor.py
+    - annual-report section slicing → skills/content/annual_report.py
 """
 from tools.pdf.text import extract_text, is_pdf_file
 from tools.pdf.render import is_image_pdf, render_pages_png

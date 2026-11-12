@@ -1,36 +1,52 @@
 # -*- encoding: utf-8 -*-
 """
-定期报告解析: 报告 PDF → MD → {items, sections} JSON (纯文件产物, 不碰任何数据库)
+Periodic-report parsing: report PDF → MD → {items, sections} JSON (pure file
+products, touches no database).
 
-覆盖类别 (Q1/Q3/H1/AR):
-- AR 年报 (ndbg) / H1 半年报 (bndbg) — 同构解析, 当前解析覆盖面;
-  H1 与 AR 章节同构 (管理层讨论与分析/风险), AR 为图片版无文本层时 H1 顶上
-- Q1 一季报 (yjdbg) / Q3 三季报 (sjdbg) — 下载与元数据已支持 (client/downloader),
-  解析暂未覆盖 (短报告无三~七节结构, 需另立规则, 后续按需扩展)
+Covered categories (Q1/Q3/H1/AR):
+- AR annual report (ndbg) / H1 semi-annual report (bndbg) — isomorphic
+  parsing, the current parsing coverage; H1 chapters mirror AR (management
+  discussion & analysis / risks), so H1 steps in when the AR is an
+  image-only PDF without a text layer
+- Q1 (yjdbg) / Q3 (sjdbg) — download and metadata already supported
+  (client/downloader), parsing not yet covered (short reports lack the
+  chapter-3-to-7 structure; separate rules needed, extend on demand later)
 
-链路:
-  downloads/<ts_code>/<year>_<cat>.pdf (downloader 产物, 文件在盘即输入)
-    → MD   (pymupdf4llm 主路; 失败/过短降级 文本层链 fitz→pdfplumber→pypdf)
-    → items    第二章精确两项 (kpi3y/nonrecurring, 词表+相似度兜底)
-    → sections 三~七节按 L1 小节全量 (SECTION_RULES): mdna 全量/治理·事项关键词/
-               股东整节+节首前文/债券<500字跳过; 结构不符的节跳过并记审计
+Pipeline:
+  downloads/<ts_code>/<year>_<cat>.pdf (downloader product; file on disk = input)
+    → MD       (pymupdf4llm main path; on failure/over-short output fall back
+               to the text-layer chain fitz→pdfplumber→pypdf)
+    → items    the two exact chapter-2 items (kpi3y/nonrecurring,
+               vocab + similarity fallback)
+    → sections chapters 3-7 in full by L1 subsection (SECTION_RULES): mdna in
+               full / governance·matters by keywords / shareholders whole
+               chapter + head preamble / bonds skipped when <500 chars;
+               structurally non-conforming chapters are skipped and recorded
+               in the audit
     → output/cninfo/md/<ts_code>/<year>_<cat>.md + _items.json
-  证据抽取 (research 的 annual_source 调用): sections 小节 → LLM (客户端由
-    调用方注入) → 四类原子事实 operating/segment/statement/risk, 每条带
-    quote/confidence/period 年报口径 (2026-10 自 annual_source 迁入;
-    曾独立 evidence.py, 同为报告处理 2026-10-11 并入本模块)
+  Evidence extraction (called by research's annual_source): sections
+    subsections → LLM (client injected by the caller) → four kinds of atomic
+    facts operating/segment/statement/risk, each with quote/confidence/period
+    in annual-report convention (migrated in 2026-10 from annual_source;
+    formerly a standalone evidence.py, merged into this module 2026-10-11 as
+    report handling)
 
-小节切分: 编号形态判兄弟 (一、=2.5 / N.M=3.0 / N.M.K=+0.1·段 / （一）=3.5),
-# 层数不可信 — 澜起 L1 与 L2 同为 ####; 兴业 L1 混用 ####/#####/######。
-节定位双方言+混合式 (第X节/章锚≥4 / 主题式动态选节级)。
-方言/清洗/守卫的实证依据见宿主项目 docs/agents/profile_extraction_handoff.md §5。
+Subsection splitting: the numbered form decides sibling rank (一、=2.5 /
+N.M=3.0 / N.M.K=+0.1·segment / （一）=3.5); # heading depth is untrustworthy
+— Montage's L1 and L2 are both ####; Industrial Bank's L1 mixes
+####/#####/######. Chapter location is dual-dialect + hybrid (第X节/章
+anchors >=4 / topic-style dynamic heading-level choice). Empirical basis for
+dialects/cleaning/guards: host project
+docs/agents/profile_extraction_handoff.md §5.
 
-输入只认证券代码 (6 位或 ts_code); 名称解析归调用方 (agent 词表)。
-存储说明: 当前产物为 JSON 文件; 结构化存储架构另行设计 (勿在此加库依赖)。
+Input accepts security codes only (6-digit or ts_code); name resolution is
+the caller's job (agent vocab). Storage note: current products are JSON
+files; a structured-storage design is separate (do not add DB dependencies
+here).
 
-用法:
+Usage:
     python -m tools.cninfo.parse 300308 [--year 2025] [--audit]
-    python -m tools.cninfo.parse --index 000300.SH --year 2025   # 指数成分批量
+    python -m tools.cninfo.parse --index 000300.SH --year 2025   # index-constituent batch
 """
 from __future__ import annotations
 
@@ -57,15 +73,16 @@ MD_ROOT = Path("output/cninfo/md")
 
 
 def _extract_text(path: str) -> str:
-    """PDF 文本层全文提取。降级链: fitz → pdfplumber → pypdf, 全败返回空串。
-    (图片型/扫描件 PDF 文本层为空, 需视觉 OCR, 不在本模块范围)"""
+    """Full-text extraction from the PDF text layer. Fallback chain:
+    fitz → pdfplumber → pypdf; empty string if all fail. (Image-only/scanned
+    PDFs have an empty text layer and need visual OCR — out of scope here.)"""
     try:
         import fitz
         with fitz.open(path) as doc:
             return "\n".join(p.get_text() for p in doc)
     except ImportError:
         pass
-    except Exception as e:  # noqa: BLE001 损坏文件降级链兜底
+    except Exception as e:  # noqa: BLE001 fallback-chain catch-all for damaged files
         logger.warning(f"fitz 提取失败, 降级 pdfplumber: {e}")
 
     try:
@@ -91,8 +108,9 @@ def _extract_text(path: str) -> str:
 
 
 def to_markdown(path: str) -> str:
-    """PDF → MD。pymupdf4llm 主路 (margins 剥页眉页脚); 失败/结果过短降级
-    纯文本层 + 分页标记 (保章节可定位性)。"""
+    """PDF → MD. pymupdf4llm main path (margins strip headers/footers); on
+    failure/over-short output fall back to the plain text layer + page
+    markers (keeps chapters locatable)."""
     try:
         import pymupdf4llm
         md = pymupdf4llm.to_markdown(doc=path, margins=(45, 45, 0, 0),
@@ -115,7 +133,7 @@ def to_markdown(path: str) -> str:
     return "".join(out)
 
 
-# ---------------- ① 定位与② 边界 ----------------
+# ---------------- ① location & ② boundaries ----------------
 
 _L1_NUM = re.compile(r"^[一二三四五六七八九十]+、\s*\S{0,50}$")
 _L2_NUM = re.compile(r"^[（(][一二三四五六七八九十]+[）)]\s*\S{0,50}$")
@@ -123,19 +141,22 @@ _D_NUM = re.compile(r"^\d+(?:\.\d+)+\s*\S{0,50}$")
 _HEAD = re.compile(r"^(#{1,6})\s+\S")
 _PAGE_NO = re.compile(r"^\d+\s*/\s*\d+$")
 
-# 勾选框后缀 '√适用□不适用' 常贴在标题尾 (万华600309/中铝601600 实证,
-# 曾把非标记行守卫挤爆致 miss); 独立成行时是纯噪声
+# The checkbox suffix '√适用□不适用' often sticks to the end of titles (seen
+# in Wanhua 600309 / Chalco 601600; it once blew up the non-marker-line guard
+# and caused misses); on its own line it is pure noise
 _CHECKBOX = re.compile(r"[□√]\s*(?:不\s*)?适\s*用(?:\s*[□√]\s*(?:不\s*)?适\s*用)?")
 
 _BARE_STRIP = re.compile(r"[#\s、。（(）)0-9.\-—第三节第四五六年度近<>*_/a-zA-Z]")
 
 
 def marker_rank(line: str) -> Optional[float]:
-    """行标记秩 (浅→深)。编号优先于#层级 — 实证澜起 L1(六、)与L2((一))同为####,
-    #层数分不了兄弟, 必须按编号种类判。秩: #标题=层数; 一、=2.5; N.M=3.0;
-    N.M.K=3.0+0.1·多段数 (兴业 '4.1.6'/'4.1.6.1' 与 '4.1' 同秩曾误切边界);
-    （一）=3.5。** 粗体先剥 (兴业 '##### **4.1.6**' 实证)。"""
-    line = _CHECKBOX.sub("", line.rstrip()).rstrip()   # 尾缀勾选框剥离
+    """Line marker rank (shallow→deep). Numbering beats # level — observed:
+    Montage's L1 (六、) and L2 ((一)) are both ####, so # depth cannot tell
+    siblings apart; the numbering kind must decide. Ranks: # heading = level;
+    一、=2.5; N.M=3.0; N.M.K=3.0+0.1·extra segments (Industrial Bank's
+    '4.1.6'/'4.1.6.1' once shared a rank with '4.1' and miscut the boundary);
+    （一）=3.5. Strip ** bold first (Industrial Bank '##### **4.1.6**' case)."""
+    line = _CHECKBOX.sub("", line.rstrip()).rstrip()   # strip trailing checkbox suffix
     body = re.sub(r"^#{1,6}\s*", "", line).replace("*", "")
     if _L1_NUM.match(body):
         return 2.5
@@ -156,11 +177,14 @@ _NM_LOOSE = re.compile(r"^(\d+(?:\.\d+)+)\s*[^\n]{0,60}$")
 
 
 def _anchor_rank(line: str) -> Optional[float]:
-    """小节锚秩 (sections 路径): 只认编号形态, 裸 # 标题不算锚。
+    """Subsection anchor rank (sections path): numbering forms only; a bare #
+    heading does not count as an anchor.
 
-    # 标记行信任度高 — 标题放宽到 60 字可含空格/** (实证: 兴业
-    '#### 5.5 …受处 罚情况' PDF 折行空格; 澜起 78 字长标题)。
-    纯文本行走 marker_rank 严判 (叙述句防误切, 药明纯文本标题实证)。"""
+    # -marked lines are highly trusted — titles loosen to 60 chars, spaces/**
+    allowed (cases: Industrial Bank '#### 5.5 …受处 罚情况' with PDF
+    line-wrap spaces; Montage's 78-char long title). Plain-text lines go
+    through the strict marker_rank (guards against splitting narrative
+    sentences; WuXi's unmarked plain-text title case)."""
     line = _CHECKBOX.sub("", line.rstrip()).rstrip()
     if _HEAD.match(line) is None:
         return marker_rank(line)
@@ -181,24 +205,28 @@ _SIM_STRIP = re.compile(r"[\s、，,。；;：:（）()\[\]【】/**#0-9.\-—·
 
 
 def _sim(line: str, alias: str) -> float:
-    """归一化字符相似度 (difflib 比率)。剥空白/标点/数字/装饰后比对 —
-    '非经常性损益项目及涉及金额' vs '非经常性损益项目和金额' ≈ 0.87。"""
+    """Normalized character similarity (difflib ratio). Compares after
+    stripping whitespace/punctuation/digits/decoration —
+    '非经常性损益项目及涉及金额' vs '非经常性损益项目和金额' ≈ 0.87."""
     a = _SIM_STRIP.sub("", line)
     b = _SIM_STRIP.sub("", alias)
     return SequenceMatcher(None, a, b).ratio() if a and b else 0.0
 
 
 def _alias_hit(line: str, aliases: List[str]) -> Optional[str]:
-    """行命中词表别名: 精确包含 → 相似度兜底 (标记行≥0.75/纯文本行≥0.85)。
-    守卫: ①目录条目排除; ②覆盖率 bare ≥ 别名 60%; ③非标记行仅在纯别名行
-    (bare≤别名+3, 兜底通道收紧到 ≤30) 放行 — 排除叙述句 (实证澜起:
-    '报告期末公司前三年主要会计数据和财务指标如下…' 曾冒充标题)。"""
+    """Line hit against vocab aliases: exact containment → similarity fallback
+    (marker lines >=0.75 / plain-text lines >=0.85). Guards: ① TOC entries
+    excluded; ② coverage: bare >= 60% of the alias; ③ non-marker lines pass
+    only when nearly a bare alias line (bare <= alias+3; the fallback channel
+    is tightened to <=30) — excludes narrative sentences (Montage case:
+    '报告期末公司前三年主要会计数据和财务指标如下…' once impersonated a
+    title)."""
     line = _CHECKBOX.sub("", line).rstrip()
     for al in aliases:
         if al not in line:
             continue
         if _TOC_LINE.search(line):
-            continue                     # 目录条目 (点引导符/尾随页码)
+            continue                     # TOC entry (dot leaders / trailing page number)
         bare = _BARE_STRIP.sub("", line)
         al_bare = re.sub(r"[和及与]", "", al)
         if len(bare) < 0.6 * len(al_bare):
@@ -206,7 +234,9 @@ def _alias_hit(line: str, aliases: List[str]) -> Optional[str]:
         if marker_rank(line) is None and len(bare) > len(al_bare) + 3:
             continue
         return al
-    # 相似度兜底: 仅结构守卫内的行参与; 非标记行 (纯文本, 信任低) 阈值收紧
+    # Similarity fallback: only lines inside the structural guards
+    # participate; non-marker lines (plain text, low trust) get a tightened
+    # threshold
     if _TOC_LINE.search(line):
         return None
     bare = _BARE_STRIP.sub("", line)
@@ -223,7 +253,8 @@ def _alias_hit(line: str, aliases: List[str]) -> Optional[str]:
 
 
 def _block_end(md: str, from_pos: int, title_rank: float) -> int:
-    """内容块终点 = 下一个秩≤标题秩的标记行 (深层子标记是内容, 不截断)。"""
+    """Content-block end = the next marker line with rank <= title rank
+    (deeper sub-markers are content, not cut points)."""
     for m in re.finditer(r"^[^\n]{0,80}$", md[from_pos:], re.M):
         line = m.group(0)
         rank = marker_rank(line)
@@ -234,21 +265,25 @@ def _block_end(md: str, from_pos: int, title_rank: float) -> int:
     return len(md)
 
 
-# ---------------- 节层: 通用方言切分已迁 generic.py (L0 单一方言);
-# ---------------- 主题式/混合式等特例 → 契约违约 → repair Agent 语义兜底
+# ---------------- chapter layer: generic-dialect splitting moved to
+# ---------------- generic.py (L0 single dialect); topic-style/hybrid
+# ---------------- exceptions → contract violation → repair Agent fallback
 
 
-# ---------------- 小节层: 编号锚切分 (§5.2) ----------------
+# ---------------- subsection layer: numbered-anchor splitting (§5.2) ----------------
 
 _PUNCT_END = ("。", "；", "，", "：", ":", "！", "？")
 
 
 def _subsection_anchors(text: str) -> List[Tuple[int, int, float]]:
-    """节内编号锚扫描。返回 [(锚行起始, 锚行结束, 锚秩)] 按序。
+    """Scan numbered anchors inside a chapter. Returns [(anchor start, anchor
+    end, anchor rank)] in order.
 
-    纯文本锚守卫 (药明实证: pymupdf4llm 未标记的 '十四、募集资金…'):
-    ≤50 字且不以句读结尾 — 叙述段落(长行/带句号)不命中。
-    # 标记锚守卫放宽到 120 字 (澜起 78 字长标题实证)。"""
+    Plain-text anchor guard (WuXi case: '十四、募集资金…' left unmarked by
+    pymupdf4llm): <=50 chars and not ending in sentence punctuation —
+    narrative paragraphs (long lines / with a period) never hit. The #
+    -marked anchor guard is loosened to 120 chars (Montage's 78-char long
+    title case)."""
     out = []
     for m in re.finditer(r"^[^\n]{1,120}$", text, re.M):
         line = m.group(0)
@@ -265,10 +300,13 @@ def _subsection_anchors(text: str) -> List[Tuple[int, int, float]]:
 
 def _render_body(section_text: str,
                  anchors: List[Tuple[int, int, float]], i: int) -> str:
-    """anchors[i] 的 L1 正文 = 直述 + 其后连续深层子块; 子块标题转 [标题] 行
-    保留 (直接清洗会剥掉标记行标题 — 澜起 '五、主要经营情况' 的 (一)(二)
-    子节标题实证)。终点 = 下一秩≤本秩锚 (裸 # 标题不算边界 — 兴业第一章
-    '### 公司组织架构图' 与 '#### 1.1' 同视觉层级, 按 # 层切曾丢内容)。"""
+    """The L1 body of anchors[i] = its direct text + the deeper sub-blocks
+    that follow; sub-block titles are kept as [title] lines (cleaning
+    directly would strip marker-line titles — Montage case: the (一)(二)
+    subsection titles under '五、主要经营情况'). End = the next anchor with
+    rank <= this rank (a bare # heading does not count as a boundary — in
+    Industrial Bank's chapter 1, '### 公司组织架构图' and '#### 1.1' share a
+    visual level; splitting by # level once lost content)."""
     _, a_end, rank = anchors[i]
     end = len(section_text)
     for j in range(i + 1, len(anchors)):
@@ -287,18 +325,21 @@ def _render_body(section_text: str,
     return "".join(parts)
 
 
-# ---------------- ③ 分离与④ 清洗 ----------------
+# ---------------- ③ separation & ④ cleaning ----------------
 
 _ROW_RE = re.compile(r"^\|.+\|\s*$")
 
 
 def _clean_cell(cell: str) -> str:
-    """单元格清洗: <br> 是折行产物, 去除后跨行词自然接合。"""
+    """Cell cleaning: <br> is a line-wrap artifact; removing it lets words
+    rejoin across lines."""
     return cell.strip().strip("|").replace("<br>", "").strip()
 
 
 def parse_md_tables(text: str) -> List[Dict]:
-    """解析 MD 管道表。多分隔行拆多表; 内嵌口径行(如 '||2025年末|…')保留为数据行。"""
+    """Parse MD pipe tables. Multiple separator rows split into multiple
+    tables; embedded caliber rows (e.g. '||2025年末|…') are kept as data
+    rows."""
     tables: List[Dict] = []
     lines = text.splitlines()
     i = 0
@@ -311,8 +352,10 @@ def parse_md_tables(text: str) -> List[Dict]:
             block.append(lines[i])
             i += 1
         cells = [[_clean_cell(c) for c in row.split("|")[1:-1]] for row in block]
-        # 无分隔行的退化管道块 (pymupdf4llm 对无表头表格的输出, 实证招行
-        # '|**合计**<br>179|392|'): 以空表头启动, 整块按数据行收, 不再整块丢失
+        # Degenerate pipe block without a separator row (pymupdf4llm output
+        # for header-less tables; China Merchants Bank case
+        # '|**合计**<br>179|392|'): start with an empty header and take the
+        # whole block as data rows instead of losing it entirely
         has_sep = any(row and all(set(c) <= set("-: ") and c for c in row)
                       for row in cells)
         current: Optional[Dict] = None if has_sep else {"header": [], "rows": []}
@@ -331,8 +374,9 @@ def parse_md_tables(text: str) -> List[Dict]:
 
 
 def _clean_title(line: str) -> str:
-    """标题清洗: 去 #/装饰符(<u> ** 等)/编号/勾选框, 留纯文本。
-    装饰先剥 — 实证 '<u>(3)</u> …' 的编号在装饰符之内。"""
+    """Title cleaning: drop #/decorations (<u> ** etc.)/numbering/checkboxes,
+    keep plain text. Strip decorations first — case: in '<u>(3)</u> …' the
+    numbering sits inside the decoration."""
     t = _CHECKBOX.sub("", line)
     t = re.sub(r"^#{1,6}\s*", "", t)
     t = re.sub(r"<[^>]+>|[*_`]+", "", t)
@@ -342,7 +386,8 @@ def _clean_title(line: str) -> str:
 
 
 def _header_lines(md: str) -> set:
-    """全文级页眉集合: 出现≥10次的短名状行 (每页重复的公司名/年报名/栏目名)。"""
+    """Document-level header set: short name-like lines appearing >=10 times
+    (company name/report name/column name repeated on every page)."""
     cnt = Counter(l.strip() for l in md.splitlines()
                   if l.strip() and len(l.strip()) <= 30)
     return {l for l, n in cnt.items()
@@ -353,21 +398,24 @@ _BARE_PAGE = re.compile(r"^\d{1,4}$")
 
 
 def _clean_text(block: str, headers: set = frozenset()) -> str:
-    """叙述文本: 剥表格行/页码行('N / M' 与兴业裸数字'15')/标题标记行/
-    勾选框/重复页眉/HTML装饰。页眉双法: 全文集(≥10次短行) + 块内频次
-    (≥2次, 实证 '澜起科技股份有限公司')。"""
+    """Narrative text: strip table rows / page-number rows ('N / M' and
+    Industrial Bank's bare digits '15') / title marker lines / checkboxes /
+    repeated headers / HTML decorations. Dual header method: document-level
+    set (>=10 short lines) + in-block frequency (>=2 times; case
+    '澜起科技股份有限公司')."""
     lines_ = []
     for line in block.splitlines():
-        line = re.sub(r"<[^>]+>|[*_]+", "", line.rstrip())   # 装饰先剥
-        line = _CHECKBOX.sub("", line)              # 勾选框行/尾缀 (纯行变空被滤)
+        line = re.sub(r"<[^>]+>|[*_]+", "", line.rstrip())   # strip decorations first
+        line = _CHECKBOX.sub("", line)              # checkbox line/suffix (a now-empty line gets filtered)
         s = line.strip()
         if _ROW_RE.match(line) or _PAGE_NO.match(s) or _BARE_PAGE.match(s):
             continue
-        if marker_rank(line) is not None:      # 标题标记行是结构不是内容
+        if marker_rank(line) is not None:      # title marker lines are structure, not content
             continue
         if s and s not in headers:
             lines_.append(s)
-    # 重复页眉: 短名状行(≤30字无句读)出现≥2次即页眉 (实证: '澜起科技股份有限公司')
+    # Repeated header: a short name-like line (<=30 chars, no sentence
+    # punctuation) appearing >=2 times is a header (case: '澜起科技股份有限公司')
     freq = Counter(lines_)
     return "\n".join(
         l for l in lines_
@@ -375,7 +423,8 @@ def _clean_text(block: str, headers: set = frozenset()) -> str:
 
 
 def _clean_tables(tables: List[Dict], title: str) -> List[Dict]:
-    """表格清洗: 首行若为'单位：元'类单位行 → 并入表名 unit 字段并去除该行。"""
+    """Table cleaning: if the first row is a unit row like '单位：元' → fold
+    it into the table's unit field and drop the row."""
     for t in tables:
         h = t.get("header") or []
         if any("单位" in c for c in h) and sum(1 for c in h if c.strip()) <= 2:
@@ -387,54 +436,61 @@ def _clean_tables(tables: List[Dict], title: str) -> List[Dict]:
 
 
 def _subsection_dict(title: str, body: str, headers: set) -> Dict:
-    """小节三件套 {title, text, tables}: 复用 items 的清洗管线。"""
+    """Subsection triple {title, text, tables}: reuses the items cleaning
+    pipeline."""
     tables = _clean_tables(parse_md_tables(body), title)
     um = re.search(r"^\s*单位[:：]\s*([^\s|]+)", body, re.M)
     if um and tables and not tables[0].get("unit"):
-        tables[0]["unit"] = um.group(1)   # 表前独立单位行
+        tables[0]["unit"] = um.group(1)   # standalone unit line before the table
     return {"title": title, "text": _clean_text(body, headers),
             "tables": tables}
 
 
-# ---------------- 披露项词表与节规则 ----------------
+# ---------------- disclosure-item vocab & section rules ----------------
 
-# 第二章披露项词表 (受控 item_key; 别名按实证扩充, 遇新措辞加一条)。
-# 三~七节内容不再走词表 — sections 结构按小节全量, 覆盖面更完整。
+# Chapter-2 disclosure-item vocab (controlled item_keys; aliases grow with
+# each observed wording — add one whenever new phrasing appears). Chapters
+# 3-7 no longer go through vocab — the sections structure takes subsections
+# in full for more complete coverage.
 ITEM_ALIASES: Dict[str, List[str]] = {
     "kpi3y": ["主要会计数据和财务指标", "主要财务数据及指标", "近三年主要会计数据",
               "近三年主要财务数据", "会计数据和财务指标摘要", "主要会计数据及财务指标",
               "财务概要", "财务摘要"],
-    # 注: 不收「主要财务指标」短别名 — 会把 kpi3y 锚到第二节节标题
-    # (澜起 '## 第二节 公司简介和主要财务指标' 实证); 该措辞由相似度兜底覆盖
+    # Note: the short alias 「主要财务指标」 is deliberately not listed — it
+    # would anchor kpi3y to the chapter-2 section heading (Montage case:
+    # '## 第二节 公司简介和主要财务指标'); that wording is covered by the
+    # similarity fallback
     "nonrecurring": ["非经常性损益项目和金额", "非经常性损益项目及涉及金额",
                      "非经常性损益项目", "非经常性损益明细表", "非经常性损益表"],
 }
 
-# 三~七节规则 (§3, 用户拍板)
+# Chapters 3-7 rules (§3, user decision)
 SECTION_RULES: Dict[str, Dict] = {
-    "mdna":         {"mode": "all"},          # 全量 (用户原话"全部重要")
+    "mdna":         {"mode": "all"},          # take everything (user's words: "it is all important")
     "governance":   {"mode": "keyword",
                      "keywords": ["董监高", "董事和高级管理人员", "员工",
                                   "股权激励", "审计委员会"]},
     "matters":      {"mode": "keyword",
                      "keywords": ["募集资金", "募投", "承诺", "关联交易",
                                   "担保", "诉讼", "退市", "非标"]},
-    "shareholders": {"mode": "all", "include_head": True},   # 节首前文=股东总数字段
-    "bonds":        {"mode": "all", "skip_short": 500},      # 多数公司"不适用"
+    "shareholders": {"mode": "all", "include_head": True},   # head preamble = total-shareholders field
+    "bonds":        {"mode": "all", "skip_short": 500},      # "not applicable" for most companies
 }
 
 
-# ---------------- 编排 ----------------
-
-# ---------------- 编排 ----------------
+# ---------------- orchestration ----------------
 
 def _locate_report_pdfs(ts_code: str,
                         year: Optional[int] = None) -> list:
-    """AR+H1 候选 (报告期新→旧, 同期年报优先)。半年报与年报同构
-    (管理层讨论与分析/风险章节), 年报为图片版无文本层时以半年报顶上。
+    """AR+H1 candidates (report period new→old, same-period AR preferred).
+    The semi-annual report is isomorphic with the annual one (management
+    discussion & analysis / risk chapters); when the AR is an image-only PDF
+    without a text layer, the H1 steps in.
 
-    下载目录即真相 (downloader 产物): downloads/<ts_code>/<year>_<cat>.pdf,
-    文件在盘即已下载; 排序 year DESC, category DESC ('ndbg' > 'bndbg' 同期年报优先)。"""
+    The download directory is the source of truth (downloader product):
+    downloads/<ts_code>/<year>_<cat>.pdf — file on disk means downloaded;
+    sorted year DESC, category DESC ('ndbg' > 'bndbg', same-period AR
+    first)."""
     root = DOWNLOAD_ROOT / ts_code
     if not root.is_dir():
         return []
@@ -449,9 +505,11 @@ def _locate_report_pdfs(ts_code: str,
 
 def build_items(stock: str, year: Optional[int] = None,
                 want_audit: bool = False) -> Dict:
-    """单股: 定位报告 PDF (年报→半年报降级链) → MD → items+sections → JSON 落盘。
+    """Single stock: locate the report PDF (annual→semi-annual fallback
+    chain) → MD → items+sections → JSON written to disk.
 
-    输入只认证券代码 (名称解析归调用方)。"""
+    Input accepts security codes only (name resolution is the caller's
+    job)."""
     ts_code = normalize_ts_code(stock.strip())
     if not ts_code:
         return {"ok": False, "error": f"未识别证券代码: {stock} "
@@ -479,7 +537,8 @@ def build_items(stock: str, year: Optional[int] = None,
         md, encoding="utf-8")
 
     audit: Dict = {}
-    # L0 通用处理逻辑 (单一方言) — 特例违约由 repair Agent 兜底
+    # L0 generic processing (single dialect) — exceptional violations fall
+    # to the repair Agent
     from .generic import extract as _generic_extract
     items, sections = _generic_extract(md, audit=audit if want_audit else None)
     json_path = out_dir / f"{loc['report_year']}_{loc['category']}_items.json"
@@ -499,7 +558,8 @@ def build_items(stock: str, year: Optional[int] = None,
 
 
 def build_for_index(index_code: str, year: Optional[int] = None) -> Dict[str, int]:
-    """指数成分股批量 → 每股 items.json (tushare 最新成分, 逐股重提)。"""
+    """Index-constituent batch → items.json per stock (latest tushare
+    constituents, re-extracted stock by stock)."""
     from .downloader import _load_index_universe
     codes = [s["ts_code"] for s in _load_index_universe(index_code)]
     logger.info(f"披露项批量: {index_code} {len(codes)} 只")
@@ -518,12 +578,16 @@ def build_for_index(index_code: str, year: Optional[int] = None) -> Dict[str, in
 
 def annual_corpus(ts_code: str, year: Optional[int] = None,
                   max_chars: int = 2500) -> Optional[str]:
-    """items+sections → 年报要点语料 (确定性零 LLM)。
+    """items+sections → annual-report highlights corpus (deterministic, zero
+    LLM).
 
-    语料 = kpi3y(指标说明) + mdna 经营讨论小节 + mdna 风险小节的 text 合并,
-    每段截 max_chars; items.json 不存在则现场 build_items。
-    sections 结构不符被跳过的公司 (B 方言/ESG 式治理) 退回 kpi3y 或旧版键;
-    全空返回 None (调用方自行降级, 如成文侧退回量化画像)。"""
+    Corpus = kpi3y (indicator notes) + the mdna operations-discussion
+    subsection + the mdna risk subsection, texts merged, each part truncated
+    to max_chars; if items.json does not exist, build_items runs on the spot.
+    Companies whose sections were skipped for non-conforming structure
+    (dialect B / ESG-style governance) fall back to kpi3y or legacy keys;
+    all-empty returns None (the caller degrades itself, e.g. the writing
+    side falls back to the quant profile)."""
     if not ts_code:
         return None
     paths = sorted(MD_ROOT.glob(f"{ts_code}/*_items.json"), reverse=True)
@@ -552,12 +616,13 @@ def annual_corpus(ts_code: str, year: Optional[int] = None,
                       if s.get("text") and any(kw in s["title"] for kw in kws)),
                      None)
         if block is None and head.startswith("经营"):
-            # 银行等措辞漂移兜底: 取 mdna 首个非空小节 (兴业 '十四五成就回顾')
+            # wording-drift fallback for banks etc.: take the first non-empty
+            # mdna subsection (Industrial Bank case: '十四五成就回顾')
             block = next((s["text"] for s in mdna_subs if s.get("text")), None)
         if block:
             parts.append(f"### {head}\n{block[:max_chars]}")
     if not parts:
-        # 旧版 items.json 兼容 (business_review/risks 词表键)
+        # legacy items.json compatibility (business_review/risks vocab keys)
         for key, head in (("business_review", "经营情况讨论(管理层口径)"),
                           ("risks", "公司自认风险")):
             it = items.get(key)
@@ -568,12 +633,15 @@ def annual_corpus(ts_code: str, year: Optional[int] = None,
     return f"### {label}要点 (年报披露项提取)\n" + "\n\n".join(parts)
 
 
-# ---------------- 证据抽取: 年报原子事实 (LLM 客户端由调用方注入) ----------------
-# 2026-10 自 skills/research/sources/annual_source.py 迁入 (曾独立 evidence.py,
-# 同为报告处理 2026-10-11 并入本模块)。编排与 EvidenceShard 契约 (eid 生成/
-# 装配/契约兜底/抽检清单/落盘) 在 research 侧 annual_source.py。
-# 四类原子: operating 经营数据 / segment 分部明细 / statement 管理层论断 /
-# risk 风险条目; period 年报口径: 流量 "<年>A" / 期末存量 "<年>-12-31"。
+# ---------------- evidence extraction: annual-report atomic facts (LLM client injected by the caller) ----------------
+# Migrated in 2026-10 from skills/research/sources/annual_source.py (formerly
+# a standalone evidence.py; merged into this module 2026-10-11 as report
+# handling). Orchestration and the EvidenceShard contract (eid generation /
+# assembly / contract fallback / spot-check list / persistence) live in
+# annual_source.py on the research side. Four atomic kinds: operating =
+# operating data / segment = segment detail / statement = management claim /
+# risk = risk item; period in annual-report convention: flows "<year>A" /
+# period-end stocks "<year>-12-31".
 
 SECTION_ORDER = ("mdna", "governance", "matters", "shareholders")
 SECTION_CN = {
@@ -589,23 +657,28 @@ CATEGORY_CN = {
     "statement": "管理层论断",
     "risk": "风险条目",
 }
-# 空小节阈值: 正文过短且无表格时不值得一次 LLM 调用
+# Empty-subsection threshold: a body too short with no table is not worth an
+# LLM call
 MIN_BODY_CHARS = 30
-# 契约兜底: content 含数字但 value/unit 均空时, 从数字后紧跟的单位抢救 (长词优先;
-# 须紧邻数字, 防"发达国【家】""两【个】方向"之类误配)
+# Contract fallback: when content contains a digit but value/unit are both
+# empty, rescue the unit immediately following the number (longest word
+# first; it must be adjacent to the digit — guards against mismatches like
+# "发达国【家】" / "两【个】方向")
 _UNIT_ADJACENT_RE = re.compile(
     r"\d(?:,\d{3})*(?:\.\d+)?\s*(个百分点|万吨|千吨|亿元|万元|亿|万|吨|%|元|家|人|个|项|次|名|强|款|瓶|户|亩|度|千瓦时)"
 )
 _HAS_DIGIT = re.compile(r"\d")
 
-# period 合法格式 (镜像自宿主 research 契约 contracts.valid_period, 本模块自包含):
-# YYYY / YYYYA / YYYYE / YYYYH1 / YYYYQn / YYYY-MM-DD (真实日期)
+# Legal period formats (mirrored from the host research contract
+# contracts.valid_period; this module stays self-contained):
+# YYYY / YYYYA / YYYYE / YYYYH1 / YYYYQn / YYYY-MM-DD (a real date)
 _PERIOD_RE = re.compile(
     r"^(?:\d{4}|\d{4}A|\d{4}E|\d{4}H1|\d{4}Q[1-4]"
     r"|\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01]))$"
 )
 
-# 系统提示词为普通字符串 (非 .format/f-string 模板), JSON 花括号按字面量直书
+# The system prompt is a plain string (not a .format/f-string template);
+# JSON braces are written literally
 _SYSTEM_PROMPT = """你是年报细粒度证据抽取器。任务: 从用户给出的年报小节原文中抽取原子级证据事实, 供研究报告显式引用。
 
 【抽取纪律 — 违反任一条即为废稿】
@@ -637,7 +710,8 @@ _SYSTEM_PROMPT = """你是年报细粒度证据抽取器。任务: 从用户给�
 
 
 def _table_to_lines(table: Dict[str, Any]) -> List[str]:
-    """表格 → 管道分隔文本行 (表名/单位并入首行, 供 LLM 保留单位口径)"""
+    """Table → pipe-separated text lines (table name/unit folded into the
+    first line so the LLM keeps the unit caliber)."""
     if not isinstance(table, dict):
         return []
     lines: List[str] = []
@@ -655,7 +729,7 @@ def _table_to_lines(table: Dict[str, Any]) -> List[str]:
 
 
 def build_subsection_body(sub: Dict[str, Any]) -> str:
-    """小节正文 + 表格 → 送入 LLM 的原文块"""
+    """Subsection body + tables → the source block fed to the LLM."""
     parts: List[str] = []
     text = (sub.get("text") or "").strip()
     if text:
@@ -671,9 +745,11 @@ def build_subsection_body(sub: Dict[str, Any]) -> str:
 
 def extract_subsection(llm, year: int, sec_key: str, title: str,
                        body: str) -> List[Dict[str, Any]]:
-    """单小节一次 LLM 调用 → 原始原子数组 (未清洗); 解析失败抛 ValueError。
+    """One LLM call per subsection → raw atomic array (uncleaned); raises
+    ValueError on parse failure.
 
-    llm 由调用方注入 (只需 .invoke([{role,content}...]) -> str 的客户端)。
+    llm is injected by the caller (any client with
+    .invoke([{role,content}...]) -> str suffices).
     """
     user = (
         f"小节定位: {year}年年度报告 · {SECTION_CN.get(sec_key, sec_key)} ({sec_key}) · 小节「{title}」\n"
@@ -691,7 +767,8 @@ def extract_subsection(llm, year: int, sec_key: str, title: str,
 
 
 def _extract_outer_json(t: str) -> Any:
-    """混杂文本中剥最外层 JSON 容器: 以先出现的 [ 或 { 为界, 取到与之配对的最后一个闭括号"""
+    """Peel the outermost JSON container out of mixed text: start at the
+    first [ or {, take through the last matching closing bracket."""
     order = sorted((p, o, c) for p, o, c in
                    ((t.find("["), "[", "]"), (t.find("{"), "{", "}")) if p >= 0)
     for start, _, close in order:
@@ -705,7 +782,8 @@ def _extract_outer_json(t: str) -> Any:
 
 
 def _parse_llm_facts(text: str) -> Optional[List[Dict[str, Any]]]:
-    """宽容解析: 剥 ```json 围栏; 接受 {"facts":[...]} 包装或裸数组; 彻底失败返回 None"""
+    """Lenient parsing: strip ```json fences; accept {"facts":[...]} wrappers
+    or a bare array; None on total failure."""
     if not text or not text.strip():
         return None
     t = text.strip()
@@ -724,7 +802,8 @@ def _parse_llm_facts(text: str) -> Optional[List[Dict[str, Any]]]:
 
 
 def _to_float(v: Any) -> Optional[float]:
-    """value 宽容数值化: 千分位/百分号/带单位串 → 纯 float; 不可数值化返回 None"""
+    """Lenient value coercion: thousands separators/percent signs/
+    unit-bearing strings → plain float; None if not coercible."""
     if v is None or isinstance(v, bool):
         return None
     if isinstance(v, (int, float)):
@@ -735,7 +814,8 @@ def _to_float(v: Any) -> Optional[float]:
 
 
 def _valid_period(period: str) -> bool:
-    """period 格式合法 (与宿主 research 契约同规; 日期型再挡 02-30)"""
+    """Legal period format (same rules as the host research contract; the
+    date form also rejects 02-30)."""
     if not _PERIOD_RE.match(period):
         return False
     if len(period) == 10:
@@ -747,7 +827,9 @@ def _valid_period(period: str) -> bool:
 
 
 def _norm_period(p: Any, year: int) -> str:
-    """period 归一: 年报口径只允许 {年}A (流量) / {年}-12-31 (期末存量) / 合法原值"""
+    """Period normalization: the annual-report convention allows only
+    {year}A (flows) / {year}-12-31 (period-end stocks) / a legal original
+    value."""
     s = str(p or "").strip()
     flow = ("", str(year), f"{year}年", f"{year}年度", f"{year}A", "报告期", "本期")
     stock = (f"{year}年末", f"{year}-12-31", "期末", f"{year}年期末")
@@ -759,7 +841,8 @@ def _norm_period(p: Any, year: int) -> str:
 
 
 def sanitize_fact(raw: Dict[str, Any], year: int) -> Tuple[Optional[Dict[str, Any]], str]:
-    """LLM 原始条目 → 干净条目; 返回 (条目, 丢弃原因) — 条目为 None 即丢弃"""
+    """LLM raw entry → clean entry; returns (entry, drop reason) — an entry
+    of None means dropped."""
     category = str(raw.get("category") or "").strip()
     if category not in CATEGORIES:
         return None, "bad_category"
@@ -769,7 +852,7 @@ def sanitize_fact(raw: Dict[str, Any], year: int) -> Tuple[Optional[Dict[str, An
     value = _to_float(raw.get("value"))
     unit = str(raw.get("unit") or "").strip()
     if value is None and not unit and _HAS_DIGIT.search(content):
-        m = _UNIT_ADJACENT_RE.search(content)      # 契约兜底: 从数字后抢救单位
+        m = _UNIT_ADJACENT_RE.search(content)      # contract fallback: rescue the unit after the digit
         if not m:
             return None, "numeric_without_value_unit"
         unit = m.group(1)

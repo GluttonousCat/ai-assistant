@@ -1,11 +1,13 @@
 """
-SQL 模板拼接器
-基于 StockKB 提取的 (股票, 指标, 时间) 槽位, 用安全模板拼接 SQL
+SQL template builder
+Builds SQL from safe templates based on the (stock, metric, time) slots
+extracted by StockKB
 
-设计:
-- 只拼 SELECT, 所有表名/字段来自限定映射 (非用户输入)
-- 支持: 单股单/多指标 (带/不带时间), 多股同指标对比
-- 时间处理: 年报/季报(Q1-Q4)/半年报/最近N年/最新
+Design:
+- SELECT-only; all table/column names come from fixed mappings (never user input)
+- Supports: single stock with one/multiple metrics (with/without time),
+  multi-stock same-metric comparison
+- Time handling: annual/quarterly (Q1-Q4)/half-year/last-N-years/latest
 """
 from __future__ import annotations
 
@@ -13,7 +15,7 @@ from typing import List, Optional, Tuple
 
 from tools.finance.stock_kb import get_stock_kb
 
-# 财务/行情模板的表与连接
+# Tables and joins for the financial/market templates
 _TABLE_ALIAS = {
     "i": "fin.income",
     "f": "fin.fina_indicator",
@@ -23,12 +25,13 @@ _TABLE_ALIAS = {
     "db": "stock.daily_basic",
 }
 
-# 报告期 -> end_date 月-日 (财报截止日)
+# Report period -> end_date month-day (financial statement cutoff)
 _PERIOD_MD = {1: "03-31", 2: "06-30", 3: "09-30", 4: "12-31"}
 
 
 def _financial_period_filter(time_phrase) -> str:
-    """财务时间词 -> end_date 过滤子句. 空 = 不过滤 (最新优先)"""
+    """Financial time phrase -> end_date filter clause. Empty = no filter
+    (latest first)"""
     if not time_phrase:
         return ""
     kw, val = time_phrase
@@ -40,8 +43,8 @@ def _financial_period_filter(time_phrase) -> str:
     if kw == "half":
         return f" AND i.end_date = '{val}-06-30'"
     if kw == "previous_year":
-        return ""  # 去年需相对今日计算, 规则层已解析为 year; 此处兜底
-    # recent_years / recent / None -> 不过滤, 依赖 LIMIT 取最新
+        return ""  # "last year" is relative to today and already resolved to a year by the rules layer; fallback here
+    # recent_years / recent / None -> no filter; rely on LIMIT to take the latest
     return ""
 
 
@@ -54,12 +57,13 @@ def build_single_query(
     extra_fields: Optional[List[Tuple[str, str]]] = None,
 ) -> Optional[str]:
     """
-    单股查询 (支持多指标列)
-    prefix: 'i'/'f'/'b'/'c' 财务表 / 'd'/'db' 行情表
-    extra_fields: 追加指标列 [(field, prefix), ...] (仅财务分支, 最多再 +2)
+    Single-stock query (supports multiple metric columns)
+    prefix: 'i'/'f'/'b'/'c' financial tables / 'd'/'db' market tables
+    extra_fields: additional metric columns [(field, prefix), ...]
+    (financial branch only, at most +2 more)
     """
     if prefix in ("d", "db"):
-        # 行情: 最新 N 天 (宽列固定输出)
+        # Market data: latest N days (fixed wide-column output)
         cols = (
             "d.trade_date, s.name AS stock_name,"
             " d.close, d.open, d.high, d.low, d.vol, d.amount, d.pct_chg,"
@@ -74,7 +78,7 @@ WHERE d.ts_code = '{ts_code}'
 ORDER BY d.trade_date DESC
 LIMIT 30"""
 
-    # 财务: 多指标列拼接 (首指标 + extras)
+    # Financial: multiple metric columns (primary metric + extras)
     select_parts = [f"{prefix}.{field}"]
     seen = {(prefix, field)}
     for f2, p2 in (extra_fields or [])[:2]:
@@ -85,7 +89,8 @@ LIMIT 30"""
 
     period_filter = _financial_period_filter(time_phrase)
 
-    # 不 SELECT ts_code: 前端表格无需展示内部代码, 名称列已可定位标的
+    # ts_code deliberately not selected: the frontend table has no need for
+    # the internal code; the name column already identifies the stock
     return f"""SELECT s.name AS stock_name, i.end_date, {cols}
 FROM fin.income i
 JOIN stock.stock_basic s ON i.ts_code = s.ts_code
@@ -102,7 +107,7 @@ LIMIT 48"""
 
 def build_compare_query(codes: List[Tuple[str, str]], field: str, prefix: str,
                         time_phrase=None) -> Optional[str]:
-    """多股同指标对比: codes=[(ts_code, name), ...]"""
+    """Multi-stock same-metric comparison: codes=[(ts_code, name), ...]"""
     if len(codes) < 2:
         return None
     in_clause = ", ".join(f"'{c[0]}'" for c in codes)
@@ -117,7 +122,8 @@ WHERE d.ts_code IN ({in_clause})
 ORDER BY d.close DESC
 LIMIT 30"""
         return sql
-    # 财务对比: 指定报告期优先 (各股取该期), 否则各股最新期
+    # Financial comparison: prefer the specified report period (each stock
+    # takes that period); otherwise each stock's latest period
     if time_phrase and time_phrase[0] in ("year", "quarter", "half"):
         period_filter = _financial_period_filter(time_phrase).replace(
             "i.end_date", "t.end_date", 1)
@@ -162,9 +168,11 @@ def build_industry_query(
     value: Optional[float] = None,
 ) -> Optional[str]:
     """
-    按申万行业查询: "XX行业的YY指标" / "XX板块ROE最高的5家" / "XX板块中ROE大于20%的股票"
-    通过 stock.v_industry_current (个股->L1/L2行业) 关联财务/行情表
-    op/value: 指标条件筛选 (gt/lt/ge/le + 阈值)
+    Query by Shenwan industry: "metric Y of industry X" / "top 5 ROE stocks in
+    sector X" / "stocks in sector X with ROE above 20%"
+    Joins financial/market tables via stock.v_industry_current
+    (stock -> L1/L2 industry)
+    op/value: metric condition filter (gt/lt/ge/le + threshold)
     """
     index_col = "index_l2" if level == "L2" else "index_l1"
     period_filter = ""
@@ -174,7 +182,7 @@ def build_industry_query(
             period_filter = f" AND i.end_date = '{val}-12-31'"
 
     if prefix in ("d", "db"):
-        # 行业行情: 最新交易日
+        # Industry market data: latest trading day
         sql = f"""SELECT s.name AS stock_name,
             COALESCE(i2.industry_l2, i2.industry_l1) AS industry,
             d.trade_date, d.close, d.pct_chg, db.pe_ttm, db.total_mv
@@ -189,7 +197,8 @@ ORDER BY d.close DESC
 LIMIT {top_n}"""
         return sql
 
-    # 财务行业查询: 行业当前成员 + 指标的近期报告期
+    # Financial industry query: current industry members + the metric's
+    # recent report period
     cond = ""
     if op and value is not None:
         cond = f" AND COALESCE({prefix}.{field}, 0) {_OP_SQL[op]} {value}"
@@ -221,8 +230,9 @@ def build_rank_query(
     time_phrase=None,
 ) -> Optional[str]:
     """
-    全市场排名/条件筛选: "全市场ROE排名前10" / "找出ROE大于20%的股票"
-    各股取最新报告期, 按指标排序取前 N
+    Whole-market ranking / condition filter: "top-10 ROE across the market" /
+    "find stocks with ROE above 20%"
+    Each stock uses its latest report period; sort by the metric and take top N
     """
     if prefix in ("d",):
         cond = ""
@@ -245,7 +255,7 @@ WHERE db.trade_date = (SELECT MAX(trade_date) FROM stock.daily_basic){cond}
 ORDER BY db.{field} DESC NULLS LAST
 LIMIT {top_n}"""
 
-    # 财务: 各股最新报告期
+    # Financial: each stock's latest report period
     period_filter = _financial_period_filter(time_phrase)
     cond = ""
     if op and value is not None:

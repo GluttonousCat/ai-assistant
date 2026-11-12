@@ -1,6 +1,7 @@
 """
-数据字典生成器
-从 PostgreSQL 读取真实表结构, 生成 LLM prompt 使用的 schema 描述
+Data dictionary generator
+Reads the real table structure from PostgreSQL and produces schema
+descriptions for LLM prompts
 """
 from __future__ import annotations
 
@@ -9,7 +10,7 @@ from typing import Dict, List, Optional
 
 from storage.pg import PgClient
 
-# 表 -> 字段说明 (用于 prompt, 补充数据库层面无注释的情况)
+# Table -> field descriptions (for prompts; supplements the lack of DB-level comments)
 FIELD_DESCRIPTIONS: Dict[str, Dict[str, str]] = {
     "income": {
         "total_revenue": "营业总收入",
@@ -98,7 +99,7 @@ FIELD_DESCRIPTIONS: Dict[str, Dict[str, str]] = {
 }
 
 
-# 表 -> 中文名 + 简要说明
+# Table -> Chinese display name + brief description
 TABLE_INTRO = {
     "income": "利润表(按报告期, 单位:元)。columns: ts_code,end_date,report_type,...",
     "balancesheet": "资产负债表(按报告期, 单位:元)。columns: ts_code,end_date,...",
@@ -117,14 +118,14 @@ TABLE_INTRO = {
 
 
 class SchemaInfo:
-    """数据字典"""
+    """Data dictionary"""
 
     def __init__(self):
         self._cache: Optional[str] = None
         self._columns_cache: Dict[str, List[str]] = {}
 
     def _load_columns(self) -> Dict[str, List[str]]:
-        """从 PG 读取各表列名"""
+        """Read each table's column names from PG"""
         if self._columns_cache:
             return self._columns_cache
 
@@ -146,7 +147,7 @@ class SchemaInfo:
                     )
                     self._columns_cache[tn] = [c["column_name"] for c in cols]
 
-            # 视图
+            # Views
             for schema in ("stock", "fin"):
                 views = pg.fetch_all(
                     "SELECT table_name FROM information_schema.views "
@@ -166,7 +167,7 @@ class SchemaInfo:
         return self._columns_cache
 
     def to_prompt_text(self, tables: Optional[List[str]] = None) -> str:
-        """生成 LLM prompt 用的 schema 描述文本"""
+        """Produce the schema description text used in LLM prompts"""
         cols = self._load_columns()
         lines: List[str] = []
 
@@ -193,12 +194,12 @@ class SchemaInfo:
         return "\n".join(lines)
 
     def to_json(self) -> str:
-        """JSON 格式 (供程序使用)"""
+        """JSON format (for programmatic use)"""
         cols = self._load_columns()
         return json.dumps(cols, ensure_ascii=False, indent=2)
 
 
-# 单例
+# Singleton
 _schema_info: Optional[SchemaInfo] = None
 
 

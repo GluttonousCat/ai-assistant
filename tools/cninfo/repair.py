@@ -1,20 +1,27 @@
 # -*- encoding: utf-8 -*-
 """
-年报结构修复 Agent — 契约违约的"Agent 识别 + Agent 解决"兜底 (漏斗 L2)
+Annual-report structure repair Agent — the "Agent detects + Agent solves"
+fallback for contract violations (funnel L2).
 
-分工原则 (用户裁定): 结构问题不追特例正则 — 识别与解决都是 Agent 语义判断;
-代码层只剩两类东西:
-- 机械装配: 行切片 → {title, text, tables} 同构产物 (schema 保证, 零公司特例)
-- 语义判据: contracts 契约机检 (验收), 不过则失败原因回灌重试 (默认 3 次)
+Division of labor (user ruling): structural problems are not chased with
+per-case regexes — both detection and resolution are the Agent's semantic
+judgment; only two kinds of things remain in the code layer:
+- mechanical assembly: line slices → isomorphic {title, text, tables}
+  products (schema guaranteed, zero per-company special cases)
+- semantic criteria: the contracts machine-check (acceptance); on failure
+  the reason is fed back for retries (default 3)
 
-链路: 定位(LLM: 真实正文起止行) → 切分(LLM: 小节边界+标题) → 装配(代码) →
-契约机检(代码) → 未过回灌重试; 留痕 _items.json "repairs" 键。
-目录陷阱/异形编号(A+H 管治守则风格)/无编号小节等结构变体全部由 Agent 语义消化。
+Pipeline: locate (LLM: true body start/end lines) → segment (LLM: subsection
+boundaries + titles) → assemble (code) → contract machine-check (code) →
+feed failures back and retry; traces land in the _items.json "repairs" key.
+TOC traps / atypical numbering (A+H governance-code style) / unnumbered
+subsections and other structural variants are all digested semantically by
+the Agent.
 
-LLM 由调用方注入 (与 evidence 内核同约定, 模块本体零项目依赖);
-CLI 是注入口:
+The LLM is injected by the caller (same convention as the evidence core; the
+module body has zero project dependencies); the CLI is the injection point:
     python -m tools.cninfo.repair --stock 600036 [--attempts 3] [--dry-run]
-    python -m tools.cninfo.repair --all [--limit 10]     # 扫 MD_ROOT 全部违约文件
+    python -m tools.cninfo.repair --all [--limit 10]     # sweep all violating files in MD_ROOT
 """
 from __future__ import annotations
 
@@ -24,8 +31,8 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from .contracts import (CONTRACTS, acceptance_check, check_data, diagnostic_terms,
-                        reason_terms, repair_brief)
+from .contracts import (CONTRACTS, acceptance_check, check_data,
+                        repair_brief)
 from .parse import (ITEM_ALIASES, MD_ROOT, SECTION_RULES, _clean_title,
                     _header_lines, _subsection_dict, marker_rank)
 
@@ -69,7 +76,8 @@ SEGMENT_PROMPT = """你是年报小节结构分析器。对下面带相对行号
 
 
 def _outline(md: str, key: str, cap: int = 160) -> str:
-    """带行号大纲: 标题特征行 + 含目标词/探针的行 (给 LLM 的全部视野)"""
+    """Numbered outline: heading-like lines + lines containing target/probe
+    words (the LLM's entire field of view)."""
     c = CONTRACTS[key]
     terms = list(ITEM_ALIASES.get(key) or [])
     terms.append(c["title"])
@@ -115,7 +123,7 @@ def _locate(llm, kind: str, key: str, md: str, feedback: str) -> Optional[Dict]:
         feedback=feedback, outline=_outline(md, key))
     try:
         resp = llm.invoke([{"role": "user", "content": prompt}])
-    except Exception as e:  # noqa: BLE001 LLM 故障按"本轮未找到"处理, 不中断批次
+    except Exception as e:  # noqa: BLE001 an LLM failure is treated as "not found this round"; never breaks the batch
         return {"found": False, "error": str(e)[:80]}
     loc = _parse_json(resp or "")
     if loc and loc.get("found"):
@@ -128,7 +136,8 @@ def _locate(llm, kind: str, key: str, md: str, feedback: str) -> Optional[Dict]:
 
 
 def _segment(llm, block_lines: List[str], feedback: str) -> Optional[List[Dict]]:
-    """Agent 切分: 章节正文 → [{title, start, end}] (相对行号); 失败返回 None"""
+    """Agent segmentation: chapter body → [{title, start, end}] (relative
+    line numbers); None on failure."""
     numbered = "\n".join(f"R{i}: {l[:100]}" for i, l in enumerate(block_lines, 1))
     try:
         resp = llm.invoke([{"role": "user", "content": SEGMENT_PROMPT.format(
@@ -169,7 +178,8 @@ def _segment(llm, block_lines: List[str], feedback: str) -> Optional[List[Dict]]
 
 def _assemble(kind: str, key: str, block_lines: List[str], segs: Optional[List[Dict]],
               title: str, md: str) -> Dict:
-    """机械装配: 行切片 → 与主链路同构的 {title, text, tables} (零公司特例)"""
+    """Mechanical assembly: line slices → {title, text, tables} isomorphic
+    with the main pipeline (zero per-company special cases)."""
     headers = _header_lines(md)
     block = "\n".join(block_lines)
     if kind == "item" or not segs:
@@ -187,7 +197,8 @@ def _assemble(kind: str, key: str, block_lines: List[str], segs: Optional[List[D
 
 def repair_key(llm, kind: str, key: str, md: str, attempts: int = 3
                ) -> Tuple[bool, Optional[Dict], List[str]]:
-    """单键修复: Agent 定位 → Agent 切分 → 机械装配 → 契约机检, 失败原因回灌重试"""
+    """Single-key repair: Agent locate → Agent segment → mechanical assembly
+    → contract machine-check, with failure-reason feedback retries."""
     lines = md.split("\n")
     feedback = ""
     seg_feedback = ""
@@ -228,7 +239,8 @@ def repair_key(llm, kind: str, key: str, md: str, attempts: int = 3
 
 def repair_file(path: Path, llm, attempts: int = 3,
                 dry_run: bool = False) -> Dict:
-    """单文件: 契约检查 → 逐违约键修复 → 回写 (含 repairs 审计) → 复检"""
+    """Single file: contract check → repair each violating key → write back
+    (with the repairs audit) → re-check."""
     d = json.loads(path.read_text(encoding="utf-8"))
     before = check_data(d)
     md_path = path.with_name(path.name.replace("_items.json", ".md"))
@@ -265,7 +277,7 @@ def repair_stock(stock: str, llm, attempts: int = 3,
 
 def repair_all(llm, attempts: int = 3, limit: int = 0,
                dry_run: bool = False) -> List[Dict]:
-    """扫全部产物: 只修有契约违约的文件"""
+    """Sweep all products: repair only files with contract violations."""
     results = []
     for p in sorted(MD_ROOT.glob("*/*_items.json")):
         d = json.loads(p.read_text(encoding="utf-8"))

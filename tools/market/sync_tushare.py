@@ -1,23 +1,25 @@
 """
-Tushare 全量历史日K -> PostgreSQL 同步模块 (2000积分版)
+Tushare full historical daily bars -> PostgreSQL sync module (2000-credit tier)
 
-功能:
-- 股票池: 主板 + 创业板 + 科创板 (用 stock_basic, 排除北交所/B股/ST/退市)
-- 全量回填: daily(日K) / adj_factor(复权因子) / daily_basic(每日估值)
-- 断点续传: 基于 stock.sync_meta 水位线 + 表内实际数据, 可反复执行
-- 交易日历: 用 trade_cal 同步到 PG, 供 K线分析使用
+Features:
+- Stock pool: main board + ChiNext + STAR (from stock_basic; excludes BSE/B-shares/ST/delisted)
+- Full backfill: daily (daily bars) / adj_factor (adjustment factors) / daily_basic (daily valuation)
+- Resumable: based on the stock.sync_meta watermark + actual data in the
+  table, safe to rerun repeatedly
+- Trading calendar: synced to PG via trade_cal, for K-line analysis
 
-权限说明 (2000积分):
-- daily        200次/分钟, 按 trade_date 一次取全市场
-- adj_factor   200次/分钟
-- daily_basic  200次/分钟
+Permissions (2000 credits):
+- daily        200 calls/min, one trade_date call returns the whole market
+- adj_factor   200 calls/min
+- daily_basic  200 calls/min
 
-用法(命令行):
+Usage (CLI):
     python -m tools.market.sync_tushare --start 20000101
     python -m tools.market.sync_tushare --tables daily,adj_factor
 
-【边界约束】本模块仅访问 Tushare API 与远程 PostgreSQL 的 SQL 数据读写,
-不执行任何服务器级操作 (无 SSH / 无远端 Shell / 不修改服务器配置)。
+[Boundary constraint] This module only touches the Tushare API and SQL data
+read/write on the remote PostgreSQL; it performs no server-level operations
+(no SSH / no remote shell / no server config changes).
 """
 from __future__ import annotations
 
@@ -32,27 +34,27 @@ from core.config import get_config
 from core.logger import get_logger
 from storage.pg import PgClient
 from storage.pg_schema import T_SYNC_META, T_TRADE_CALENDAR, init_schema
-import core.net  # noqa: F401  (强制直连, 绕过不稳定代理)
+import core.net  # noqa: F401  (force direct connection, bypass flaky proxy)
 
 logger = get_logger(__name__)
 
-# 板块白名单 (用 Tushare market 字段)
+# Board whitelist (using Tushare's market field)
 ALLOWED_MARKETS = ("主板", "创业板", "科创板")
-# 排除前缀: 北交所(8/4)、B股(200/900)
+# Excluded prefixes: BSE (8/4), B-shares (200/900)
 EXCLUDE_SYMBOL_PREFIX = ("8", "4", "200", "900")
 
-# 请求间隔(秒): 200次/分钟 -> 0.35s 间隔留余量
+# Request interval (seconds): 200 calls/min -> 0.35s interval leaves headroom
 API_SLEEP = 0.35
-# 每批多少交易日做一次批量写入 (单日约5000行, 10天一批约5万行)
+# How many trading days per batch write (one day ~5000 rows, a 10-day batch ~50k rows)
 BATCH_TRADE_DAYS = 10
 
-# 模块级缓存
+# Module-level cache
 _WHITELIST_CACHE: Optional[set] = None
 _TRADING_DAYS_CACHE: Optional[List[date]] = None
 
 
 def _to_date(v) -> date:
-    """归一化为 date 对象 (支持 str/YYYYMMDD, pd.Timestamp, datetime)"""
+    """Normalize to a date object (accepts str/YYYYMMDD, pd.Timestamp, datetime)"""
     if v is None:
         return None
     if isinstance(v, float) and pd.isna(v):
@@ -72,20 +74,20 @@ def _to_date(v) -> date:
 
 
 # ============================================================
-# 股票池 / 交易日
+# Stock pool / trading days
 # ============================================================
 
 def get_whitelist(pro=None, use_cache: bool = True,
                   refresh_remote: bool = True) -> set:
     """
-    白名单 ts_code 集合 (主板+创业板+科创板, 剔除北交/B股/ST/退市)
-    数据源优先级: 内存缓存 -> PG stock_basic -> Tushare 远程
+    Whitelist ts_code set (main board + ChiNext + STAR; excludes BSE/B-shares/ST/delisted)
+    Source priority: memory cache -> PG stock_basic -> Tushare remote
     """
     global _WHITELIST_CACHE
     if use_cache and _WHITELIST_CACHE is not None:
         return _WHITELIST_CACHE
 
-    # PG 缓存 (stock_basic 表本身即为白名单, 无需 status 过滤)
+    # PG cache (the stock_basic table itself is the whitelist; no status filter needed)
     try:
         with PgClient() as pg:
             if pg.table_exists("stock", "stock_basic"):
@@ -115,11 +117,11 @@ def get_whitelist(pro=None, use_cache: bool = True,
         return set()
 
     before = len(df)
-    # 板块过滤
+    # Board filter
     df = df[df["market"].isin(ALLOWED_MARKETS)]
-    # 代码前缀过滤 (北交所 8/4, B股 200/900)
+    # Symbol prefix filter (BSE 8/4, B-shares 200/900)
     df = df[~df["symbol"].str.startswith(EXCLUDE_SYMBOL_PREFIX)]
-    # 名称过滤 ST/*ST/退
+    # Name filter ST/*ST/delisted
     df = df[~df["name"].str.contains("ST", case=False, na=False)]
     df = df[~df["name"].str.contains("退", na=False)]
 
@@ -129,7 +131,7 @@ def get_whitelist(pro=None, use_cache: bool = True,
         f"(主板/创业板/科创板, 剔除北交/B股/ST/退市)"
     )
 
-    # 落地 PG
+    # Persist to PG
     try:
         with PgClient() as pg:
             pg.upsert_df(df, "stock", "stock_basic",
@@ -143,7 +145,7 @@ def get_whitelist(pro=None, use_cache: bool = True,
 
 
 def filter_allowed_codes(df: pd.DataFrame) -> pd.DataFrame:
-    """将 DataFrame 过滤到白名单"""
+    """Filter a DataFrame down to the whitelist"""
     if "ts_code" not in df.columns or df.empty:
         return df
     wl = get_whitelist(use_cache=True, refresh_remote=True)
@@ -153,7 +155,7 @@ def filter_allowed_codes(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def sync_trade_calendar(pro, start: date, end: date) -> int:
-    """同步交易日历 (SSE) 到 PG"""
+    """Sync the trading calendar (SSE) to PG"""
     df = pro.trade_cal(
         exchange="SSE",
         start_date=start.strftime("%Y%m%d"),
@@ -164,7 +166,7 @@ def sync_trade_calendar(pro, start: date, end: date) -> int:
         return 0
     df["cal_date"] = df["cal_date"].map(_to_date)
     df["pretrade_date"] = df["pretrade_date"].map(_to_date)
-    # 空值填充 (pandas 新版 fillna 不接受 None 值)
+    # Fill nulls (newer pandas fillna rejects None values)
     df = df.where(pd.notna(df), None)
 
     with PgClient() as pg:
@@ -177,7 +179,7 @@ def sync_trade_calendar(pro, start: date, end: date) -> int:
 
 
 def get_trading_days_in_range(pg: PgClient, start: date, end: date) -> List[date]:
-    """从 PG trade_calendar 读取区间内交易日 (升序)"""
+    """Read trading days within a range from PG trade_calendar (ascending)"""
     rows = pg.fetch_all(
         f"SELECT cal_date FROM {T_TRADE_CALENDAR} "
         "WHERE is_open=1 AND cal_date BETWEEN %s AND %s ORDER BY cal_date",
@@ -187,7 +189,7 @@ def get_trading_days_in_range(pg: PgClient, start: date, end: date) -> List[date
 
 
 # ============================================================
-# 同步水位线
+# Sync watermark
 # ============================================================
 
 def get_sync_progress(table: str, pg: PgClient) -> Optional[date]:
@@ -211,7 +213,7 @@ def set_sync_progress(table: str, latest_date: date, total: int, pg: PgClient) -
 
 
 # ============================================================
-# 回填核心
+# Backfill core
 # ============================================================
 
 def backfill_table(
@@ -224,15 +226,15 @@ def backfill_table(
     end: date,
 ) -> int:
     """
-    通用回填器: 逐交易日抓取 -> 批量写入 PG
+    Generic backfiller: fetch per trading day -> batch write to PG
 
     Args:
-        table: 目标表名 ('daily' / 'adj_factor' / 'daily_basic')
-        api_name: Tushare 接口函数名
-        keys: 表主键列
-        fields: 要写入的列 (Tushare 返回列的子集)
+        table: target table name ('daily' / 'adj_factor' / 'daily_basic')
+        api_name: Tushare API function name
+        keys: table primary key columns
+        fields: columns to write (a subset of the columns Tushare returns)
     """
-    # 断点续传: 基于表内实际 MAX(trade_date) (比 sync_meta 更可靠)
+    # Resume: based on the table's actual MAX(trade_date) (more reliable than sync_meta)
     with PgClient() as pg:
         actual_max = pg.fetch_one(
             f"SELECT MAX(trade_date) AS m FROM stock.{table} "
@@ -259,7 +261,7 @@ def backfill_table(
     else:
         logger.info(f"断点续传: 表 {table} 无历史数据, 执行全量回填")
 
-    # 交易日列表
+    # Trading day list
     with PgClient() as pg:
         trading_days = get_trading_days_in_range(pg, start_for_sync, end)
     if not trading_days:
@@ -289,7 +291,7 @@ def backfill_table(
         if df.empty:
             continue
 
-        # 保留需要的列
+        # Keep only the needed columns
         keep = [f for f in fields if f in df.columns]
         df = df[keep]
         if "trade_date" in df.columns:
@@ -310,9 +312,10 @@ def backfill_table(
                 with PgClient() as pg:
                     set_sync_progress(table, last_synced, total, pg)
 
-    # 循环结束后 flush 残留批次
-    # (修复: 若最后一个交易日数据未入库(15-16点前), 之前用 i==len 判断
-    #  flush 会被 continue 短路, 导致整批数据永不写入)
+    # Flush the leftover batch after the loop ends
+    # (fix: when the last trading day's data is not yet published (before
+    # 15-16:00), the previous i==len-based flush could be short-circuited by
+    # `continue`, leaving a whole batch never written)
     if batch_dfs:
         n = _flush_batch(batch_dfs, table, keys)
         total += n
@@ -327,7 +330,7 @@ def backfill_table(
 
 def _flush_batch(dfs: List[pd.DataFrame], table: str,
                  keys: Sequence[str]) -> int:
-    """合并本批 DataFrame 并写入 PG, 返回写入行数"""
+    """Merge this batch's DataFrames and write to PG, returns the row count written"""
     if not dfs:
         return 0
     df = pd.concat(dfs, ignore_index=True)
@@ -339,10 +342,10 @@ def _flush_batch(dfs: List[pd.DataFrame], table: str,
 
 
 # ============================================================
-# 完整流程
+# Full pipeline
 # ============================================================
 
-# 各表配置: 表名 -> (Tushare接口名, 主键, 所需列)
+# Per-table config: table name -> (Tushare API name, primary key, columns)
 TABLE_CONFIG = {
     "daily": (
         "daily",
@@ -367,13 +370,14 @@ TABLE_CONFIG = {
 
 
 class TusharePgSyncer:
-    """Tushare -> PG 同步器"""
+    """Tushare -> PG syncer"""
 
     def __init__(self):
         self.config = get_config()
         if not self.config.tushare_token:
             raise ValueError("未配置 TUSHARE_TOKEN (.env)")
-        # Tushare API 直连, 绕过系统代理 (代理偶发断连导致回填崩溃)
+        # Direct connection to the Tushare API, bypassing system proxies
+        # (flaky proxies once crashed the backfill)
         import os
         for _k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
             os.environ.pop(_k, None)
@@ -388,18 +392,18 @@ class TusharePgSyncer:
         end = _to_date(end) if end else date.today()
         end = min(end, date.today())
 
-        # 1. 初始化表结构
+        # 1. Initialize table structure
         with PgClient() as pg:
             init_schema(pg)
 
-        # 2. 白名单 (首次会远程拉取落地 PG, 后续直接读 PG)
+        # 2. Whitelist (first run fetches remotely and persists to PG; later runs read PG directly)
         codes = get_whitelist(pro, use_cache=False, refresh_remote=True)
         logger.info(f"白名单股票数: {len(codes)}")
 
-        # 3. 交易日历
+        # 3. Trading calendar
         sync_trade_calendar(pro, start, end)
 
-        # 4. 回填各表
+        # 4. Backfill each table
         tables = set(tables or list(TABLE_CONFIG.keys()))
         result: Dict[str, int] = {}
 

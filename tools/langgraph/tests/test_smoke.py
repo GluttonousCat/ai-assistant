@@ -1,11 +1,13 @@
 # -*- encoding: utf-8 -*-
-"""langgraph 原子冒烟测试 (无网络/无 LLM; 缺 langgraph 时整组 skip)
+"""langgraph atomic smoke tests (no network / no LLM; whole group skips when
+langgraph is missing)
 
-覆盖四条实证结论 (langgraph 1.1.3):
-① 显式 TypedDict schema 下节点/路由/持久化全通
-② reducer 键 (append) 同线程跨轮累积; messages 走原生 add_messages
-③ 异线程隔离 + reset 遗忘
-④ 长期记忆命名空间读写/遗忘/隔离
+Covers four empirical findings (langgraph 1.1.3):
+① with an explicit TypedDict schema, nodes/routing/persistence all pass
+② reducer keys (append) accumulate across turns within a thread; messages
+  uses the native add_messages
+③ cross-thread isolation + reset-based forgetting
+④ long-term memory namespace read/write/forget/isolation
 """
 from __future__ import annotations
 
@@ -33,7 +35,7 @@ class _Route(TypedDict):
 
 class _Acc(TypedDict):
     x: str
-    seen: Annotated[list, append]       # reducer 键: 短期累积的地基
+    seen: Annotated[list, append]       # reducer key: foundation of short-term accumulation
 
 
 def test_flow_chain():
@@ -47,7 +49,7 @@ def test_flow_chain():
 
 def test_flow_route():
     f = (Flow(_Route)
-         .nodes(judge=lambda s: {},                     # 传送门: 只路由不写状态
+         .nodes(judge=lambda s: {},                     # portal: routes only, writes no state
                 even=lambda s: {"tag": "偶"},
                 odd=lambda s: {"tag": "奇"})
          .edge(START, "judge")
@@ -60,23 +62,24 @@ def test_flow_route():
 
 
 def test_short_term_accumulation():
-    """短期记忆原子: 同线程累积 (需 reducer 键) / 异线程隔离 / reset 遗忘"""
+    """Short-term-memory atoms: same-thread accumulation (reducer key
+    required) / cross-thread isolation / reset forgetting"""
     st = ShortTerm()
     app = (Flow(_Acc)
-           .node("tick", lambda s: {"seen": [s["x"]]})  # 只返回增量
+           .node("tick", lambda s: {"seen": [s["x"]]})  # returns only a delta
            .chain(START, "tick", END)
            .compile(checkpointer=st.saver))
     invoke(app, {"x": "a"}, thread_id="t1")
     invoke(app, {"x": "b"}, thread_id="t1")
     invoke(app, {"x": "z"}, thread_id="t2")
-    assert st.state(app, "t1")["seen"] == ["a", "b"]      # reducer 累积
-    assert st.state(app, "t2")["seen"] == ["z"]           # 线程隔离
+    assert st.state(app, "t1")["seen"] == ["a", "b"]      # reducer accumulation
+    assert st.state(app, "t2")["seen"] == ["z"]           # thread isolation
     st.reset("t1")
-    assert st.state(app, "t1") is None                    # 遗忘
+    assert st.state(app, "t1") is None                    # forgetting
 
 
 def test_short_term_messages_history():
-    """messages 键 (原生 add_messages) 的线程历史读取"""
+    """Reading thread history for the messages key (native add_messages)"""
     st = ShortTerm()
     app = (Flow(MessagesState)
            .node("echo", lambda s: {"messages": [AIMessage("ok")]})
@@ -85,7 +88,7 @@ def test_short_term_messages_history():
     invoke(app, {"messages": [HumanMessage("hi")]}, thread_id="t1")
     invoke(app, {"messages": [HumanMessage("again")]}, thread_id="t1")
     texts = [str(m.content) for m in st.messages(app, "t1")]
-    assert texts == ["hi", "ok", "again", "ok"]           # 对话历史完整
+    assert texts == ["hi", "ok", "again", "ok"]           # full conversation history
 
 
 def test_long_term_namespace_roundtrip():
@@ -96,4 +99,4 @@ def test_long_term_namespace_roundtrip():
     assert {"key": "profile", "likes": "猫"} in got
     lt.forget(("user", "alice"), "job")
     assert all(m["key"] != "job" for m in lt.recall(("user", "alice")))
-    assert lt.recall(("user", "bob")) == []               # 命名空间隔离
+    assert lt.recall(("user", "bob")) == []               # namespace isolation

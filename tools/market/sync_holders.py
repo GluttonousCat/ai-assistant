@@ -1,13 +1,16 @@
 # -*- encoding: utf-8 -*-
 """
-十大股东同步 (Tushare top10_holders; 单接口含流通比例/变动/类型)
+Top-10 shareholders sync (Tushare top10_holders; the single API includes
+float ratio/change/type)
 
-按股增量: 已有 max(end_date) 之后续拉 (tushare 按股全期一次返回, 增量只省入库量).
-限频: 每股一调用, 间隔 RATE 秒 + 失败重试; 积分不足时接口会报错并跳过该股.
+Per-stock increment: resume after the existing max(end_date) (Tushare returns
+a stock's full history in one call, so incrementing only saves upsert volume).
+Rate limit: one call per stock, RATE-second interval + retries on failure;
+with insufficient credits the API errors and that stock is skipped.
 
-用法:
-    python -m tools.market.sync_holders --index 000300.SH          # 沪深300
-    python -m tools.market.sync_holders --stock 中际旭创           # 单只
+Usage:
+    python -m tools.market.sync_holders --index 000300.SH          # CSI 300
+    python -m tools.market.sync_holders --stock 中际旭创           # single stock
     python -m tools.market.sync_holders --index 000300.SH --years 5
 """
 from __future__ import annotations
@@ -16,7 +19,7 @@ import argparse
 import sys
 import time
 from datetime import date
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 from core.logger import get_logger
 from storage.pg import PgClient
@@ -24,7 +27,7 @@ from storage.pg_schema import DDL_TOP10_HOLDERS
 
 logger = get_logger(__name__)
 
-RATE = 0.35            # 每股调用间隔 (秒)
+RATE = 0.35            # per-stock call interval (seconds)
 RETRIES = 3
 
 
@@ -57,7 +60,8 @@ def _load_stocks(index_code: str = "", stock: str = "") -> List[Dict[str, str]]:
 
 
 def _since(pg, ts_code: str, years: int) -> str:
-    """增量起点: 已有 max(end_date) 次日; 无数据则 years 年前"""
+    """Increment start: the day after existing max(end_date); with no data,
+    Jan 1 of `years` years back"""
     row = pg.fetch_one("SELECT MAX(end_date) d FROM stock.top10_holders "
                        "WHERE ts_code=%s", (ts_code,))
     if row and row["d"]:
@@ -72,7 +76,7 @@ def sync(ts_code: str, name: str = "", years: int = 5) -> Dict[str, int]:
     pro = ts.pro_api(get_config().tushare_token)
     stats = {"saved": 0, "failed": 0}
     with PgClient() as pg:
-        pg.execute(DDL_TOP10_HOLDERS)          # 幂等建表
+        pg.execute(DDL_TOP10_HOLDERS)          # idempotent table creation
         pg.conn.commit()
         start = _since(pg, ts_code, years)
         df = None
@@ -81,7 +85,7 @@ def sync(ts_code: str, name: str = "", years: int = 5) -> Dict[str, int]:
                 df = pro.top10_holders(ts_code=ts_code, start_date=start,
                                        end_date=date.today().strftime("%Y%m%d"))
                 break
-            except Exception as e:  # noqa: BLE001 限频/积分
+            except Exception as e:  # noqa: BLE001 rate limit / credits
                 logger.warning(f"top10 {ts_code} 失败 ({attempt}/{RETRIES}): "
                                f"{str(e)[:80]}")
                 time.sleep(min(60, 10 * attempt))
@@ -139,7 +143,7 @@ def main() -> int:
             try:
                 st = sync(s["ts_code"], s.get("name", ""), args.years)
                 break
-            except pg_down as e:   # PG 服务端断连: 每股独立连接, 重试即重连
+            except pg_down as e:   # PG server disconnect: one connection per stock, retry reconnects
                 logger.warning(f"top10 {s['ts_code']} PG 断连 "
                                f"({attempt}/{RETRIES}): {str(e)[:80]}")
                 time.sleep(10 * attempt)

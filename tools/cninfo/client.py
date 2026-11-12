@@ -26,7 +26,8 @@ _HEADERS = {
 
 
 def is_pdf_file(path) -> bool:
-    """%PDF 魔数校验 (防错误页/HTML 存成假 PDF; 落盘后校验)"""
+    """%PDF magic-number check (guards against error pages/HTML saved as fake
+    PDFs; verify after writing to disk)."""
     try:
         with open(path, "rb") as f:
             return f.read(4) == b"%PDF"
@@ -49,25 +50,25 @@ class CninfoClient:
         self._org_id_cache: Dict[str, str] = {}
         self._stock_list: Optional[List[Dict]] = None
 
-    # ---------- 基础 ----------
+    # ---------- basics ----------
     def _sleep(self) -> None:
         time.sleep(random.uniform(self.min_delay, self.max_delay))
 
     def _post_json(self, url: str, data: Dict) -> Optional[Dict]:
-        """POST -> JSON, 指数退避重试; 全部失败返回 None"""
+        """POST -> JSON with exponential-backoff retries; None if all fail."""
         for attempt in range(1, self.retries + 1):
             self._sleep()
             try:
                 resp = self.session.post(url, data=data, timeout=self.timeout)
                 resp.raise_for_status()
                 return resp.json()
-            except Exception as e:  # noqa: BLE001 网络抖动是常态 (504 限流常见)
+            except Exception as e:  # noqa: BLE001 network jitter is routine (504 rate-limiting is common)
                 logger.warning(f"cninfo POST 失败 ({attempt}/{self.retries}) "
                                f"{type(e).__name__}: {e}")
-                time.sleep(min(30, 3 * attempt ** 2))   # 3/12/27/30s, 504 需长退避
+                time.sleep(min(30, 3 * attempt ** 2))   # 3/12/27/30s; 504 needs a long backoff
         return None
 
-    # ---------- 公开能力 ----------
+    # ---------- public API ----------
 
     def fetch_stock_list(self) -> List[Dict]:
         if getattr(self, "_stock_list", None):
@@ -83,12 +84,13 @@ class CninfoClient:
                  if it.get("code") and it.get("orgId")})
             logger.info(f"巨潮全市场清单加载: {len(items)} 只 (szse_stock.json)")
             return items
-        except Exception as e:  # noqa: BLE001 限流/不可达时静默降级
+        except Exception as e:  # noqa: BLE001 degrade silently when rate-limited/unreachable
             logger.warning(f"巨潮全市场清单不可达: {type(e).__name__}")
             return []
 
     def fetch_org_map_bulk(self) -> Dict[str, str]:
-        """全市场 {code: orgId} (基于 fetch_stock_list, 兼容旧调用)"""
+        """Whole-market {code: orgId} map (built on fetch_stock_list; kept for
+        old callers)."""
         return {it["code"]: it.get("orgId", "") for it in self.fetch_stock_list()
                 if it.get("code") and it.get("orgId")}
 
@@ -143,7 +145,7 @@ class CninfoClient:
             page += 1
         return out
 
-    MAX_DL_ATTEMPTS = 40   # 单文件绝对尝试上限 (续传模式下大文件常需 5-10 次)
+    MAX_DL_ATTEMPTS = 40   # absolute per-file attempt cap (large files often need 5-10 tries under resume mode)
 
     def download_pdf(self, adjunct_url: str, dest: Path) -> Tuple[bool, int]:
         tmp = dest.with_suffix(".part")
@@ -172,7 +174,7 @@ class CninfoClient:
                     logger.info(f"PDF 续传完成 ({attempt} 次): {dest.name} "
                                 f"({size / 1e6:.1f}MB)")
                 return True, size
-            except Exception as e:  # noqa: BLE001 断流是常态, 落盘增量后继续续传
+            except Exception as e:  # noqa: BLE001 dropped connections are routine; resume from the bytes already on disk
                 grew = (tmp.stat().st_size if tmp.exists() else 0) - before
                 logger.warning(f"cninfo PDF 下载中断 ({attempt}/"
                                f"{self.MAX_DL_ATTEMPTS}) @{before}B+{grew}B "

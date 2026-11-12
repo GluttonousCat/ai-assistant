@@ -1,22 +1,29 @@
 """
-Tushare 主营构成 (fina_mainbz) -> PostgreSQL 同步
+Tushare main-business composition (fina_mainbz) -> PostgreSQL sync
 
-功能:
-- 全量回填: 逐只股票一次调用返回全部报告期 x 全部维度 (bz_code 自带 P产品/D地区/I行业 标签)
-- 限频重试: 每分钟限流时等待重试不丢股票; 积分不足直接终止
-- 断点续传: fin.sync_meta (table_name=fina_mainbz) 记录进度, 可反复执行
-- 增量模式: 只重拉最近 N 天公告财报的股票 (income.ann_date 驱动, 幂等 upsert)
+Features:
+- Full backfill: one call per stock returns all report periods x all
+  dimensions (bz_code carries the P=product/D=region/I=industry tag)
+- Rate-limit retry: wait and retry on per-minute throttling so no stock is
+  lost; insufficient credits aborts immediately
+- Resumable: progress recorded in fin.sync_meta (table_name=fina_mainbz),
+  safe to rerun repeatedly
+- Incremental mode: re-pull only stocks whose reports were announced within
+  the last N days (driven by income.ann_date, idempotent upsert)
 
-数据说明:
-- 主营构成 = 财报中按产品/地区/行业拆分的收入构成 (收入/成本/利润), 金额单位:元
-- 接口不返回 ann_date/update_flag; 一次调用返回该公司全部历史与全部维度
-- 维度表头行(产品/行业/地区)、合计行、冒号分层子项等清洗逻辑在视图 fin.v_main_biz
+Data notes:
+- Main-business composition = the report's revenue breakdown by
+  product/region/industry (revenue/cost/profit), amounts in yuan
+- The API returns neither ann_date nor update_flag; one call returns the
+  company's full history and all dimensions
+- Cleaning of dimension header rows (product/industry/region), total rows and
+  colon-indented sub-items lives in the view fin.v_main_biz
 
-用法(命令行):
-    python -m tools.market.sync_mainbz                     # 全量回填(断点续传)
-    python -m tools.market.sync_mainbz --limit 5           # 前5只测试
-    python -m tools.market.sync_mainbz --mode incremental  # 增量(近期公告财报的股票)
-    python -m tools.market.sync_mainbz --full              # 忽略断点全量重跑
+Usage (CLI):
+    python -m tools.market.sync_mainbz                     # full backfill (resumable)
+    python -m tools.market.sync_mainbz --limit 5           # first 5 stocks (test)
+    python -m tools.market.sync_mainbz --mode incremental  # incremental (stocks with recently announced reports)
+    python -m tools.market.sync_mainbz --full              # ignore checkpoint, full rerun
 """
 from __future__ import annotations
 
@@ -36,15 +43,15 @@ from tools.market.sync_financial import (
     get_whitelist_codes,
     set_fin_progress,
 )
-import core.net  # noqa: F401  (强制直连, 绕过不稳定代理)
+import core.net  # noqa: F401  (force direct connection, bypass flaky proxy)
 
 logger = get_logger("sync_mainbz")
 
-API_SLEEP = 0.35          # 与 sync_financial 相同节流
-TABLE = "fina_mainbz"     # fin.sync_meta 水位线键名
+API_SLEEP = 0.35          # same throttle as sync_financial
+TABLE = "fina_mainbz"     # watermark key name in fin.sync_meta
 PK_COLS = ["ts_code", "end_date", "bz_code", "bz_item"]
 
-# 接口实际输出字段 (无 ann_date/update_flag, bz_code 为维度标签)
+# Actual API output fields (no ann_date/update_flag; bz_code is the dimension tag)
 MAINBZ_FIELDS = [
     "ts_code", "end_date", "bz_item", "bz_code",
     "bz_sales", "bz_profit", "bz_cost", "curr_type",
@@ -52,7 +59,8 @@ MAINBZ_FIELDS = [
 
 
 def fetch_stock_mainbz(pro, ts_code: str) -> pd.DataFrame:
-    """拉取单只股票全部报告期x全部维度 (限流等待重试)"""
+    """Fetch all report periods x all dimensions for one stock (waits and
+    retries on throttling)"""
     for attempt in range(1, 4):
         try:
             return pro.fina_mainbz(
@@ -74,12 +82,13 @@ def fetch_stock_mainbz(pro, ts_code: str) -> pd.DataFrame:
 
 
 def sync_one_stock(pro, ts_code: str) -> int:
-    """同步单只股票, 返回入库行数"""
+    """Sync one stock, returns stored row count"""
     df = fetch_stock_mainbz(pro, ts_code)
     if df is None or df.empty:
         return 0
     df = df.copy()
-    # bz_code 维度标签清洗 (455006000 等为销售模式等补充维度, 原样保留)
+    # bz_code dimension-tag cleanup (codes like 455006000 are supplementary
+    # dimensions such as sales mode; kept as-is)
     df["bz_code"] = df["bz_code"].astype(str).str.strip()
     df["end_date"] = df["end_date"].map(_to_date)
     df = df[df["bz_item"].notna() & df["end_date"].notna()]
@@ -101,11 +110,11 @@ def sync_one_stock(pro, ts_code: str) -> int:
 def backfill_mainbz(pro, codes: List[str], limit: Optional[int] = None,
                     force_full: bool = False,
                     record_progress: bool = True) -> int:
-    """回填主营构成 (逐股票, 断点续传)"""
+    """Backfill main-business composition (stock by stock, resumable)"""
     est_min = int(len(codes) * 0.5) // 60
     logger.info(f"回填主营构成: {len(codes)} 只 (每股1次调用), 预计约 {est_min} 分钟")
 
-    # 断点: 从上次 ts_code 之后继续 (force_full=True 时忽略)
+    # Checkpoint: resume after the last ts_code (ignored when force_full=True)
     if not force_full:
         last_code = get_fin_progress(TABLE)
         if last_code and last_code in codes:
@@ -127,7 +136,8 @@ def backfill_mainbz(pro, codes: List[str], limit: Optional[int] = None,
         total += rows
         if rows == 0:
             empty_cnt += 1
-        # 增量模式不推进回填水位线 (避免干扰断点续传)
+        # Incremental mode does not advance the backfill watermark (avoid
+        # disturbing the resume checkpoint)
         if record_progress:
             set_fin_progress(TABLE, ts_code, total)
         if i % 50 == 0:
@@ -139,7 +149,9 @@ def backfill_mainbz(pro, codes: List[str], limit: Optional[int] = None,
 
 
 def get_recent_report_codes(days: int = 14) -> List[str]:
-    """最近 N 天公告财报(income.ann_date)的股票 — 主营构成随财报一起披露"""
+    """Stocks whose reports were announced in the last N days
+    (income.ann_date) -- main-business composition is disclosed together with
+    the report"""
     with PgClient() as pg:
         rows = pg.fetch_all(
             "SELECT DISTINCT ts_code FROM fin.income "
@@ -152,12 +164,13 @@ def get_recent_report_codes(days: int = 14) -> List[str]:
 
 def run_mainbz(mode: str = "backfill", limit: Optional[int] = None,
                force_full: bool = False, days: int = 14) -> int:
-    """执行主营构成同步 (backfill=全量断点续传 / incremental=近期财报股票)"""
+    """Run main-business composition sync (backfill = full resumable /
+    incremental = stocks with recent reports)"""
     import tushare as ts
     config = get_config()
     pro = ts.pro_api(config.tushare_token)
 
-    # 建表 + 视图 (幂等)
+    # Ensure tables + views (idempotent)
     with PgClient() as pg:
         init_fin_schema(pg)
 

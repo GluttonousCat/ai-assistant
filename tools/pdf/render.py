@@ -1,5 +1,5 @@
 # -*- encoding: utf-8 -*-
-"""PDF 页渲染与图片型判定"""
+"""PDF page rendering and image-based-PDF detection"""
 from __future__ import annotations
 
 import base64
@@ -11,10 +11,13 @@ logger = get_logger(__name__)
 
 
 def is_image_pdf(path: str, max_pages_check: int = 3) -> bool:
-    """判断是否为图片型/扫描件 PDF (前几页零文本层 + 每页含大图)。
+    """Detect whether a PDF is image-based/scanned (first few pages have an
+    empty text layer plus at least one image per page).
 
-    判定即 OCR 闸门: 文本层有内容直接走 extract_text, 省视觉调用成本。
-    任何异常/缺库返回 False (宁可多一次空提取, 不误杀正常 PDF)。
+    This check is the OCR gate: if the text layer has content, go straight
+    to extract_text and save the vision-call cost. Any exception or missing
+    library returns False (prefer one wasted empty extraction over
+    misclassifying a normal PDF as scanned).
     """
     try:
         import fitz
@@ -38,9 +41,11 @@ def is_image_pdf(path: str, max_pages_check: int = 3) -> bool:
 
 def render_pages_png(path: str, max_pages: int = 10,
                      dpi: int = 130) -> List[Tuple[int, str]]:
-    """页渲染为 base64 PNG。返回 [(页码1based, b64)]; 打不开/缺库返回 []。
+    """Render pages as base64 PNG. Returns [(1-based page no., b64)]; returns
+    [] when the file cannot be opened or a library is missing.
 
-    dpi 经验值: 130 对研报正文字号足够且控制 token 成本, 扫描件可提至 200。
+    Empirical dpi: 130 is sufficient for report body-text sizes and keeps
+    token cost down; raise to 200 for scanned documents.
     """
     try:
         import fitz

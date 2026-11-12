@@ -47,7 +47,7 @@ def to_markdown(path: str,
 
     if save_as_chunks:
         return []
-    # 降级: 纯文本层 + 分页标记 (保章节可定位性)
+    # Fallback: plain text layer + page markers (keeps sections locatable)
     from tools.pdf.text import extract_text
     text = extract_text(path)
     if not text:

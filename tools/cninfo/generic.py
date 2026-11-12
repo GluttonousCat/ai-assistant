@@ -1,13 +1,18 @@
 # -*- encoding: utf-8 -*-
 """
-通用年报处理逻辑 (L0) — 单一方言, 解决大多数标准格式年报, 零 LLM。
+Generic annual-report processing (L0) — a single dialect that covers most
+standard-format annual reports, zero LLM.
 
-分工 (用户定调 2026-10-12):
-- 本模块 = 低成本智能化: 只认 A 股年报披露准则的通用结构 —
-  「第X节/章」章节锚 + 一、/(一)/N.M 三形态小节锚 + 第二章别名词表;
-- 特例结构 (A+H 管治守则编号 / 主题式标题 / 混合式 / 目录陷阱…) 一律不追:
-  契约机检 (contracts) 标记违约后交修复 Agent (repair) 语义兜底 = 最智能化;
-- 机械层 (PDF→MD / 表格解析 / 清洗 / 装配) 复用 parse.py, 不在本模块重复。
+Division of labor (user decision, 2026-10-12):
+- this module = low-cost intelligence: it recognizes only the generic
+  structure of the A-share disclosure standard — "第X节/章" chapter anchors +
+  the three subsection-anchor forms 一、/(一)/N.M + the chapter-2 alias vocab;
+- exceptional structures (A+H governance-code numbering / topic-style titles /
+  hybrid forms / TOC traps...) are deliberately not chased: the contract
+  machine-check (contracts) flags violations, then the repair Agent (repair)
+  provides the semantic fallback = maximum intelligence;
+- the mechanical layer (PDF→MD / table parsing / cleaning / assembly) is
+  reused from parse.py, not duplicated here.
 """
 from __future__ import annotations
 
@@ -18,17 +23,21 @@ from .parse import (ITEM_ALIASES, SECTION_RULES, _alias_hit, _block_end,
                     _clean_title, _header_lines, _render_body, _sim,
                     _subsection_anchors, _subsection_dict, marker_rank)
 
-# ---------------- 章节层: 唯一方言「第X节/章」 ----------------
-# 排版容忍: # 前缀 (标准) / 纯粗体 '**第X章 …**' (招行实证, pymupdf 未标 #) —
-# 结构锚仍是准则式第X节/章, 非结构特例; 主题式/混合式/A+H 编号归 Agent。
+# ---------------- chapter layer: the single dialect "第X节/章" ----------------
+# Layout tolerance: # prefix (standard) / bare bold '**第X章 …**' (China
+# Merchants Bank case, pymupdf left it unmarked) — the structural anchor is
+# still the standard 第X节/章 form, not a structural exception; topic-style /
+# hybrid / A+H numbering goes to the Agent.
 _SECTION_ANCHOR_RE = re.compile(
     r"^[#* \t]*第[一二三四五六七八九十百]+[节章][ \t]*(?P<title>[^\n]*?)[ \t*]*$",
     re.M)
 
-# 目录页残留的节名行 1~3 个是常态 (旧版 ≥4 阈值实证), 少于此视为无准则式锚
+# 1-3 chapter-title lines left over from the TOC page are normal (empirical
+# basis for the old >=4 threshold); fewer than that means no standard anchors
 _MIN_ANCHORS = 4
 
-# 节名 → 内部键 (需求侧词表, 与 contracts 语义对应; 按名匹配不按序号)
+# chapter name -> internal key (demand-side vocab, semantically aligned with
+# contracts; matched by name, not by chapter number)
 _SECTION_KEYS = [
     ("管理层讨论", "mdna"), ("经营业绩", "mdna"), ("业务回顾", "mdna"),
     ("董事会报告", "mdna"), ("经营情况", "mdna"), ("业绩概述", "mdna"),
@@ -53,19 +62,24 @@ def _section_key(title: str) -> str:
 
 
 def _clean_sec_title(title: str) -> str:
-    """节名清洗: 剥勾选框/**/反引号装饰。"""
+    """Chapter-title cleaning: strip checkbox/**/backtick decorations."""
     from .parse import _CHECKBOX
     return re.sub(r"[*`]+", "", _CHECKBOX.sub("", title)).strip()
 
 
 def split_sections(md: str) -> List[Tuple[str, str, str]]:
-    """切节 (两个通用方言) → [(内部键, 节名, 节内文本)] 按文档序。
+    """Split chapters (two generic dialects) → [(internal key, chapter name,
+    chapter text)] in document order.
 
-    ① 准则式: 「第X节/章」锚 ≥4 (目录页残留 1~3 属常态, 不足判无);
-    ② 金融主题式: 无准则锚时, 取「可归一节名的标题 ≥3」的最浅标题级
-       (银行/券商/保险年报格式类, 与准则式并列的通用结构, 非公司特例)。
-    两者皆不命中返回空 — 契约违约派发 Agent。空标题节锚 (两行式) 取节内
-    首个标题行。"""
+    ① Standard form: "第X节/章" anchors >=4 (1-3 TOC leftovers are normal;
+      fewer means none);
+    ② Financial topic form: with no standard anchors, take the shallowest
+      heading level having >=3 headings mappable to a chapter name
+      (bank/broker/insurer annual-report formats — a generic structure on par
+      with the standard form, not a per-company exception).
+    Neither hit → return empty — the contract violation dispatches the Agent.
+    A chapter anchor with an empty title (two-line form) takes the first
+    heading line inside the chapter."""
     anchors = list(_SECTION_ANCHOR_RE.finditer(md))
     if len(anchors) >= _MIN_ANCHORS:
         out: List[Tuple[str, str, str]] = []
@@ -86,7 +100,9 @@ _TOPIC_HEAD_RE = re.compile(r"^(?P<marks>#{1,6})\s+(?P<title>[^\n]+)$", re.M)
 
 
 def _split_topic(md: str) -> List[Tuple[str, str, str]]:
-    """金融主题式方言: 按可归一标题级切节 (该级全部标题定节界, 未映射节丢弃)。"""
+    """Financial topic-style dialect: split chapters at the mappable heading
+    level (all headings at that level bound the chapters; unmapped chapters
+    are dropped)."""
     mapped: Dict[int, int] = {}
     for m in _TOPIC_HEAD_RE.finditer(md):
         title = m.group("title").strip()
@@ -113,10 +129,11 @@ def _split_topic(md: str) -> List[Tuple[str, str, str]]:
     return out
 
 
-# ---------------- items: 第二章两项 (通用别名+相似度+守卫) ----------------
+# ---------------- items: the two chapter-2 items (generic aliases + similarity + guards) ----------------
 
 def extract_items(md: str, audit: Optional[Dict] = None) -> Dict[str, Dict]:
-    """全文 MD → {item_key: {title, text, tables}}。miss 容忍 (缺失键交 Agent)。"""
+    """Full-text MD → {item_key: {title, text, tables}}. Misses are tolerated
+    (missing keys go to the Agent)."""
     out: Dict[str, Dict] = {}
     headers = _header_lines(md)
     item_audit: Dict[str, Dict] = {}
@@ -131,7 +148,8 @@ def extract_items(md: str, audit: Optional[Dict] = None) -> Dict[str, Dict]:
             rank = rank if rank is not None else 2.0
             end = _block_end(md, m.end(), rank)
             block = md[m.end():end]
-            # 短块守卫: ≥150字或含表格 (目录条目/页眉噪声)
+            # short-block guard: >=150 chars or contains a table (TOC
+            # entries / header noise)
             if len(block.strip()) < 150 and "|" not in block:
                 continue
             out[item] = _subsection_dict(_clean_title(line), block, headers)
@@ -147,11 +165,12 @@ def extract_items(md: str, audit: Optional[Dict] = None) -> Dict[str, Dict]:
     return out
 
 
-# ---------------- sections: 小节锚切分 (三形态) + 规则模式 ----------------
+# ---------------- sections: subsection-anchor splitting (three forms) + rule modes ----------------
 
 def extract_sections(md: str, audit: Optional[Dict] = None) -> Dict[str, Dict]:
-    """切节 → 小节 → {section_key: {title, subsections}}。
-    结构不符 (无小节锚 / keyword 零命中) 直接跳过记 audit — 派发 Agent。"""
+    """Split chapters → subsections → {section_key: {title, subsections}}.
+    Non-conforming structure (no subsection anchors / zero keyword hits) is
+    skipped and recorded in audit — dispatched to the Agent."""
     headers = _header_lines(md)
     out: Dict[str, Dict] = {}
     seen: Dict[str, str] = {}
@@ -194,5 +213,5 @@ def extract_sections(md: str, audit: Optional[Dict] = None) -> Dict[str, Dict]:
 
 
 def extract(md: str, audit: Optional[Dict] = None) -> Tuple[Dict, Dict]:
-    """L0 编排: MD → (items, sections)。"""
+    """L0 orchestration: MD → (items, sections)."""
     return extract_items(md, audit=audit), extract_sections(md, audit=audit)

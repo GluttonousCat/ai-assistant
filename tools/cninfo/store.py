@@ -1,15 +1,19 @@
 # -*- encoding: utf-8 -*-
 """
-巨潮元数据/进度存储 (纯文件, 无数据库)
+Cninfo metadata/progress storage (pure files, no database).
 
-组织 (output/cninfo/):
-- meta/org_map.json     sec_code -> orgId 持久映射 (每股只真正解析一次,
-                        免重复打限流敏感的 topSearch)
-- meta/<ts_code>.json   单股公告元数据 + 批量爬取断点状态
-- downloads/<ts_code>/  PDF 产物 (文件在盘即已下载)
+Layout (output/cninfo/):
+- meta/org_map.json     persistent sec_code -> orgId mapping (each stock is
+                        truly resolved once; avoids re-hitting the
+                        rate-limit-sensitive topSearch)
+- meta/<ts_code>.json   per-stock announcement metadata + batch-crawl
+                        checkpoint state
+- downloads/<ts_code>/  PDF products (file on disk means downloaded)
 
-条目字段沿用历史 PG 表 fin.cninfo_announcement (2026-10 前版本, DDL 曾在
-storage/pg_schema.py); 存量表保留历史数据未迁移, 文件为增量事实源。
+Entry fields follow the historical PG table fin.cninfo_announcement
+(pre-2026-10 version; the DDL used to live in storage/pg_schema.py); the
+legacy table keeps the unmigrated historical data — the files are the
+incremental source of truth.
 """
 from __future__ import annotations
 
@@ -26,10 +30,10 @@ def _atomic_write(path: Path, payload: Dict) -> None:
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=1),
                    encoding="utf-8")
-    os.replace(tmp, path)   # 原子替换 (Windows 上 rename 目标存在会抛错)
+    os.replace(tmp, path)   # atomic replace (on Windows, rename raises when the target exists)
 
 
-# ---------- orgId 映射 ----------
+# ---------- orgId mapping ----------
 
 def load_org_map() -> Dict[str, str]:
     try:
@@ -42,19 +46,21 @@ def save_org_map(m: Dict[str, str]) -> None:
     _atomic_write(META_ROOT / "org_map.json", m)
 
 
-# ---------- 单股元数据 + 断点状态 ----------
+# ---------- per-stock metadata + checkpoint state ----------
 
 def stock_meta_path(ts_code: str) -> Path:
     return META_ROOT / f"{ts_code}.json"
 
 
 def load_stock_meta(ts_code: str) -> Dict:
-    """{"announcements": {aid: 条目}, "state": {"meta": ..., "dl": ..., "error": ...}}
+    """{"announcements": {aid: entry}, "state": {"meta": ..., "dl": ..., "error": ...}}
 
-    announcements 条目: announcement 原始字段的清洗投影 (title/category/
-    report_year/announce_date/announce_ts/adjunct_url/sec_code/sec_name)
-    加下载回填字段 (file_path/file_size/download_status/downloaded_at)。
-    state 由批量爬取 (batch.py) 维护, 单股流程 (downloader.sync_stock) 不碰。
+    Each announcements entry: a cleaned projection of the raw announcement
+    fields (title/category/report_year/announce_date/announce_ts/adjunct_url/
+    sec_code/sec_name) plus download backfill fields (file_path/file_size/
+    download_status/downloaded_at). state is maintained by the batch crawler
+    (batch.py); the single-stock flow (downloader.sync_stock) never touches
+    it.
     """
     try:
         meta = json.loads(stock_meta_path(ts_code).read_text(encoding="utf-8"))

@@ -1,22 +1,30 @@
 """
-Tushare 财务数据 -> PostgreSQL 同步模块
+Tushare financial data -> PostgreSQL sync module
 
-功能:
-- 全量回填: income(利润表) / balancesheet(资产负债表) / cashflow(现金流量表) /
-  fina_indicator(财务指标) / dividend(分红送股)
-- 四大财报表列结构与 Tushare 官方输出参数 1:1 (income 94 / balancesheet 158 /
-  cashflow 97 / fina_indicator 167 字段; dividend 16 字段)
-- 拉取字段不手工维护: 直接反射实表列(information_schema), 表结构即单一事实源
-  (旧版 DDL 与请求字段双清单手工维护, 曾漂移出 10+16 个错名字段, API 静默不返回 -> 整列全 NULL)
-- dividend 每日增量走 run_dividend_daily 按日批量三通道 (不逐股)
-- 数据源: 单只股票拉取 (income 等接口 2000积分可用, income_vip 需5000积分)
-- report_type=1 (合并报表, 最新)
-- 断点续传: 按 ts_code 逐只, sync_meta 记录进度, 可反复执行
+Features:
+- Full backfill: income (income statement) / balancesheet (balance sheet) /
+  cashflow (cash flow statement) / fina_indicator (financial indicators) /
+  dividend (dividends & splits)
+- The four financial tables' columns are 1:1 with Tushare's official output
+  parameters (income 94 / balancesheet 158 / cashflow 97 / fina_indicator 167
+  fields; dividend 16 fields)
+- Fetch field lists are not hand-maintained: columns are reflected from the
+  actual tables (information_schema); the table structure is the single source
+  of truth (the old version hand-maintained duplicate DDL and request lists,
+  which drifted into 10+16 misnamed fields that the API silently dropped ->
+  whole columns all NULL)
+- dividend daily increment goes through run_dividend_daily: per-day
+  whole-market batches over three channels (not per stock)
+- Data source: per-stock pulls (income-family APIs work at 2000 credits;
+  income_vip needs 5000)
+- report_type=1 (consolidated statements, latest)
+- Resumable: stock by stock by ts_code, progress recorded in sync_meta, safe
+  to rerun repeatedly
 
-用法(命令行):
-    python -m tools.market.sync_financial                   # 全量4表
-    python -m tools.market.sync_financial --tables income   # 仅利润表
-    python -m tools.market.sync_financial --limit 100       # 前100只测试
+Usage (CLI):
+    python -m tools.market.sync_financial                   # all 4 tables
+    python -m tools.market.sync_financial --tables income   # income only
+    python -m tools.market.sync_financial --limit 100       # first 100 stocks (test)
 """
 from __future__ import annotations
 
@@ -33,18 +41,21 @@ from core.config import get_config
 from core.logger import get_logger
 from storage.pg import PgClient
 from storage.pg_schema import init_fin_schema
-import core.net  # noqa: F401  (强制直连, 绕过不稳定代理)
+import core.net  # noqa: F401  (force direct connection, bypass flaky proxy)
 
 logger = get_logger(__name__)
 
-API_SLEEP = 0.35  # 200次/分钟 -> 0.35s 间隔留余量
+API_SLEEP = 0.35  # 200 calls/min -> 0.35s interval leaves headroom
 
-# PG 断连/服务端重启: 每股独立连接, 单股重试即重连 (坑表: 长批任务按工作单元续跑)
+# PG disconnect/server restart: one connection per stock, so retrying a single
+# stock reconnects (pitfall table: long batch jobs resume per work unit)
 PG_DOWN = (psycopg2.OperationalError, psycopg2.InterfaceError)
 
 
 class TushareHangError(RuntimeError):
-    """API 调用挂死 (DNS/半开连接等 requests 超时覆盖不到的阻塞): 连续多次判定断网, 快速终止本轮"""
+    """API call hangs (DNS/half-open connections and other blocks not covered
+    by the requests timeout): several consecutive hangs are judged as network
+    outage and abort this round quickly"""
 
 
 _hang_streak = 0
@@ -52,11 +63,14 @@ _hang_streak = 0
 
 def _api_call(pro, api_name: str, timeout: int = 90, **params) -> pd.DataFrame:
     """
-    Tushare API 硬墙钟调用: 守护线程 + join 超时。
-    SDK 自带 timeout=30 只覆盖 socket 读写, DNS 解析(getaddrinfo)等阻塞调用不受其约束,
-    网络波动会永久挂死 (2026-10-11 cashflow 回填实挂 10+ 分钟无报错)。
-    挂死线程 daemon 弃置不回收; 连续 5 次挂死视为断网, 抛 TushareHangError 终止本轮
-    (断点已存于 fin.sync_meta, 网络恢复后重跑即可)。
+    Tushare API call with a hard wall-clock bound: daemon thread + join timeout.
+    The SDK's built-in timeout=30 only covers socket read/write; blocking calls
+    such as DNS resolution (getaddrinfo) are not bound by it, so network
+    flakiness can hang forever (on 2026-10-11 the cashflow backfill actually
+    hung 10+ minutes with no error). A hung daemon thread is abandoned, not
+    reaped; 5 consecutive hangs are treated as network outage and raise
+    TushareHangError to abort this round (the checkpoint is already saved in
+    fin.sync_meta; just rerun once the network recovers).
     """
     global _hang_streak
     box: Dict[str, Any] = {}
@@ -64,7 +78,7 @@ def _api_call(pro, api_name: str, timeout: int = 90, **params) -> pd.DataFrame:
     def _call():
         try:
             box["df"] = getattr(pro, api_name)(**params)
-        except Exception as e:  # noqa: BLE001  快速失败异常带回主线程
+        except Exception as e:  # noqa: BLE001  carry the fail-fast exception back to the main thread
             box["err"] = e
 
     t = threading.Thread(target=_call, daemon=True)
@@ -83,8 +97,10 @@ def _api_call(pro, api_name: str, timeout: int = 90, **params) -> pd.DataFrame:
         raise box["err"]
     return box.get("df", pd.DataFrame())
 
-# 各表对应的 Tushare 接口名 (表名 == 接口名); 拉取字段见 table_fields() 反射。
-# disclosure_date 不在此列: 接口不支持 start_date 逐股骨架参数, 走按报告期批量(见 backfill_disclosure_periods)
+# Tushare API name per table (table name == API name); fetched fields come from
+# table_fields() reflection. disclosure_date is not listed here: its API does
+# not support the per-stock start_date skeleton param, so it is pulled in
+# whole-market batches by report period (see backfill_disclosure_periods)
 FIN_TABLE_APIS = {
     "income": "income",
     "balancesheet": "balancesheet",
@@ -94,22 +110,25 @@ FIN_TABLE_APIS = {
     "fina_audit": "fina_audit",
 }
 
-# upsert 冲突键: 缺省为三大财报表主键, 其他表按表覆盖
+# Upsert conflict keys: the default is the primary key of the three main
+# financial statement tables; other tables override per table
 FIN_CONFLICT_KEYS = {
     "dividend": ["ts_code", "end_date", "ann_date", "div_proc"],
     "fina_audit": ["ts_code", "end_date", "ann_date"],
     "disclosure_date": ["ts_code", "end_date"],
 }
 
-# 日期规范化: 基础三列之外按表追加
+# Date normalization: extra columns per table beyond the base three
 DATE_NORM_EXTRA = {
     "dividend": ("record_date", "ex_date", "pay_date",
                  "div_listdate", "imp_ann_date", "base_date"),
     "disclosure_date": ("pre_date", "actual_date", "modify_date"),
 }
 
-# 接口单次返回行数上限 (Tushare 限制, 超过即静默截断): 命中的接口在
-# fetch_stock_fin 里按报告期向前翻页取尽; income 未限, 其余表单股全量 < 上限
+# Per-call row cap of each API (a Tushare limit; exceeding it truncates
+# silently): affected APIs page backwards by report period in fetch_stock_fin
+# until exhausted; income is uncapped, and the other tables' full per-stock
+# history stays under the cap
 FIN_PAGE_CAP = {
     "balancesheet": 100,
     "cashflow": 100,
@@ -118,7 +137,8 @@ FIN_PAGE_CAP = {
 
 
 def _page_min_end(df: pd.DataFrame) -> Optional[date]:
-    """当页最旧报告期 (end_date 列转 date; 无该列/全空返回 None 终止翻页)"""
+    """Oldest report period on the page (end_date column cast to date; returns
+    None if the column is missing/all empty, which stops paging)"""
     if "end_date" not in df.columns or df.empty:
         return None
     vals = [d for d in (_to_date(v) for v in df["end_date"]) if d]
@@ -128,14 +148,18 @@ _warned_dropped: set = set()
 
 
 def table_fields(table: str) -> List[str]:
-    """从实表反射拉取字段 (排除本地 created_at); 新增列无需改代码, 表结构即请求清单"""
+    """Reflect the fetch field list from the actual table (excluding local
+    created_at); new columns need no code change - the table structure is the
+    request list"""
     with PgClient() as pg:
         return [c["name"] for c in pg.get_columns("fin", table)
                 if c["name"] != "created_at"]
 
 
 def _filter_to_table(df: pd.DataFrame, table: str, table_cols: set) -> pd.DataFrame:
-    """只保留表内列; API 返回表外列时告警(每组一次)。反射字段后正常应为空, 纯保险网。"""
+    """Keep only columns that exist in the table; warn (once per group) when
+    the API returns out-of-table columns. Should normally never trigger after
+    field reflection - pure safety net."""
     dropped = [c for c in df.columns if c not in table_cols]
     if dropped:
         key = (table, tuple(dropped))
@@ -145,14 +169,14 @@ def _filter_to_table(df: pd.DataFrame, table: str, table_cols: set) -> pd.DataFr
     return df[[c for c in df.columns if c in table_cols]]
 
 def get_whitelist_codes() -> List[str]:
-    """从 PG stock_basic 读取白名单 ts_code 列表"""
+    """Read the whitelist ts_code list from PG stock_basic"""
     from tools.market.sync_tushare import get_whitelist
     codes = get_whitelist(use_cache=True, refresh_remote=False)
     return sorted(codes)
 
 
 def get_fin_progress(table: str) -> Optional[str]:
-    """已同步到的 ts_code (水位线, 续传用)"""
+    """Last synced ts_code (watermark, for resuming)"""
     with PgClient() as pg:
         row = pg.fetch_one(
             "SELECT last_code FROM fin.sync_meta WHERE table_name=%s",
@@ -175,7 +199,7 @@ def set_fin_progress(table: str, last_code: str, total: int) -> None:
 
 
 def _normalize_date_col(df: pd.DataFrame, col: str) -> pd.DataFrame:
-    """日期列 (YYYYMMDD int/str) 转 date 对象"""
+    """Convert a date column (YYYYMMDD int/str) to date objects"""
     if col in df.columns:
         df[col] = df[col].map(
             lambda v: _to_date(v) if pd.notna(v) and v != "" else None
@@ -200,12 +224,17 @@ def _to_date(v) -> Optional[date]:
 def fetch_stock_fin(pro, api_name: str, ts_code: str, fields: List[str],
                     start: str = "19900101") -> pd.DataFrame:
     """
-    拉取单只股票单个接口的历史财报数据 (挂死由 _api_call 墙钟兜底)。
+    Fetch one stock's full history from one API (hangs are bounded by
+    _api_call's wall clock).
 
-    balancesheet/cashflow/fina_indicator 接口单次上限 100 行, 长历史会被静默截断
-    (老股只拿到最近 N 期, 更早报告期从未入库): 对这些接口按报告期 end_date 向前
-    翻页取尽 —— 首页不带 end_date 拿最新一页, 之后 end_date=当页最旧报告期前推一天,
-    直到取空/页不满/不再前进; upsert 幂等, 页间重叠无害。
+    balancesheet/cashflow/fina_indicator APIs cap a single call at 100 rows, so
+    long history gets silently truncated (old stocks only return the latest N
+    periods; earlier report periods were never stored): for these APIs page
+    backwards by report period end_date until exhausted -- the first page
+    omits end_date to get the newest page, then end_date = one day before the
+    oldest period on the current page, until a page is empty / shorter than
+    the cap / no longer advances; upsert is idempotent, so overlap between
+    pages is harmless.
     """
     cap = FIN_PAGE_CAP.get(api_name)
     try:
@@ -229,7 +258,8 @@ def fetch_stock_fin(pro, api_name: str, ts_code: str, fields: List[str],
             break
         frames.append(page)
         new_min = _page_min_end(page)
-        # 页不满=更早数据已取尽; 不前进=同报告期成团兜底 (单期行数<<100, 理论到不了)
+        # Short page = older data exhausted; no forward progress = fallback for
+        # same-period clustering (rows per period << 100, theoretically unreachable)
         if len(page) < cap or not new_min or new_min >= seen_min:
             break
         seen_min = new_min
@@ -242,13 +272,15 @@ def fetch_stock_fin(pro, api_name: str, ts_code: str, fields: List[str],
 
 def _upsert_stock_fin(pro, table: str, api_name: str, fields: List[str],
                       ts_code: str, start: str = "19900101") -> int:
-    """单只股票 拉取+入库 工作单元 (返回入库行数); PG 断连由调用方按股重试"""
+    """Fetch + store work unit for one stock (returns stored row count); PG
+    disconnects are retried per stock by the caller"""
     df = fetch_stock_fin(pro, api_name, ts_code, fields, start=start)
     if df is None or df.empty:
         return 0
     for c in ("ann_date", "f_ann_date", "end_date") + DATE_NORM_EXTRA.get(table, ()):
         _normalize_date_col(df, c)
-    # PK 列空值行跳过 (实测: dividend 个别早期阶段行如"股东提议" ann_date 为 NULL)
+    # Skip rows with NULL PK columns (observed: some early dividend rows in
+    # stages like "shareholder proposal" have NULL ann_date)
     keys = FIN_CONFLICT_KEYS.get(table, ["ts_code", "end_date", "report_type"])
     bad = df[[k for k in keys if k in df.columns]].isna().any(axis=1)
     if bad.any():
@@ -271,16 +303,21 @@ def _upsert_stock_fin(pro, table: str, api_name: str, fields: List[str],
 def fetch_recent_financial(pro, table: str, codes: List[str],
                            start: str) -> int:
     """
-    增量拉取: 用 ann_date (公告日) 过滤, 只拉 start 之后公告的财报.
-    财报公告是突发事件 (季报/年报/更正), 每日跑一次即可保持最新.
-    返回新增行数. 单接口 200次/分钟限频, 与全量回填共用节流.
+    Incremental fetch: filter by ann_date (announce date), only pulling
+    reports announced after `start`. Report announcements are sporadic events
+    (quarterly/annual/corrections), so one run per day stays current.
+    Returns new row count. Per-API rate limit is 200 calls/min, shared
+    throttling with the full backfill.
     """
     api_name = FIN_TABLE_APIS[table]
     fields = table_fields(table)
-    # fina_indicator 的 start_date/end_date 语义是报告期而非公告日 (income 家族是
-    # 公告日): 公告日窗口起点会整段滤掉更早报告期的行 (实证 2026Q3 全缺 — 报告期
-    # 0930 < 窗口起点 1013)。该表把窗口平移为报告期下限 (前移 120 天覆盖窗口内
-    # 公告的报告期), 行量仍只有近期数期, 不增重。
+    # fina_indicator's start_date/end_date mean REPORT PERIOD, not announce
+    # date (the income family uses announce date): an announce-date window
+    # start would filter out whole blocks of earlier-period rows (observed:
+    # 2026Q3 entirely missing -- report period 0930 < window start 1013). For
+    # this table the window is shifted into a report-period floor (pushed back
+    # 120 days to cover report periods announced inside the window); row
+    # volume is still only a few recent periods, no added weight.
     fetch_start = (datetime.strptime(start, "%Y%m%d") - timedelta(days=120)
                    ).strftime("%Y%m%d") if table == "fina_indicator" else start
     total = 0
@@ -305,8 +342,9 @@ def fetch_recent_financial(pro, table: str, codes: List[str],
 
 def run_financial_incremental(days: int = 10) -> Dict[str, int]:
     """
-    每日增量: 拉取最近 N 天公告的财报 (覆盖周末/节假日堆积的公告).
-    逐股拉取限制在 API 限频内, 全市场 ~5000 只 x 4 表约 20 分钟.
+    Daily increment: pull reports announced in the last N days (covers
+    weekend/holiday announcement pile-ups). Per-stock pulls stay within the
+    API rate limit; whole market ~5000 stocks x 4 tables takes ~20 minutes.
     """
     import tushare as ts
     config = get_config()
@@ -326,7 +364,8 @@ def run_financial_incremental(days: int = 10) -> Dict[str, int]:
     return result
 
 
-# ---- dividend 每日增量: 按日批量三通道事件级拉取 (对比逐股 5000 次调用; 事件稀疏) ----
+# ---- dividend daily increment: event-level pulls in per-day whole-market
+# batches over three channels (vs 5000 per-stock calls; events are sparse) ----
 
 DIVIDEND_DATE_COLS = ("ann_date", "end_date", "record_date", "ex_date",
                       "pay_date", "div_listdate", "imp_ann_date", "base_date")
@@ -334,7 +373,8 @@ DIVIDEND_DATE_COLS = ("ann_date", "end_date", "record_date", "ex_date",
 
 def _fetch_dividend_by_date(pro, param: str, d: str,
                             fields: List[str]) -> pd.DataFrame:
-    """按单日参数拉全市场分红 (ann_date/imp_ann_date/ex_date 之一), API 失败重试 3 次"""
+    """Fetch whole-market dividends by a single-day param (one of
+    ann_date/imp_ann_date/ex_date), retry up to 3 times on API failure"""
     for attempt in range(1, 4):
         try:
             return _api_call(pro, "dividend", **{param: d},
@@ -349,9 +389,12 @@ def _fetch_dividend_by_date(pro, param: str, d: str,
 
 def sync_dividend_daily(pro, days: int = 2) -> int:
     """
-    dividend 每日增量: 按日批量拉全市场, 三通道 (ann_date 新公告 / imp_ann_date 实施公告 /
-    ex_date 除权除息兜底). upsert 幂等, 通道间与日间重复行安全.
-    单日全市场分红事件 << 2000 行无翻页; 返回累计处理行数 (含幂等重复).
+    dividend daily increment: pull the whole market per day over three
+    channels (ann_date new announcements / imp_ann_date implementation
+    announcements / ex_date ex-dividend catch-all). Upsert is idempotent, so
+    duplicate rows across channels and days are safe. A single day's
+    whole-market dividend events are << 2000 rows, no paging; returns the
+    cumulative processed row count (including idempotent duplicates).
     """
     fields = table_fields("dividend")
     conflict = FIN_CONFLICT_KEYS["dividend"]
@@ -369,7 +412,8 @@ def sync_dividend_daily(pro, days: int = 2) -> int:
                 logger.warning(f"dividend {param}={d} 返回 {len(df)} 行触及单次上限, 可能截断")
             for c in DIVIDEND_DATE_COLS:
                 _normalize_date_col(df, c)
-            # PK 列空值行 (理论上不应有, 防御 NOT NULL 违例中断整批)
+            # Rows with NULL PK columns (theoretically impossible; guards a
+            # NOT NULL violation from aborting the whole batch)
             bad = df[["ts_code", "end_date", "ann_date", "div_proc"]].isna().any(axis=1)
             if bad.any():
                 logger.warning(f"dividend {param}={d}: {int(bad.sum())} 行 PK 列含空值, 已跳过")
@@ -397,7 +441,7 @@ def sync_dividend_daily(pro, days: int = 2) -> int:
 
 
 def run_dividend_daily(days: int = 2) -> int:
-    """调度入口: 建表兜底 + 按日增量"""
+    """Scheduler entry: ensure-table fallback + per-day increment"""
     import tushare as ts
     config = get_config()
     pro = ts.pro_api(config.tushare_token)
@@ -406,15 +450,19 @@ def run_dividend_daily(days: int = 2) -> int:
     return sync_dividend_daily(pro, days)
 
 
-# ---- disclosure_date 财报披露日期: 按报告期批量回填 + 按日双通道增量 (dividend 模式变体) ----
-# 一家股票一个报告期一条披露计划(最新状态), modify_date 是同行修正标记非新行
+# ---- disclosure_date report disclosure schedule: batch backfill by report
+# period + per-day two-channel increment (variant of the dividend pattern) ----
+# One disclosure-plan row per stock per report period (latest state);
+# modify_date is a same-row correction flag, not a new row
 
 DISCLOSURE_DATE_COLS = ("ann_date", "end_date", "pre_date", "actual_date", "modify_date")
 
 
 def _fetch_disclosure_by(pro, param: str, value: str,
                          fields: List[str]) -> pd.DataFrame:
-    """按单参数(报告期 end_date 或单日 ann_date/actual_date)拉全市场披露计划, API 失败重试 3 次"""
+    """Fetch whole-market disclosure plans by a single param (report period
+    end_date, or one day's ann_date/actual_date), retry up to 3 times on API
+    failure"""
     for attempt in range(1, 4):
         try:
             return _api_call(pro, "disclosure_date", **{param: value},
@@ -429,7 +477,8 @@ def _fetch_disclosure_by(pro, param: str, value: str,
 
 
 def _upsert_disclosure(df: pd.DataFrame, table_cols: set, label: str) -> int:
-    """单批 规范化+PK空值防御+入库 工作单元 (返回入库行数); PG 断连批内重试"""
+    """Single-batch work unit: normalize + NULL-PK guard + upsert (returns
+    stored row count); PG disconnects retried within the batch"""
     if df is None or df.empty:
         return 0
     for c in DISCLOSURE_DATE_COLS:
@@ -457,8 +506,10 @@ def _upsert_disclosure(df: pd.DataFrame, table_cols: set, label: str) -> int:
 def backfill_disclosure_periods(pro, start_year: int = 1998,
                                 end_year: Optional[int] = None) -> int:
     """
-    回填: 按报告期整期批量 (全市场一次调用; 幂等可反复执行).
-    历史起点官方未标注, 空期 df.empty 自然跳过; 全程约 111 次调用数分钟跑完, 无需断点。
+    Backfill: one whole-market call per report period (idempotent, safe to
+    rerun). The official docs don't state the historical start; empty periods
+    are skipped naturally via df.empty; ~111 calls in total finish in
+    minutes, no checkpoint needed.
     """
     fields = table_fields("disclosure_date")
     with PgClient() as pg:
@@ -470,7 +521,7 @@ def backfill_disclosure_periods(pro, start_year: int = 1998,
         for md in ("0331", "0630", "0930", "1231"):
             period = f"{year}{md}"
             if period > today_s:
-                continue  # 未到的报告期尚无预约计划
+                continue  # future report periods have no scheduled plans yet
             df = _fetch_disclosure_by(pro, "end_date", period, fields)
             if df is None or df.empty:
                 continue
@@ -487,8 +538,11 @@ def backfill_disclosure_periods(pro, start_year: int = 1998,
 
 def sync_disclosure_daily(pro, days: int = 2) -> int:
     """
-    增量: 按日双通道拉全市场 (ann_date 新计划公告/计划变更, actual_date 实际披露落地).
-    upsert 幂等, 通道间与日间重复行安全; 返回累计处理行数 (含幂等重复)。
+    Increment: per-day whole-market pulls over two channels (ann_date new
+    plan announcements/changes, actual_date actual disclosure landing).
+    Upsert is idempotent, so duplicate rows across channels and days are
+    safe; returns the cumulative processed row count (including idempotent
+    duplicates).
     """
     fields = table_fields("disclosure_date")
     with PgClient() as pg:
@@ -511,7 +565,7 @@ def sync_disclosure_daily(pro, days: int = 2) -> int:
 
 
 def run_disclosure_daily(days: int = 2) -> int:
-    """调度入口: 建表兜底 + 按日增量"""
+    """Scheduler entry: ensure-table fallback + per-day increment"""
     import tushare as ts
     config = get_config()
     pro = ts.pro_api(config.tushare_token)
@@ -523,12 +577,12 @@ def run_disclosure_daily(days: int = 2) -> int:
 def backfill_fin_table(pro, table: str, codes: List[str],
                        limit: Optional[int] = None,
                        force_full: bool = False) -> int:
-    """回填单张财务表 (逐股票)"""
+    """Backfill one financial table (stock by stock)"""
     api_name = FIN_TABLE_APIS[table]
     fields = table_fields(table)
     logger.info(f"回填 {table}: {len(codes)} 只股票, limit={limit}, force_full={force_full}")
 
-    # 断点: 从上次 ts_code 之后继续 (force_full=True 时忽略)
+    # Checkpoint: resume after the last ts_code (ignored when force_full=True)
     if not force_full:
         last_code = get_fin_progress(table)
         if last_code and last_code in codes:
@@ -556,7 +610,9 @@ def backfill_fin_table(pro, table: str, codes: List[str],
                 time.sleep(10 * attempt)
         total += rows
         if rows:
-            # 每只股票更新进度 (崩溃可从该股票续); 断连只丢本次水位线, 下一股重试自愈
+            # Update progress after each stock (a crash resumes from that
+            # stock); a disconnect only loses this write, the next stock's
+            # retry self-heals
             try:
                 set_fin_progress(table, ts_code, total)
             except PG_DOWN as e:
@@ -575,12 +631,12 @@ def run_financial(start_ts_code: Optional[str] = None,
                   tables: Optional[Iterable[str]] = None,
                   limit: Optional[int] = None,
                   force_full: bool = False) -> Dict[str, int]:
-    """执行财务数据全量回填"""
+    """Run the full financial data backfill"""
     import tushare as ts
     config = get_config()
     pro = ts.pro_api(config.tushare_token)
 
-    # 初始化 fin schema
+    # Initialize the fin schema
     with PgClient() as pg:
         init_fin_schema(pg)
 

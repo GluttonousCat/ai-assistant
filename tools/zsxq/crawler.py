@@ -163,7 +163,7 @@ class ZSXQCrawler:
                 exists = self.db.topic_exists(topic_id)
                 self.db.import_topic(topic)
 
-                # 获取额外评论
+                # Fetch additional comments
                 comments_count = topic.get('comments_count', 0)
                 if comments_count > 8:
                     self._fetch_all_comments(topic_id, comments_count)
@@ -257,10 +257,10 @@ class ZSXQCrawler:
             total['errors'] += stats['errors']
             total['pages'] += 1
 
-            # 准备下一页时间戳
+            # Prepare the next page's timestamp
             end_time = decrement_time(topics[-1].get('create_time'), self.timestamp_offset_ms)
 
-            # 长休眠检查
+            # Periodic long sleep
             if page % 15 == 0:
                 self.anti_detect.long_delay()
 
@@ -268,7 +268,7 @@ class ZSXQCrawler:
         return total
 
     def crawl_incremental(self, pages: int = 10, per_page: int = 20) -> Dict[str, int]:
-        """增量爬取（从数据库最老时间继续）"""
+        """Incremental crawl (resume from the oldest timestamp in the DB)."""
         time_info = self.db.get_time_range()
         if not time_info['has_data']:
             self.log("❌ 数据库为空，请先进行历史爬取")
@@ -280,43 +280,8 @@ class ZSXQCrawler:
         end_time = decrement_time(oldest, self.timestamp_offset_ms)
         return self._crawl_with_end_time(end_time, pages, per_page)
 
-    def crawl_latest_until_complete(self, per_page: int = 20) -> Dict[str, int]:
-        time_info = self.db.get_time_range()
-        self.log(f"\n🔄 智能更新 | 现有{time_info['total']}条")
-
-        total = {'new': 0, 'updated': 0, 'errors': 0, 'pages': 0}
-        end_time = None
-
-        while True:
-            if self.is_stopped():
-                break
-
-            data = self.fetch_topics(scope="all", count=per_page, end_time=end_time)
-            if not data:
-                break
-
-            topics = data.get('resp_data', {}).get('topics', [])
-            if not topics:
-                break
-
-            # 检查是否全部已存在
-            all_exist = all(self.db.topic_exists(t['topic_id']) for t in topics)
-            if all_exist:
-                self.log("✅ 全部已存在，更新完成")
-                break
-
-            stats = self.store_topics(data)
-            total['new'] += stats['new']
-            total['updated'] += stats['updated']
-            total['pages'] += 1
-
-            end_time = decrement_time(topics[-1].get('create_time'), self.timestamp_offset_ms)
-
-        self.log(f"\n🏁 完成: 新增{total['new']}, 更新{total['updated']}")
-        return total
-
     def _crawl_with_end_time(self, end_time: str, pages: int, per_page: int) -> Dict[str, int]:
-        """通用爬取逻辑"""
+        """Shared crawl logic."""
         total = {'new': 0, 'updated': 0, 'errors': 0, 'pages': 0}
 
         for page in range(1, pages + 1):

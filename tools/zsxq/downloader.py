@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-文件下载模块
-整合原 zsxq_file_downloader.py，限制每次只下载1个文件
+File download module.
+Consolidated from the former zsxq_file_downloader.py; limited to downloading
+one file at a time.
 """
 import os
 import time
@@ -17,7 +18,7 @@ from tools.zsxq.anti_detect import AntiDetectManager
 
 
 class FileDownloader:
-    """文件下载器 - 限制每次只下载1个文件"""
+    """File downloader - downloads at most one file per batch."""
 
     def __init__(self, cookie: str, group_id: str, db_path: str = None,
                  download_dir: str = None, log_callback=None):
@@ -26,12 +27,12 @@ class FileDownloader:
         self.log_callback = log_callback
         self.stop_flag = False
 
-        # 数据库
+        # Databases
         path_manager = PathManager()
         self.db_path = db_path or path_manager.get_files_db_path(group_id)
         self.db = FilesDatabase(self.db_path)
 
-        # 下载目录
+        # Download directory
         if download_dir is None:
             group_dir = path_manager.get_group_dir(group_id)
             self.download_dir = os.path.join(group_dir, "downloads")
@@ -40,61 +41,62 @@ class FileDownloader:
 
         os.makedirs(self.download_dir, exist_ok=True)
 
-        # API配置
+        # API config
         self.base_url = "https://api.zsxq.com"
         self.session = requests.Session()
 
-        # 反检测
+        # Anti-detection
         self.anti_detect = AntiDetectManager(self.cookie)
 
-        # 下载间隔配置 (config.yaml zsxq: 段, 缺省回落内置值)
+        # Download pacing config (config.yaml zsxq: section; falls back to
+        # built-in defaults)
         from core.config import get_config
         _cfg = get_config()
-        self.min_delay = float(_cfg.get("zsxq.download_min_delay", 60))
-        self.max_delay = float(_cfg.get("zsxq.download_max_delay", 120))
         self.long_sleep_min = float(_cfg.get("zsxq.download_long_sleep_min", 60))
         self.long_sleep_max = float(_cfg.get("zsxq.download_long_sleep_max", 120))
 
-        # 统计
+        # Stats
         self.download_count = 0
 
         self.log(f"📁 下载目录: {self.download_dir}")
 
     def log(self, message: str):
-        """日志输出"""
+        """Log output."""
         print(message)
         if self.log_callback:
             self.log_callback(message)
 
     def set_stop_flag(self):
-        """设置停止标志"""
+        """Set the stop flag."""
         self.stop_flag = True
         self.log("🛑 收到停止信号")
 
     def is_stopped(self) -> bool:
-        """检查是否停止"""
+        """Check whether stopped."""
         return self.stop_flag
 
     def _sleep(self, duration: float):
-        """可中断睡眠"""
+        """Interruptible sleep."""
         start = time.time()
         while time.time() - start < duration:
             if self.is_stopped():
                 return
             time.sleep(0.5)
 
-    # ---------- 话题附件下载 (topic_files, 研报多来自此) ----------
+    # ---------- Topic-attachment download (topic_files; most research reports come from here) ----------
     def download_topic_files(self, max_files: int = 1) -> Dict[str, int]:
-        """下载话题附件 (topic_files 表), 强制间隔与单文件限制"""
+        """Download topic attachments (topic_files table); enforced pacing and per-batch file cap."""
         path_manager = PathManager()
         topics_db_path = path_manager.get_topics_db_path(self.group_id)
         topics_db = TopicsDatabase(topics_db_path)
 
-        # 下载地址: 优先本地 download_url, 否则从 API 获取
-        # 超额取数防名额被中文版占用 (见 download_pending 同款注释)
+        # Download URL: prefer the locally stored download_url; otherwise
+        # fetch it from the API later
+        # Over-fetch so the quota is not eaten by Chinese-translated copies
+        # (same rationale as in download_pending)
         files = topics_db.get_topic_files(limit=max_files * 3, status="pending")
 
-        # 中文翻译版不下载 (保留英文原版)
+        # Skip Chinese-translated copies (keep the English originals)
         skipped = 0
         for row in files[:]:
             if is_chinese_translated(row.get('name') or ''):
@@ -136,7 +138,7 @@ class FileDownloader:
         return stats
 
     def download_topic_file(self, file_id: int, row: Dict, file_path: str) -> bool:
-        """下载单个话题附件, 复用小文件下载逻辑"""
+        """Download a single topic attachment, reusing the small-file download logic."""
         url = row.get('download_url')
         if not url:
             self.log(f"   ❌ 无下载地址: file_id={file_id}")
@@ -166,7 +168,7 @@ class FileDownloader:
 
     def fetch_file_list(self, count: int = 20, index: str = None,
                        sort: str = "by_create_time") -> Optional[Dict]:
-        """获取文件列表"""
+        """Fetch the file list."""
         url = f"{self.base_url}/v2/groups/{self.group_id}/files"
         params = {"count": str(count), "sort": sort}
         if index:
@@ -196,7 +198,7 @@ class FileDownloader:
         return None
 
     def get_download_url(self, file_id: int) -> Optional[str]:
-        """获取下载链接"""
+        """Fetch the download URL."""
         url = f"{self.base_url}/v2/files/{file_id}/download_url"
 
         for retry in range(3):
@@ -217,7 +219,7 @@ class FileDownloader:
         return None
 
     def download_file(self, file_info: Dict) -> bool:
-        """下载单个文件"""
+        """Download a single file."""
         file_data = file_info.get('file', {})
         file_id = file_data.get('file_id') or file_data.get('id')
         file_name = file_data.get('name', 'unknown')
@@ -228,28 +230,28 @@ class FileDownloader:
         if self.is_stopped():
             return False
 
-        # 清理文件名
+        # Sanitize the file name
         safe_name = sanitize_filename(file_name)
         if not safe_name:
             safe_name = f"file_{file_id}"
 
         file_path = os.path.join(self.download_dir, safe_name)
 
-        # 检查已存在
+        # Skip if already downloaded
         if os.path.exists(file_path):
             existing_size = os.path.getsize(file_path)
             if existing_size == file_size:
                 self.log(f"   ✅ 文件已存在且完整，跳过")
                 return True
 
-        # 获取下载链接
+        # Fetch the download URL
         download_url = self.get_download_url(file_id)
         if not download_url:
             self.log(f"   ❌ 无法获取下载链接")
             return False
 
         try:
-            # 流式下载
+            # Streamed download
             resp = self.session.get(download_url, timeout=300, stream=True)
             if resp.status_code != 200:
                 self.log(f"   ❌ 下载失败: HTTP {resp.status_code}")
@@ -262,7 +264,7 @@ class FileDownloader:
                     if self.is_stopped():
                         break
 
-            # 验证大小
+            # Verify size
             actual_size = os.path.getsize(file_path)
             if file_size > 0 and actual_size != file_size:
                 self.log(f"   ⚠️ 大小不匹配: 预期{file_size}, 实际{actual_size}")
@@ -270,7 +272,7 @@ class FileDownloader:
             self.log(f"   ✅ 下载完成: {safe_name}")
             self.download_count += 1
 
-            # 强制长休眠（每次下载后）
+            # Enforced long sleep (after every download)
             self._long_delay()
 
             return True
@@ -282,14 +284,14 @@ class FileDownloader:
             return False
 
     def _long_delay(self):
-        """强制长休眠"""
+        """Enforced long sleep."""
         delay = random.uniform(self.long_sleep_min, self.long_sleep_max)
         self.log(f"🛌 长休眠: {delay:.0f}秒")
         self._sleep(delay)
         self.log(f"😴 休眠结束")
 
     def collect_files(self, max_pages: int = 100) -> Dict[str, int]:
-        """收集文件列表到数据库"""
+        """Collect the file list into the database."""
         self.log(f"📊 开始收集文件列表...")
         stats = {'total': 0, 'new': 0}
         current_index = None
@@ -326,14 +328,14 @@ class FileDownloader:
             self.db.commit()
             stats['total'] += len(files)
 
-            # 检查是否有新文件
+            # Count files still pending download
             self.db.cursor.execute("SELECT COUNT(*) FROM files WHERE download_status = 'pending'")
             new_count = self.db.cursor.fetchone()[0]
             stats['new'] = new_count
 
             self.log(f"   ✅ 本页{len(files)}个，累计待下载{new_count}")
 
-            # 下一页
+            # Next page
             current_index = data.get('resp_data', {}).get('index')
             if not current_index:
                 break
@@ -344,16 +346,19 @@ class FileDownloader:
         return stats
 
     def download_pending(self, max_files: int = 1) -> Dict[str, int]:
-        """下载待处理文件"""
-        max_files = max(1, min(max_files, 20))  # 每次上限20个, 防误用
+        """Download pending files."""
+        max_files = max(1, min(max_files, 20))  # hard cap of 20 per run, guard against misuse
 
         self.log(f"📥 开始下载文件 (限制{max_files}个)")
 
-        # 超额取数: 名额可能被中文版占用 (过滤后不足), 拉 3 倍再筛 —— 否则
-        # "limit=1 恰好取到中文版 → 本批空 → 循环误判无待下载而整轮退出"
+        # Over-fetch 3x then filter: the batch quota may be eaten by
+        # Chinese-translated copies (leaving too few after filtering) —
+        # otherwise "limit=1 lands on a translated copy -> empty batch ->
+        # the caller's loop misreads 'no pending files' and exits the round"
         files = self.db.get_pending_files(limit=max_files * 3, order_by='create_time DESC')
 
-        # 中文翻译版不下载 (保留英文原版): 标 skipped 终态, 不再进 pending
+        # Skip Chinese-translated copies (keep the English originals):
+        # mark skipped as a terminal state so they never re-enter pending
         skipped = []
         for file_row in files[:]:
             if is_chinese_translated(file_row[1]):
@@ -406,5 +411,5 @@ class FileDownloader:
         return stats
 
     def close(self):
-        """关闭资源"""
+        """Release resources."""
         self.db.close()

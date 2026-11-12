@@ -1,12 +1,13 @@
 # -*- encoding: utf-8 -*-
 """
-研报文本提取器
-将本地研报文件 (PDF/DOCX/TXT/MD) 提取为纯文本, 供研报校验/分析链路使用.
+Report text extractor
+Extracts local report files (PDF/DOCX/TXT/MD) to plain text for the report
+validation/analysis pipeline.
 
-策略:
-- PDF: 优先 PyMuPDF(fitz), 缺失时尝试 pdfplumber / pypdf
-- DOCX: python-docx, 缺失时退化为 zipfile 直接解 word/document.xml
-- TXT/MD: utf-8 / gbk 读入
+Strategy:
+- PDF: prefer PyMuPDF (fitz); fall back to pdfplumber / pypdf when missing
+- DOCX: python-docx; degrade to unzipping word/document.xml directly via zipfile
+- TXT/MD: read as utf-8 / gbk
 """
 from __future__ import annotations
 
@@ -24,11 +25,11 @@ SUPPORTED_EXTS = {".pdf", ".docx", ".doc", ".txt", ".md", ".markdown"}
 
 
 class ReportExtractor:
-    """研报文件 → 纯文本"""
+    """Report file -> plain text"""
 
-    # 常见噪音行 (页眉页脚/页码) 过滤
+    # Filter common noise lines (headers/footers/page numbers)
     NOISE_PATTERNS = [
-        re.compile(r"^\s*[-—–]\s*\d+\s*[-—–]\s*$"),          # 页码 - 3 -
+        re.compile(r"^\s*[-—–]\s*\d+\s*[-—–]\s*$"),          # page number - 3 -
         re.compile(r"^\s*\d+\s*/\s*\d+\s*$"),                   # 3/12
         re.compile(r"^\s*仅供内部使用.*$", re.I),
         re.compile(r"^\s*免责声明[:：]?.*$"),
@@ -36,7 +37,7 @@ class ReportExtractor:
     ]
 
     def extract(self, file_path: str) -> Optional[str]:
-        """提取文件文本, 失败返回 None"""
+        """Extract file text; returns None on failure"""
         if not os.path.exists(file_path):
             logger.warning("文件不存在: %s", file_path)
             return None
@@ -60,14 +61,15 @@ class ReportExtractor:
             return None
         return self.clean(text)
 
-    # ---------- 各格式实现 ----------
+    # ---------- Per-format implementations ----------
     def _extract_pdf(self, path: str) -> str:
-        # PDF 原语统一走 tools/pdf (fitz→pdfplumber→pypdf 降级链)
+        # All PDF primitives go through tools/pdf (fitz -> pdfplumber -> pypdf fallback chain)
         from tools.pdf import extract_text
         return extract_text(path)
 
     def _extract_docx(self, path: str) -> str:
-        # .doc (老格式) 为二进制, zipfile 解不出时抛出, 由调用方标记失败
+        # .doc (legacy format) is binary; if zipfile cannot open it, raise and
+        # let the caller mark failure
         try:
             import docx  # python-docx
 
@@ -80,7 +82,7 @@ class ReportExtractor:
         except ImportError:
             pass
 
-        # 退化: zipfile 直接读 document.xml
+        # Fallback: read word/document.xml directly via zipfile
         with zipfile.ZipFile(path) as z:
             xml = z.read("word/document.xml")
         root = ElementTree.fromstring(xml)
@@ -100,9 +102,9 @@ class ReportExtractor:
                 continue
         return ""
 
-    # ---------- 清洗 ----------
+    # ---------- Cleaning ----------
     def clean(self, text: str) -> str:
-        """噪音过滤 + 压缩空白"""
+        """Noise filtering + whitespace compression"""
         lines = []
         for line in text.splitlines():
             stripped = line.strip()
@@ -114,7 +116,7 @@ class ReportExtractor:
         return "\n".join(lines)
 
     def extract_meta(self, file_path: str) -> Dict:
-        """提取基础元信息 (无文件读取, 纯命名统计)"""
+        """Extract basic metadata (no file read; pure name-based stats)"""
         name = os.path.basename(file_path)
         return {
             "file_name": name,
@@ -123,7 +125,7 @@ class ReportExtractor:
         }
 
 
-# ---------- 便捷单例 ----------
+# ---------- Convenience singleton ----------
 _extractor: Optional[ReportExtractor] = None
 
 

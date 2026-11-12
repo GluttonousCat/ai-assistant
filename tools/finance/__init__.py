@@ -1,7 +1,7 @@
 """
-财务分析工具层
-- sql_guard:    SQL 安全校验 (sqlglot AST)
-- schema_info:  数据字典生成 (供 LLM prompt)
+Finance analysis tooling layer
+- sql_guard:    SQL security validation (sqlglot AST)
+- schema_info:  data dictionary generation (for LLM prompts)
 """
 from tools.finance.sql_guard import validate_sql, force_limit, SqlGuardResult
 from tools.finance.schema_info import get_schema_info, SchemaInfo

@@ -1,10 +1,10 @@
 # -*- encoding: utf-8 -*-
 """
-指数日K同步 (从 tushare index_daily 拉取核心指数, 入库 stock.index_daily)
+Index daily-bar sync (pulls core indexes from tushare index_daily into stock.index_daily)
 
-用法:
-    python -m tools.market.sync_index            # 全量同步 (2020 起)
-    python -m tools.market.sync_index --start 20260101  # 增量
+Usage:
+    python -m tools.market.sync_index            # full sync (from 2020)
+    python -m tools.market.sync_index --start 20260101  # incremental
 """
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from storage.pg import PgClient
 
 logger = get_logger("market.sync_index")
 
-# 核心指数: 上证指数 / 沪深300 / 创业板指 / 上证50 / 中证500
+# Core indexes: SSE Composite / CSI 300 / ChiNext / SSE 50 / CSI 500
 INDEXES: Dict[str, str] = {
     "000001.SH": "上证指数",
     "000300.SH": "沪深300",
@@ -46,7 +46,7 @@ CREATE INDEX IF NOT EXISTS idx_index_daily_code ON stock.index_daily (ts_code, t
 
 
 def sync_indexes(pro, start: str, end: str) -> Dict[str, int]:
-    """同步核心指数日K, 返回 {code: 行数}"""
+    """Sync core index daily bars, returns {code: row count}"""
     total = {}
     with PgClient() as pg:
         pg.execute("CREATE SCHEMA IF NOT EXISTS stock")
@@ -64,7 +64,6 @@ def sync_indexes(pro, start: str, end: str) -> Dict[str, int]:
                 logger.info(f"{name}({code}): 无数据")
                 total[code] = 0
                 continue
-            df = df.rename(columns={"vol": "vol"})
             df = df[["trade_date", "ts_code", "open", "high", "low", "close",
                      "pct_chg", "vol", "amount"]].copy()
             df["trade_date"] = pd.to_datetime(df["trade_date"]).dt.date

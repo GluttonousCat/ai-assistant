@@ -1,19 +1,23 @@
 # -*- encoding: utf-8 -*-
 """
-章节内容契约 — 每项/每节"为什么抽、必须含什么、什么算合格"的单一声明源。
+Section content contracts — the single declaration of, per item/section,
+"why it is extracted, what it must contain, what counts as passing".
 
-一份声明, 三处消费:
-- 修复 Agent 任务说明   repair_brief(key) → prompt 片段 (结构不合规年报的兜底)
-- 校验器合格判据       acceptance_check() → 确定式机检, 零 LLM
-- 人工复核 checklist   直接人读 intent / must / accept
+One declaration, three consumers:
+- repair-Agent task brief   repair_brief(key) → prompt fragment (fallback for
+                            structurally non-conforming annual reports)
+- validator pass criteria   acceptance_check() → deterministic machine check, zero LLM
+- manual-review checklist   humans read intent / must / accept directly
 
-与 parse.py 的分层: SECTION_RULES / ITEM_ALIASES 是"怎么切" (操作规则: 词表/模式/
-守卫), 本模块是"抽什么/为什么/什么算对" (语义契约)。切法升级不碰契约, 契约变更
-不碰切法; 验收侧探针词引用 parse 词表 (单一事实源), 契约自有字段只补语义。
+Layering versus parse.py: SECTION_RULES / ITEM_ALIASES are "how to slice"
+(operational rules: vocab/patterns/guards); this module is "what/why/pass-or-
+not" (semantic contracts). Slicing upgrades never touch contracts; contract
+changes never touch slicing. Acceptance-side probe words reference the parse
+vocab (single source of truth); contract-owned fields only add semantics.
 
 CLI:
-    python -m tools.cninfo.contracts --list            # 人读契约全文
-    python -m tools.cninfo.contracts --check [路径]     # 对 _items.json 跑合规机检
+    python -m tools.cninfo.contracts --list            # print contracts for humans
+    python -m tools.cninfo.contracts --check [path]    # run compliance checks on _items.json
 """
 from __future__ import annotations
 
@@ -25,11 +29,12 @@ from typing import Dict, List, Optional
 
 from .parse import ITEM_ALIASES, MD_ROOT
 
-# ---------------- 契约声明 ----------------
-# optional=True 的键允许整段缺失 (如债券"不适用"); 其余键缺失即违约。
+# ---------------- contract declarations ----------------
+# Keys with optional=True may be missing entirely (e.g. bonds "not applicable");
+# any other missing key is a violation.
 
 CONTRACTS: Dict[str, Dict] = {
-    # ---- 第二章精确两项 (items) ----
+    # ---- the two exact items of chapter 2 (items) ----
     "kpi3y": {
         "kind": "item", "title": "主要会计数据和财务指标",
         "intent": "近三年主要会计数据与财务指标 (营收/归母净利/净资产/ROE/EPS 等逐年行), "
@@ -48,7 +53,7 @@ CONTRACTS: Dict[str, Dict] = {
         "repair_hints": ["短块合法 (实证: 兴业 '2.3 非经常性损益' 仅 243 字)",
                           "目录条目是噪声: 短且无表格的命中应弃"],
     },
-    # ---- 三~七节 (sections) ----
+    # ---- chapters 3-7 (sections) ----
     "mdna": {
         "kind": "section", "title": "管理层讨论与分析",
         "intent": "管理层对经营情况的讨论与分析: 行业格局/主营业务/经营回顾/风险因素。"
@@ -89,7 +94,7 @@ CONTRACTS: Dict[str, Dict] = {
     },
 }
 
-# ---------------- 机检判据 (确定式, 零 LLM) ----------------
+# ---------------- machine-check criteria (deterministic, zero LLM) ----------------
 
 _YEAR = re.compile(r"(?:19|20)\d{2}")
 
@@ -104,8 +109,9 @@ def _max_rows(extracted: Dict) -> int:
 
 
 def _all_text(extracted: Dict) -> str:
-    """text + 表格表头与全部单元格 — 关键词/年份常只在表格里
-    (text 由 _clean_text 剥离了表格, 实证: 平安银行 nonrecurring '合计'在行内)"""
+    """text + table headers and all cells — keywords/years often live only in
+    tables (text has tables stripped by _clean_text; observed: Ping An Bank
+    nonrecurring '合计' appears inside a row)"""
     parts = [extracted.get("text") or ""]
     for t in extracted.get("tables") or []:
         parts.append(" ".join(t.get("header") or []))
@@ -134,7 +140,8 @@ def _check_item(key: str, d: Optional[Dict]) -> tuple:
 
 
 def _probe_words(key: str) -> List[str]:
-    """验收探针词: 与 parse.SECTION_RULES 切法词表同源 (单一事实源)"""
+    """Acceptance probe words: same source as the parse.SECTION_RULES slicing
+    vocab (single source of truth)."""
     from .parse import SECTION_RULES
     return (SECTION_RULES.get(key) or {}).get("keywords") or []
 
@@ -173,23 +180,26 @@ def _check_section(key: str, d: Optional[Dict]) -> tuple:
 
 
 def acceptance_check(kind: str, key: str, extracted: Optional[Dict]) -> Dict:
-    """契约机检入口。kind: 'item'|'section'; extracted 为 _items.json 中该键的产物
-    (或 None=缺失)。返回 {ok, reason} — 修复 Agent 与批量巡检共用本判据。"""
+    """Contract machine-check entry. kind: 'item'|'section'; extracted is the
+    product for that key in _items.json (or None=missing). Returns
+    {ok, reason} — shared by the repair Agent and batch compliance sweeps."""
     if key not in CONTRACTS:
         return {"ok": False, "reason": f"未知契约键: {key}"}
     ok, reason = (_check_item if kind == "item" else _check_section)(key, extracted)
     return {"ok": ok, "reason": reason}
 
 
-# ---------------- 修复 Agent 任务简报 ----------------
+# ---------------- repair-Agent task brief ----------------
 
 _REASON_TERM = re.compile(r"[\u4e00-\u9fff]{2,6}")
 
 
 def diagnostic_terms(key: str) -> List[str]:
-    """契约 must/accept 文本中的诊断关键词 (如 nonrecurring 的'合计') —
-    注入修复 Agent 的大纲扫描, 让"必须存在的东西"直接进入其视野
-    (跨页孤儿行/碎片表在标题层不可见, 靠内容词命中)。"""
+    """Diagnostic keywords from the contract must/accept text (e.g.
+    nonrecurring's '合计') — injected into the repair Agent's outline scan so
+    that "what must exist" enters its field of view directly (cross-page
+    orphan lines/fragmented tables are invisible at the title level; they are
+    caught via content words)."""
     c = CONTRACTS[key]
     seen: List[str] = []
     for text in (c.get("must") or []) + [c.get("accept") or ""]:
@@ -200,12 +210,14 @@ def diagnostic_terms(key: str) -> List[str]:
 
 
 def reason_terms(reason: str) -> List[str]:
-    """验收失败原因中的关键词 — 重试轮的注意力重定向 (平安实证: '缺合计行'→合计)。"""
+    """Keywords from the acceptance-failure reason — attention redirection for
+    retry rounds (Ping An case: '缺合计行' → 合计)."""
     return [t for t in _REASON_TERM.findall(reason or "")
             if t not in ("达标", "合法", "存在", "缺失", "整项", "整节", "未过", "或")][:6]
 
 def repair_brief(kind: str, key: str) -> str:
-    """契约 → Agent prompt 片段: 告诉修复 Agent 在找什么、什么算合格。"""
+    """Contract → Agent prompt fragment: tell the repair Agent what to look
+    for and what counts as passing."""
     c = CONTRACTS[key]
     aliases = ITEM_ALIASES.get(key) or _probe_words(key) or []
     lines = [f"目标: {c['title']} ({kind})", f"意图: {c['intent']}"]
@@ -219,10 +231,11 @@ def repair_brief(kind: str, key: str) -> str:
     return "\n".join(lines)
 
 
-# ---------------- 批量合规巡检 ----------------
+# ---------------- batch compliance sweep ----------------
 
 def check_data(d: Dict) -> Dict:
-    """内存态 items 产物 → {fails: {key: reason}, n_keys, n_ok} (修复回环复检用)"""
+    """In-memory items product → {fails: {key: reason}, n_keys, n_ok} (for
+    repair-loop re-checks)."""
     fails: Dict[str, str] = {}
     n_ok = 0
     for key, c in CONTRACTS.items():
@@ -236,7 +249,7 @@ def check_data(d: Dict) -> Dict:
 
 
 def check_file(path: Path) -> Dict:
-    """单个 _items.json → {file, fails: {key: reason}, n_keys, n_ok}"""
+    """A single _items.json → {file, fails: {key: reason}, n_keys, n_ok}."""
     d = json.loads(path.read_text(encoding="utf-8"))
     r = check_data(d)
     return {"file": str(path), **r}

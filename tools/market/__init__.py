@@ -1,8 +1,8 @@
 """
-行情数据工具
-- sync_tushare:   Tushare -> PostgreSQL 全量回填
-- sync_financial: 财务三表增量同步
-- sync_mainbz:    主营构成同步
+Market data tools
+- sync_tushare:   Tushare -> PostgreSQL full backfill
+- sync_financial: financial statements incremental sync
+- sync_mainbz:    main-business composition sync
 """
 from tools.market.sync_tushare import TusharePgSyncer, run_backfill
 

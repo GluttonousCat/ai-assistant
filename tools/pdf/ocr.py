@@ -11,7 +11,7 @@ logger = get_logger(__name__)
 
 
 def ocr_page_png(b64_png: str, prompt: str, vision_llm: Any) -> str:
-    """单页视觉 OCR"""
+    """Single-page vision OCR."""
     messages = [
         {"role": "system", "content": prompt},
         {"role": "user", "content": [
@@ -25,7 +25,7 @@ def ocr_page_png(b64_png: str, prompt: str, vision_llm: Any) -> str:
 
 def ocr_pdf(path: str, prompt: str, vision_llm: Any, max_pages: int = 10,
             dpi: int = 130) -> Optional[str]:
-    """扫描件 PDF 整册识别: 逐页渲染 → OCR → 拼接。"""
+    """Whole-document OCR for scanned PDFs: render each page → OCR → concatenate."""
     from core.config import get_config
     if not get_config().openai_api_key:
         return None
@@ -39,7 +39,7 @@ def ocr_pdf(path: str, prompt: str, vision_llm: Any, max_pages: int = 10,
                 pages.append(text.strip())
                 logger.info(f"OCR 第 {page_no}/{len(rendered)} 页识别完成 "
                             f"({len(text)} 字)")
-        except Exception as e:  # noqa: BLE001 单页失败不弃整册
+        except Exception as e:  # noqa: BLE001 a single failed page must not abort the whole document
             logger.warning(f"OCR 第 {page_no} 页识别失败: {e}")
 
     if not pages:

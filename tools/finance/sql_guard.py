@@ -1,30 +1,31 @@
 """
-SQL 安全校验器
-基于 sqlglot AST 分析, 拦截危险操作, 确保生成的 SQL 只读且安全
+SQL security validator
+Analyzes the sqlglot AST to intercept dangerous operations and ensure the
+generated SQL is read-only and safe
 """
 from __future__ import annotations
 
-from typing import List, Tuple
+from typing import List
 
 import sqlglot
 from sqlglot import exp
 
-# 允许的 SQL 命令类型 (只读)
+# Allowed SQL command types (read-only)
 ALLOWED_COMMANDS = {"select", "with", "values", "table", "union", "except", "intersect"}
 
-# 禁止的函数 (存在攻击/滥用风险)
+# Banned functions (attack/abuse risk)
 BANNED_FUNCTIONS = {
     "PG_SLEEP", "SLEEP", "BENCHMARK",
     "LOAD_FILE", "OUTFILE", "DUMPFILE",
     "XP_CMDSHELL", "MASTER..XP_CMDSHELL",
 }
 
-# 允许访问的表白名单 schema
+# Whitelisted schemas allowed for table access
 ALLOWED_SCHEMAS = {"stock", "fin"}
 
 
 class SqlGuardResult:
-    """SQL 校验结果"""
+    """SQL validation result"""
 
     def __init__(self, valid: bool, error: str = "", warnings: List[str] = None):
         self.valid = valid
@@ -37,12 +38,12 @@ class SqlGuardResult:
 
 def validate_sql(sql: str, max_limit: int = 1000) -> SqlGuardResult:
     """
-    校验 SQL 安全性:
-    1. 语法可解析
-    2. 必须是只读查询 (SELECT/WITH/UNION 等, 禁止 INSERT/UPDATE/DELETE/DROP/ALTER)
-    3. 禁止危险函数
-    4. 只允许访问白名单 schema (stock/fin)
-    5. 强制 LIMIT 上限
+    Validate SQL safety:
+    1. Syntax must parse
+    2. Must be a read-only query (SELECT/WITH/UNION etc.; INSERT/UPDATE/DELETE/DROP/ALTER banned)
+    3. Dangerous functions banned
+    4. Only whitelisted schemas may be accessed (stock/fin)
+    5. Enforce the LIMIT ceiling
     """
     if not sql or not sql.strip():
         return SqlGuardResult(False, "SQL 为空")
@@ -52,7 +53,7 @@ def validate_sql(sql: str, max_limit: int = 1000) -> SqlGuardResult:
     except Exception as e:
         return SqlGuardResult(False, f"SQL 语法解析失败: {e}")
 
-    # 1. 命令类型检查
+    # 1. Command type check
     cmd = parsed.key
     if cmd not in ALLOWED_COMMANDS:
         return SqlGuardResult(
@@ -61,14 +62,14 @@ def validate_sql(sql: str, max_limit: int = 1000) -> SqlGuardResult:
 
     warnings: List[str] = []
 
-    # 2. 危险函数检查
+    # 2. Dangerous function check
     for func in parsed.find_all(exp.Func):
         name = func.name.upper()
         if name in BANNED_FUNCTIONS:
             return SqlGuardResult(False, f"检测到禁止函数: {name}")
 
-# 3. 表白名单检查 (只检查 FROM/JOIN 中引用的表, 跳过 CTE 定义)
-    # 收集 CTE 名称
+# 3. Table whitelist check (only checks tables referenced in FROM/JOIN; CTE definitions skipped)
+    # Collect CTE names
     cte_names = set()
     for cte in parsed.find_all(exp.CTE):
         name = cte.alias_or_name
@@ -77,11 +78,11 @@ def validate_sql(sql: str, max_limit: int = 1000) -> SqlGuardResult:
 
     for table in parsed.find_all(exp.Table):
         table_name = table.name.lower()
-        # 跳过 CTE 引用
+        # Skip CTE references
         if table_name in cte_names:
             continue
-        # 跳过窗口函数/子查询别名 (如 SELECT t.* FROM (sub) t)
-        # sqlglot 中 FROM 里的子查询别名也是 Table 但无实际库表
+        # Skip window-function/subquery aliases (e.g. SELECT t.* FROM (sub) t)
+        # In sqlglot a subquery alias in FROM is also a Table but has no real schema/table
         has_schema = table.args.get("db")
         if not has_schema:
             if table_name not in _KNOWN_TABLES:
@@ -95,10 +96,10 @@ def validate_sql(sql: str, max_limit: int = 1000) -> SqlGuardResult:
                     False, f"schema {schema_name} 不在白名单, 禁止访问"
                 )
 
-    # 4. LIMIT 上限检查
+    # 4. LIMIT ceiling check
     limit_expr = parsed.args.get("limit")
     if limit_expr is not None and "expression" in limit_expr.args:
-        # 解析数字字面量
+        # Parse the numeric literal
         lit = limit_expr.args["expression"]
         if isinstance(lit, exp.Literal) and lit.is_int:
             val = int(lit.this)
@@ -108,21 +109,21 @@ def validate_sql(sql: str, max_limit: int = 1000) -> SqlGuardResult:
     return SqlGuardResult(True, warnings=warnings)
 
 
-# 白名单表集合 (无 schema 前缀时的兜底校验)
+# Whitelisted table set (fallback check when there is no schema prefix)
 _KNOWN_TABLES = {
     "stock_basic", "trade_calendar", "daily", "adj_factor",
     "daily_basic", "sync_meta",
     "income", "balancesheet", "cashflow", "fina_indicator", "fina_mainbz",
     "report_meta", "report_forecast", "anomaly_rules", "anomaly_results",
     "query_log",
-    # 视图
+    # Views
     "v_financial_summary", "v_daily_valuation", "v_main_biz",
 }
 
 
 def force_limit(sql: str, max_limit: int = 1000) -> str:
     """
-    为 SQL 强制附加 LIMIT 上限 (若未指定或超限则覆盖)
+    Force a LIMIT ceiling onto the SQL (applied when absent or over the cap)
     """
     if not sql or not sql.strip():
         return sql
@@ -134,12 +135,12 @@ def force_limit(sql: str, max_limit: int = 1000) -> str:
             if isinstance(lit, exp.Literal) and lit.is_int:
                 val = int(lit.this)
                 if val <= max_limit:
-                    return sql  # 无需修改
-        # 覆盖或附加 LIMIT
-        # 简单方式: 在末尾拼接 (sqlglot 转换保真)
+                    return sql  # no change needed
+        # Override or append the LIMIT
+        # Simple approach: attach it at the end (sqlglot round-trip is faithful)
         parsed_limit = sqlglot.parse_one(sql, dialect="postgres")
         parsed_limit.args["limit"] = exp.Limit(expression=exp.Literal.number(max_limit))
         return parsed_limit.sql(dialect="postgres")
     except Exception:
-        # 解析失败则返回原 SQL (交由 validate_sql 报错)
+        # On parse failure return the original SQL (validate_sql will report the error)
         return sql

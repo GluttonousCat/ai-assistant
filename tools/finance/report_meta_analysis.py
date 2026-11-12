@@ -1,24 +1,30 @@
 # -*- encoding: utf-8 -*-
 """
-研报 LLM Analysis (文件名元数据提取)
+Report LLM Analysis (file-name metadata extraction)
 
-【设计】只把研报文件名给 LLM (deepseek-v4-flash), 一个 prompt 完成:
-    title(清洗后标题) / org(机构) / target(标的) / industry(行业) / region(地区) / market(市场)
-知识星球研报文件名是规范命名 (券商-标的-主题), 信息基本都在名字里,
-不读正文, 每篇秒级、成本极低。file_name 保留原文件名做溯源。
+[Design] Only the report file name is given to the LLM (deepseek-v4-flash);
+one prompt produces:
+    title (cleaned title) / org (institution) / target (subject) /
+    industry (industry) / region (region) / market (market)
+Zhixingqiu report file names follow a regular convention
+(broker-subject-topic), so nearly all information lives in the name; the body
+is never read - seconds per report at minimal cost. file_name keeps the
+original file name for traceability.
 
-表结构 (fin.report_meta):
-    file_name  原文件名 (原样保留)
-    title      清洗后标题 (去机构/中文版/译文等噪音, 只留内容主题)
-    org_name   机构
-    target     标的名 (仅具体公司/商品; 行业/宏观报告为空)
-    industry   行业 (规范化)
-    region     地区 (规范化)
-    market     市场 (A股/美股/港股/宏观/商品/行业/其他)
+Table schema (fin.report_meta):
+    file_name  original file name (kept verbatim)
+    title      cleaned title (drops institution/"Chinese version"/translation
+               noise, keeps only the content topic)
+    org_name   institution
+    target     subject name (only concrete companies/commodities; empty for
+               industry/macro reports)
+    industry   industry (normalized)
+    region     region (normalized)
+    market     market (A-shares/US stocks/HK stocks/macro/commodity/industry/other)
 
-调用入口:
-    analyze_report_meta(report_id)   单篇
-    analyze_pending(limit)           批量 (入库后由调度器自动调用)
+Entry points:
+    analyze_report_meta(report_id)   single report
+    analyze_pending(limit)           batch (auto-invoked by the scheduler after ingest)
 """
 from __future__ import annotations
 
@@ -33,7 +39,7 @@ from storage.pg_schema import ensure_report_analysis_columns
 
 logger = get_logger(__name__)
 
-# 模型 (config llm.models.analysis.model 可覆盖)
+# Model (can be overridden by config llm.models.analysis.model)
 META_MODEL = "deepseek-v4-flash-0731"
 
 META_EXTRACT_PROMPT = """你是研报文件名清洗与元数据提取引擎。处理下面的研报文件名, 严格只输出一个 JSON 对象 (无解释、无代码块):
@@ -83,22 +89,25 @@ H股 (港股, 代码 XXXX.HK)
 
 文件名: {filename}"""
 
-# target/industry/region 等增量列 DDL 的单一事实源在
-# storage.pg_schema.DDL_REPORT_ANALYSIS_STATEMENTS (与 LLM 深度提取列同表收敛)
+# Single source of truth for the incremental column DDL of
+# target/industry/region etc. lives in
+# storage.pg_schema.DDL_REPORT_ANALYSIS_STATEMENTS (converged into the same
+# table as the LLM deep-extraction columns)
 
 _MARKETS = {"A股", "H股", "台股", "日股", "韩股", "美股", "欧洲股", "东南亚股",
             "商品", "宏观", "其他"}
-# 旧值归一化 (行业/地区不是市场)
+# Legacy value normalization (industry/region are not markets)
 _MARKET_REMAP = {"行业": "其他", "港股": "H股"}
 
 
 def ensure_meta_columns() -> None:
-    """新列 DDL: 单一事实源在 storage.pg_schema (幂等, 进程内只跑一次)"""
+    """New-column DDL: single source of truth in storage.pg_schema
+    (idempotent, runs once per process)"""
     ensure_report_analysis_columns()
 
 
 def _get_llm():
-    """元数据分析客户端 (config llm.models.analysis.model 覆盖)"""
+    """Metadata analysis client (overridden by config llm.models.analysis.model)"""
     from openai import OpenAI
     cfg = get_config()
     model = cfg.get("llm.models.analysis.model") or META_MODEL
@@ -108,8 +117,9 @@ def _get_llm():
 
 def _thinking_kwargs() -> Dict[str, Any]:
     """
-    思考开关与输出预算: 与 llm/client.py 同一套优先级
-    (用途覆盖 llm.models.analysis.enable_thinking > 全局 llm.enable_thinking > 默认开启).
+    Thinking switch and output budget: same priority chain as llm/client.py
+    (purpose override llm.models.analysis.enable_thinking > global
+    llm.enable_thinking > default on).
     """
     cfg = get_config()
     et = cfg.get("llm.models.analysis.enable_thinking")
@@ -145,8 +155,9 @@ def _parse_json(text: str) -> Optional[Dict[str, Any]]:
 def analyze_report_meta(report_id: int, pg: Optional[PgClient] = None,
                         force: bool = False) -> bool:
     """
-    单篇: 用文件名提取机构/标的/行业/地区/市场 并入库。
-    已提取过 (org+industry 有值) 且非 force -> 跳过。返回是否执行。
+    Single report: extract institution/subject/industry/region/market from
+    the file name and store it. Already extracted (org+industry present) and
+    not force -> skip. Returns whether it ran.
     """
     ensure_meta_columns()
     if not get_config().openai_api_key:
@@ -165,7 +176,7 @@ def analyze_report_meta(report_id: int, pg: Optional[PgClient] = None,
             return False
 
         client, model = _get_llm()
-        # 思考开关/预算与 LLMClient 同源 (config llm.enable_thinking / llm.max_tokens)
+        # Thinking switch/budget sourced identically to LLMClient (config llm.enable_thinking / llm.max_tokens)
         resp = client.chat.completions.create(
             model=model,
             messages=[{"role": "user",
@@ -185,7 +196,7 @@ def analyze_report_meta(report_id: int, pg: Optional[PgClient] = None,
         market = _MARKET_REMAP.get(market, market)
         if market not in _MARKETS:
             market = None
-        # 清洗后标题: 空则回退原文件名 (去后缀)
+        # Cleaned title: fall back to the original file name if empty (suffix stripped)
         title = (str(data.get("title") or "").strip())[:200]
         if not title:
             title = re.sub(r"\.(pdf|mp3|txt|docx?)$", "", filename, flags=re.I)[:200]
@@ -204,7 +215,8 @@ def analyze_report_meta(report_id: int, pg: Optional[PgClient] = None,
 
 def analyze_pending(limit: int = 50, force: bool = False,
                     offset: int = 0) -> int:
-    """批量: 处理缺元数据的研报 (force=True 按 offset 全量重提取)"""
+    """Batch: process reports missing metadata (force=True re-extracts
+    everything via limit/offset)"""
     ensure_meta_columns()
     with PgClient() as pg:
         if force:

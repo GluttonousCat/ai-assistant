@@ -1,5 +1,5 @@
 # -*- encoding: utf-8 -*-
-"""tools/pdf 单测: fitz 合成 fixture (无外部文件依赖, 不调 LLM)"""
+"""tools/pdf unit tests: fitz-synthesized fixtures (no external files, no LLM calls)"""
 from __future__ import annotations
 
 import pytest
@@ -10,7 +10,7 @@ from tools.pdf import (extract_text, extract_tables, is_image_pdf,
                        is_pdf_file, render_pages_png)
 
 
-# ---------- fixture 工厂 ----------
+# ---------- fixture factories ----------
 
 def _make_text_pdf(path, pages=2):
     doc = fitz.open()
@@ -26,7 +26,7 @@ def _make_image_pdf(path, pages=2):
     pix = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 120, 80))
     for _ in range(pages):
         page = doc.new_page()
-        page.insert_image(page.rect, pixmap=pix)   # 只插图不写字
+        page.insert_image(page.rect, pixmap=pix)   # insert an image, write no text
     doc.save(str(path))
     doc.close()
 
@@ -34,7 +34,8 @@ def _make_image_pdf(path, pages=2):
 def _make_table_pdf(path):
     doc = fitz.open()
     page = doc.new_page()
-    # 3x3 线框表: 画网格线 + 填单元格文字 (pdfplumber lines 策略可识别)
+    # 3x3 ruled table: draw grid lines + fill cell text (detectable by
+    # pdfplumber's lines strategy)
     x0, y0, cw, rh = 72, 72, 100, 20
     for r in range(4):
         page.draw_line((x0, y0 + r * rh), (x0 + 3 * cw, y0 + r * rh))
@@ -55,7 +56,7 @@ def test_extract_text_text_layer(tmp_path):
     _make_text_pdf(p)
     text = extract_text(str(p))
     assert "管理层讨论与分析测试文本" in text
-    assert "ALPHA-1" in text          # 多页拼接
+    assert "ALPHA-1" in text          # multi-page concatenation
 
 
 def test_is_pdf_file(tmp_path):
@@ -98,7 +99,7 @@ def test_extract_tables(tmp_path):
     tables = extract_tables(str(p))
     assert len(tables) >= 1
     assert tables[0]["page"] == 1
-    assert len(tables[0]["rows"]) >= 3      # 3 行数据 (可能含表头行)
+    assert len(tables[0]["rows"]) >= 3      # 3 data rows (possibly incl. a header row)
     flat = "".join("".join(r) for r in tables[0]["rows"])
     assert "单元格" in flat
 
@@ -120,10 +121,10 @@ def test_to_markdown(tmp_path):
     assert "管理层讨论与分析测试文本" in md
 
 
-# ---------- ocr (注入假视觉客户端, 不调真实 LLM) ----------
+# ---------- ocr (fake vision client injected, no real LLM calls) ----------
 
 class _FakeVisionLLM:
-    """tools/pdf.ocr 的注入契约: .invoke(messages) -> str"""
+    """Injection contract for tools/pdf.ocr: .invoke(messages) -> str"""
 
     def __init__(self):
         self.calls = []
@@ -154,5 +155,5 @@ def test_ocr_pdf_with_fake_vision_llm(tmp_path, monkeypatch):
     _make_image_pdf(p, pages=2)
     fake = _FakeVisionLLM()
     text = ocr_pdf(str(p), prompt="p", vision_llm=fake, dpi=72)
-    assert text == "假OCR识别文本\n假OCR识别文本"   # 逐页识别后拼接
+    assert text == "假OCR识别文本\n假OCR识别文本"   # per-page recognition then concatenation
     assert len(fake.calls) == 2

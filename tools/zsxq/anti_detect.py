@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-反检测机制模块
-负责请求头生成、延迟控制、频率限制等
+Anti-detection module.
+Responsible for request-header generation, delay control, rate limiting, etc.
 """
 import random
 import time
@@ -9,9 +9,9 @@ from typing import Dict
 
 
 class AntiDetectManager:
-    """反检测管理器"""
+    """Anti-detection manager."""
 
-    # User-Agent池
+    # User-Agent pool
     USER_AGENTS = [
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
@@ -22,14 +22,9 @@ class AntiDetectManager:
 
     def __init__(self, cookie: str):
         self.cookie = cookie
-        self.request_count = 0
-        self.min_delay = 2.0
-        self.max_delay = 5.0
-        self.long_delay_interval = 15
-        self.debug_mode = False
 
     def get_headers(self) -> Dict[str, str]:
-        """生成随机请求头"""
+        """Generate randomized request headers."""
         ua = random.choice(self.USER_AGENTS)
 
         headers = {
@@ -53,28 +48,14 @@ class AntiDetectManager:
             "X-Version": "2.77.0",
         }
 
-        # 随机添加可选头部
+        # Randomly add an optional header
         if random.random() > 0.5:
             headers["X-Requested-With"] = "XMLHttpRequest"
 
         return headers
 
-    def smart_delay(self, is_historical: bool = False):
-        """智能延迟"""
-        self.request_count += 1
-
-        if is_historical:
-            delay = random.uniform(self.min_delay + 1.0, self.max_delay + 2.0)
-        else:
-            delay = random.uniform(self.min_delay, self.max_delay)
-
-        if self.debug_mode:
-            print(f"   ⏱️ 延迟: {delay:.2f}秒 (请求#{self.request_count})")
-
-        time.sleep(delay)
-
     def long_delay(self):
-        """长休眠"""
-        delay = random.uniform(60, 120)  # 60-120秒
+        """Long sleep."""
+        delay = random.uniform(60, 120)  # 60-120 seconds
         print(f"🛌 长休眠: {delay:.1f}秒")
         time.sleep(delay)

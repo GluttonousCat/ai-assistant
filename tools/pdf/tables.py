@@ -1,7 +1,8 @@
 # -*- encoding: utf-8 -*-
-"""PDF 表格提取 (pdfplumber, 线框表/准线框表)
+"""PDF table extraction (pdfplumber; ruled / semi-ruled tables)
 
-适用: 定期报告里的财务表/股东表等结构化线框表格。
+Suited to structured ruled tables in periodic reports, e.g. financial
+statement and shareholder tables.
 """
 from __future__ import annotations
 

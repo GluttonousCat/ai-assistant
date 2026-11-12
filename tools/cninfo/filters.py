@@ -23,7 +23,7 @@ _CATEGORY_PATTERNS = (
 
 
 def classify_category(title: str) -> str:
-    """标题 -> 定期报告类别码 (ndbg/bndbg/yjdbg/sjdbg/other)"""
+    """Title -> periodic-report category code (ndbg/bndbg/yjdbg/sjdbg/other)."""
     t = title or ""
     for code, words in _CATEGORY_PATTERNS:
         if any(w in t for w in words):
@@ -32,13 +32,14 @@ def classify_category(title: str) -> str:
 
 
 def parse_report_year(title: str) -> Optional[int]:
-    """标题中的报告年度: '2024年年度报告' -> 2024; 无年份返回 None"""
+    """Report year from the title: '2024年年度报告' -> 2024; None if no year."""
     m = _YEAR_RE.search(title or "")
     return int(m.group(1)) if m else None
 
 
 def is_full_periodic_report(title: str) -> bool:
-    """是否为定期报告全文 (排除摘要/英文/更正等干扰版本)"""
+    """Whether this is a full periodic report (excludes summary/English/
+    corrected and other interfering variants)."""
     t = title or ""
     if classify_category(t) == "other":
         return False
@@ -61,7 +62,8 @@ def pick_full_report(announcements: List[Dict]) -> Optional[Dict]:
     return full[0]
 
 
-# 6 位代码前缀 -> 交易所后缀 (沪深北市场规则; 沪B 900/深B 200 一并覆盖)
+# 6-digit code prefixes -> exchange suffixes (SH/SZ/BJ market rules; SH-B
+# 900 and SZ-B 200 covered as well)
 _TS_SUFFIX_RULES = (
     (("60", "68", "90"), "SH"),
     (("00", "30", "20"), "SZ"),

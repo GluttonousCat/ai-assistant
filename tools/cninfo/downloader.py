@@ -21,10 +21,10 @@ logger = logging.getLogger(__name__)
 DOWNLOAD_ROOT = Path("output/cninfo/downloads")
 
 _PERIODIC_CATEGORIES = {
-    "ndbg": "category_ndbg_szsh",    # 年报: 次年 1-4 月披露
-    "bndbg": "category_bndbg_szsh",  # 半年报: 当年 7-8 月
-    "yjdbg": "category_yjdbg_szsh",  # 一季报: 当年 4 月
-    "sjdbg": "category_sjdbg_szsh",  # 三季报: 当年 10 月
+    "ndbg": "category_ndbg_szsh",    # annual report: disclosed Jan-Apr of the next year
+    "bndbg": "category_bndbg_szsh",  # semi-annual report: Jul-Aug of the same year
+    "yjdbg": "category_yjdbg_szsh",  # Q1 report: Apr of the same year
+    "sjdbg": "category_sjdbg_szsh",  # Q3 report: Oct of the same year
 }
 
 _DL_FIELDS = ("file_path", "file_size", "download_status", "downloaded_at")
@@ -247,7 +247,7 @@ class BatchCrawler:
         st["error"] = (error or "")[:500] or None
         store.save_stock_meta(ts_code, meta)
 
-    # ---------- 主流程 ----------
+    # ---------- main flow ----------
 
     def _process_stock(
             self, stock: Dict[str, str], i: int, n: int,
@@ -262,7 +262,8 @@ class BatchCrawler:
                 if not with_pdf or state.get("dl") == "done":
                     total_stats["stocks_skip"] += 1
                     return "skip"
-                # meta 已 done 仅缺 PDF: 直读 meta 下载, 免重打查询接口
+                # meta already done, only PDF missing: download straight from
+                # meta, skip re-hitting the query API
                 dl = self.dl.download_from_meta(ts_code, years, tuple(cats))
                 total_stats["downloaded"] += dl.get("downloaded", 0)
                 total_stats["dl_skipped"] += dl.get("skipped", 0)
@@ -343,7 +344,8 @@ class BatchCrawler:
 
     def download_watchlist(self, stocks: List[str], years: List[int],
                            categories: List[str] = None) -> Dict[str, int]:
-        """关注池 PDF 批量下载 (元数据已全量, 直接挑全文下载)"""
+        """Batch PDF download for the watchlist (metadata already complete;
+        just pick the full texts to download)."""
         cats = tuple(categories) if categories else ("ndbg",)
         total = {}
         for s in stocks:
@@ -381,7 +383,7 @@ class BatchCrawler:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="巨潮定期报告下载 (单股/批量单入口)")
-    # --- 单股模式 ---
+    # --- single-stock mode ---
     parser.add_argument("--stock", default="",
                         help="证券代码, 逗号分隔多只 (如 300308 或 300308,600519.SH); "
                              "缺省进入批量模式")
@@ -390,7 +392,7 @@ def main() -> int:
     parser.add_argument("--all-periodic", action="store_true",
                         help="(单股) 年报+半年报+一/三季报 (缺省仅年报)")
     parser.add_argument("--force", action="store_true", help="(单股) 强制重新下载")
-    # --- 批量模式 (无 --stock 时生效) ---
+    # --- batch mode (active when --stock is absent) ---
     parser.add_argument("--years", default="",
                         help="报告年度, 逗号分隔 (缺省: 单股最近3年 / 批量2021-2025)")
     parser.add_argument("--limit", type=int, default=0,
@@ -414,9 +416,9 @@ def main() -> int:
         years = [int(y) for y in args.years.split(",") if y.strip()]
     elif single:
         y = datetime.now().year
-        years = [y - 2, y - 1, y]   # 报告年度; 跨年披露由宽窗覆盖
+        years = [y - 2, y - 1, y]   # report years; cross-year disclosure is covered by the wide window
     else:
-        years = [2021, 2022, 2023, 2024, 2025]   # 批量缺省最近5年
+        years = [2021, 2022, 2023, 2024, 2025]   # batch default: last 5 years
 
     if single:
         total: Dict[str, int] = {}

@@ -1,14 +1,15 @@
 """
-股票知识库 (Stock KB)
-提供:
-- 别名词典加载 (PG stock_basic + stock_alias -> 内存词典)
-- 最长匹配实体提取 (股票/指标/时间)
-- 词典查找接口
+Stock knowledge base (Stock KB)
+Provides:
+- Alias dictionary loading (PG stock_basic + stock_alias -> in-memory dict)
+- Longest-match entity extraction (stock/metric/time)
+- Dictionary lookup interfaces
 
-设计:
-- 词典从 PG 一次性加载到内存 (5000+ 条目, 可忽略内存)
-- 提取用"最长匹配"而非正则: 命中多个同义别名时取最长最具体
-- 纯规则, 无 LLM 依赖, CPU 微秒级
+Design:
+- Dictionaries are loaded from PG into memory once (5000+ entries, negligible memory)
+- Extraction uses "longest match" instead of regex: when multiple synonymous
+  aliases hit, take the longest and most specific
+- Pure rules, no LLM dependency, microseconds of CPU
 """
 from __future__ import annotations
 
@@ -17,36 +18,42 @@ from typing import Dict, List, Optional, Tuple
 
 from storage.pg import PgClient
 
-# 字符串匹配常量
-MAX_NAME_LEN = 12  # 股票别名最长长度 (防误匹配)
+# String matching constants
+MAX_NAME_LEN = 12  # Max stock alias length (guards against false matches)
 
 
 def _strip_roman_suffix(name: str) -> str:
-    """去掉行业名末尾罗马数字: 白酒Ⅱ/白酒ⅱ/白酒II -> 白酒"""
+    """Strip the trailing Roman numeral from an industry name (e.g. 'Baijiu II'
+    variants -> 'Baijiu')"""
     for suf in ("Ⅲ", "Ⅱ", "ⅰ", "ⅱ", "III", "II", "ⅲ"):
         name = name.replace(suf, "")
     return name.strip()
 
-# 时间表达解析 (仅做结构化; 具体 SQL 由规则引擎组)
-# 返回: (kind, value)  kind: year/quarter/half/recent_years/previous_year/this_year/recent
+# Time expression parsing (structuring only; the actual SQL is assembled by
+# the rules engine)
+# Returns: (kind, value)  kind: year/quarter/half/recent_years/previous_year/this_year/recent
 def parse_time_phrase(text: str) -> Optional[Tuple[str, object]]:
-    """解析时间词: 2023年/2023年报/2023Q1/2023年一季报/2023年中报/最近N年/去年
-    季报优先于年份匹配 (避免 "2023年一季报" 被截成 2023 年报)"""
+    """Parse time phrases: bare year, annual report, quarterly report
+    (2023Q1-style or Chinese-numeral style), half-year report, last N years,
+    last year. Quarterly patterns are matched before plain years (avoids a
+    "2023 Q1 report" being truncated into the 2023 annual report)"""
     text = text.strip()
-    # 季报: 2023Q1 / 2023年Q1 / 2023年一季报 / 2023一季报 / 2023年3季报
+    # Quarterly report forms: 2023Q1 / year+Q1 / Chinese-numeral or digit
+    # quarter+report forms (exact variants in the regex below)
     m = re.search(
         r"(19|20)\d{2}\s*年?\s*[Qq]?\s*([一二三四1234])\s*季报?", text)
     if m:
         q = {"一": 1, "二": 2, "三": 3, "四": 4}[m.group(2)]
         year = int(m.group(0)[:4])
         if q == 4:
-            return ("year", year)  # 四季报 = 年报
+            return ("year", year)  # Q4 report = annual report
         return ("quarter", (year, q))
-    # 中报/半年报: 2023年中报 / 2023年半年报 / 2023H1
+    # Interim/half-year report: 2023H1 and Chinese interim-report forms
+    # (exact variants in the regex below)
     m = re.search(r"(19|20)\d{2}\s*年?\s*(?:半年报|中报|H1|h1)", text)
     if m:
         return ("half", int(m.group(0)[:4]))
-    # 年报/年份
+    # Annual report / bare year
     m = re.search(r"(19|20)\d{2}\s*年", text)
     if m:
         return ("year", int(m.group(0).strip()[:4]))
@@ -64,21 +71,21 @@ def parse_time_phrase(text: str) -> Optional[Tuple[str, object]]:
 
 
 class StockKB:
-    """股票知识库 (单例)"""
+    """Stock knowledge base (singleton)"""
 
     _instance: Optional["StockKB"] = None
 
     def __init__(self):
-        # alias(小写) -> (ts_code, 标准名)
+        # alias (lowercase) -> ts_code
         self._stock_alias: Dict[str, str] = {}
-        # ts_code -> 标准名 (为 SQL 里的 stock_name)
+        # ts_code -> canonical name (for stock_name in SQL)
         self._code_to_name: Dict[str, str] = {}
-        # 行业名(小写) -> (index_code, level)
+        # industry name (lowercase) -> (index_code, level)
         self._industry_dict: Dict[str, Tuple[str, str]] = {}
         self._loaded = False
 
     def load(self, force: bool = False) -> None:
-        """从 PG 加载股票基础 + 别名"""
+        """Load stock basics + aliases from PG"""
         if self._loaded and not force:
             return
         self._stock_alias = {}
@@ -86,23 +93,23 @@ class StockKB:
         self._industry_dict = {}
         try:
             with PgClient() as pg:
-                # 基础表: 标准名 -> 代码 (所有在市股票)
+                # Base table: canonical name -> code (all listed stocks)
                 rows = pg.fetch_all(
                     "SELECT ts_code, name FROM stock.stock_basic"
                 )
                 for r in rows:
                     self._code_to_name[r["ts_code"]] = r["name"]
                     self._stock_alias[r["name"].lower()] = r["ts_code"]
-                    # 6位纯代码也算
+                    # Bare 6-digit symbol counts too
                     sym = r["ts_code"].split(".")[0]
                     self._stock_alias[sym] = r["ts_code"]
 
-                # 别名词典
+                # Alias dictionary
                 rows = pg.fetch_all("SELECT alias, ts_code FROM stock.stock_alias")
                 for r in rows:
                     self._stock_alias[r["alias"].lower()] = r["ts_code"]
 
-                # 行业分类 (L1/L2)
+                # Industry classification (L1/L2)
                 rows = pg.fetch_all(
                     "SELECT index_code, industry_name, level FROM stock.index_classify "
                     "WHERE level IN ('L1','L2')"
@@ -112,22 +119,21 @@ class StockKB:
                         r["index_code"], r["level"]
                     )
         except Exception as e:
-            # 表不存在时降级为空
-            import logging
+            # Degrade to empty when tables don't exist
             from core.logger import get_logger; get_logger(__name__).warning(f"StockKB 加载失败: {e}")
         self._loaded = True
 
-    # ---------- 股票匹配 ----------
+    # ---------- Stock matching ----------
     def match_stock(self, text: str) -> Optional[Tuple[str, str]]:
         """
-        在文本中查找最长匹配的股票别名
-        返回 (ts_code, 匹配文本) 或 None
+        Find the longest-matching stock alias in the text
+        Returns (ts_code, matched text) or None
         """
         self.load()
         text_l = text.lower()
         best = None  # (length, ts_code, matched)
 
-        # 先全量扫描表内所有 alias 名做子串匹配
+        # First scan every alias name in the dict for substring matches
         for alias, code in self._stock_alias.items():
             if len(alias) > MAX_NAME_LEN:
                 continue
@@ -139,17 +145,19 @@ class StockKB:
         return None
 
     def match_stock_exact(self, name: str) -> Optional[str]:
-        """精确匹配 (词典直接命中)"""
+        """Exact match (direct dictionary hit)"""
         self.load()
         return self._stock_alias.get(name.strip().lower())
 
     def count_stocks_in_text(self, text: str) -> int:
-        """文本中出现的不同股票数 (去重 ts_code + 区间互斥).
-        长别名优先占位: "平安银行" 命中后, 其子串 "平安" (另一只股票) 不再计数"""
+        """Number of distinct stocks appearing in the text (dedup by ts_code
+        + mutually exclusive spans). Longer aliases claim their span first:
+        once "Ping An Bank" matches, its substring "Ping An" (a different
+        stock) is no longer counted"""
         self.load()
         text_l = text.lower()
         codes = set()
-        occupied = []  # 已占用字符区间
+        occupied = []  # occupied character spans
         for alias, code in sorted(
             self._stock_alias.items(), key=lambda x: -len(x[0])
         ):
@@ -160,7 +168,7 @@ class StockKB:
                 continue
             span = (idx, idx + len(alias))
             if any(s < span[1] and span[0] < e for s, e in occupied):
-                continue  # 与更长别名重叠 (子串误命中)
+                continue  # overlaps a longer alias (substring false hit)
             codes.add(code)
             occupied.append(span)
         return len(codes)
@@ -169,18 +177,18 @@ class StockKB:
         self.load()
         return self._code_to_name.get(ts_code)
 
-    # ---------- 指标匹配 ----------
-    # 指标别名 -> (标准字段, 数据源表前缀)
-    # 复用 skills.fin_query 的映射避免重复
+    # ---------- Metric matching ----------
+    # Metric alias -> (canonical field, source table prefix)
+    # Reuses the skills.fin_query mapping to avoid duplication
     METRIC_ALIASES: Dict[str, Tuple[str, str]] = {
-        # 收入类
+        # Revenue
         "营业收入": ("revenue", "i"),
         "营收": ("revenue", "i"),
         "收入": ("revenue", "i"),
         "营业总收入": ("total_revenue", "i"),
         "营业额": ("revenue", "i"),
         "卖了多少": ("revenue", "i"),
-        # 利润类
+        # Profit
         "归母净利润": ("n_income_attr_p", "i"),
         "净利润": ("n_income_attr_p", "i"),
         "净利": ("n_income_attr_p", "i"),
@@ -194,7 +202,7 @@ class StockKB:
         "eps": ("basic_eps", "i"),
         "每股赚多少": ("basic_eps", "i"),
         "稀释每股收益": ("diluted_eps", "i"),
-        # 指标类 (fina_indicator)
+        # Ratios (fina_indicator)
         "roe": ("roe", "f"),
         "净资产收益率": ("roe", "f"),
         "回报率": ("roe", "f"),
@@ -214,7 +222,7 @@ class StockKB:
         "营收同比增长": ("or_yoy", "f"),
         "营收同比": ("or_yoy", "f"),
         "营收增速": ("or_yoy", "f"),
-        # 资产类
+        # Assets
         "总资产": ("total_assets", "b"),
         "资产总额": ("total_assets", "b"),
         "总负债": ("total_liab", "b"),
@@ -226,13 +234,13 @@ class StockKB:
         "应收账款": ("accounts_receiv", "b"),
         "存货": ("inventories", "b"),
         "商誉": ("goodwill", "b"),
-        # 现金类
+        # Cash flow
         "经营现金流": ("n_cashflow_act", "c"),
         "经营活动现金流": ("n_cashflow_act", "c"),
         "投资现金流": ("n_cashflow_inv_act", "c"),
         "筹资现金流": ("n_cash_flows_fnc_act", "c"),
         "经营性现金流": ("n_cashflow_act", "c"),
-        # 行情类
+        # Market quotes
         "收盘价": ("close", "d"),
         "股价": ("close", "d"),
         "最新价": ("close", "d"),
@@ -258,8 +266,8 @@ class StockKB:
 
     def match_metric(self, text: str) -> Optional[Tuple[str, str]]:
         """
-        在文本中查找最长匹配的指标别名
-        返回 (标准字段, 表前缀) 或 None
+        Find the longest-matching metric alias in the text
+        Returns (canonical field, table prefix) or None
         """
         text_l = text.lower()
         best = None
@@ -274,25 +282,28 @@ class StockKB:
     def all_metric_aliases(self) -> List[str]:
         return list(self.METRIC_ALIASES.keys())
 
-    # ---------- 行业匹配 ----------
+    # ---------- Industry matching ----------
     def match_industry(self, text: str) -> Optional[Tuple[str, str]]:
         """
-        在文本中查找行业名 (申万 L1/L2)
-        返回 (index_code, industry_name) 或 None
-        仅匹配"行业"相关语境: 文本含行业名 + (行业/板块/领域) 词
+        Find an industry name in the text (Shenwan L1/L2)
+        Returns (index_code, industry_name) or None
+        Only matches in industry-related context: text containing an industry
+        name plus a context word (industry/sector/field)
         """
         self.load()
-        # 行业语境词: 用户说 "白酒行业" / "半导体板块"
+        # Industry context words: users say "baijiu industry" / "semiconductor sector"
         if not self._industry_dict:
             return None
-        # 触发词检查: 必须有"行业/板块/领域/赛道"等词, 避免把"茅台"的行业误判
+        # Trigger-word check: an industry/sector/field/track-style word must be
+        # present, to avoid misreading an industry into a bare stock mention
+        # like "Moutai"
         ctx_words = ["行业", "板块", "领域", "赛道", "概念"]
         if not any(w in text for w in ctx_words):
             return None
         text_l = text.lower()
         best = None
         for name, (code, level) in self._industry_dict.items():
-            # 行业名去罗马后缀: "白酒Ⅱ/白酒ⅱ" -> "白酒"
+            # Strip the Roman-numeral suffix from industry names: "Baijiu II" variants -> "Baijiu"
             base = _strip_roman_suffix(name)
             if base and base.lower() in text_l:
                 if best is None or len(base) > best[0]:
@@ -302,12 +313,12 @@ class StockKB:
         return None
 
     def all_industries(self) -> List[Tuple[str, str, str]]:
-        """全部行业 (名称, 代码, 层级)"""
+        """All industries (name, code, level)"""
         self.load()
         return [(n, c, lv) for n, (c, lv) in self._industry_dict.items()]
 
 
-# 单例
+# Singleton
 _kb: Optional[StockKB] = None
 
 
