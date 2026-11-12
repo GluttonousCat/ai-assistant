@@ -35,6 +35,7 @@
 
 | 来源 | 能力 | 公开价格/限制 | 拟用位置 |
 |---|---|---|---|
+| AKShare→新浪分钟 | 原生5/15/30/60分钟，滚动窗口；当前安装版本请求1970根 | 免费；本机30/60各成功取得1970根，不保证所有标的相同覆盖 | 当前已跑通的分钟取数入口 |
 | BaoStock | 免费股票 5/15/30/60 分钟历史；官网注明交易日 20:00 完成分钟入库 | 免费；历史边界和标的覆盖要实测；不作为盘中实时源 | 免费盘后候选主源 |
 | Tushare 历史分钟 | 1/5/15/30/60；权限表注明历史从 2009 年起 | 2000 元/年 | 免费源验证不通过时的盘后替代 |
 | Tushare 实时分钟 `rt_min` | 1/5/15/30/60；周期闭合后生成，支持多代码 | 1000 元/月；权限表注明每分钟500次、单次300家公司，接口页另有1000行限制 | 有盘中需求时的候选主源 |
@@ -45,7 +46,8 @@
 | QMT/xtdata | 订阅分钟、历史读取与本地缓存 | 无统一可核实零门槛报价；依券商/终端/行情权限确认 | 用户已有接入条件时评估 |
 | 米筐 RQData | 历史及实时分钟，Python/WebSocket 能力 | 本轮未核实统一公开套餐价，需按权限询价 | 多标的实时服务备选 |
 
-建议第一阶段优先验证 BaoStock，免费新闻先用东财、财联社补充。盘后数据若不能稳定到齐，比较 Tushare 历史分钟；不因已有积分而假定分钟权限已开通。
+分钟取数先采用已跑通的新浪30/60接口，并继续验证BaoStock的日期回填；新浪不能向前分页补齐任意年份。
+免费新闻先用东财、财联社补充。盘后数据若不能稳定到齐，比较 Tushare 历史分钟；不因已有积分而假定分钟权限已开通。
 如后续需要实时，Tushare 实时分钟按整年连续购买折合 12000 元，历史权限/新闻权限另计；不假定实时权限包含所有历史和指数数据。
 
 ### 4.2 存储、周期与质量
@@ -92,3 +94,56 @@
 - [Tushare 权限与价格](https://tushare.pro/document/1?doc_id=290)、[实时分钟](https://tushare.pro/document/2?doc_id=374)、[日内回补](https://tushare.pro/document/2?doc_id=457)、[新闻](https://tushare.pro/document/2?doc_id=143)。
 - [AKShare 新闻源文档](https://akshare.akfamily.xyz/data/stock/stock_research.html)、[行情文档](https://akshare.akfamily.xyz/data/stock/stock_quote.html)。
 - [迅投 xtdata 文档](https://dict.thinktrader.net/nativeApi/xtdata.html)、[米筐 RQData 文档](https://www.ricequant.com/doc/rqdata/python/generic-api)。
+
+### 5.1 30/60分钟原生历史取数验证与工具（2026-11-12）
+
+环境：项目虚拟环境 AKShare 1.18.44、BaoStock 0.9.4；未升级现有依赖。
+股票为600000.SH，时间为供应商返回的 Asia/Shanghai K线结束标签。
+
+| 路径 | 30分钟 | 60分钟 |
+|---|---|---|
+| `ak.stock_zh_a_minute(symbol="sh600000", period=..., adjust="")` | 1970行，2025-11-06 14:30 至 2026-11-12 15:00 | 1970行，2024-11-01 14:00 至 2026-11-12 15:00 |
+| `ak.stock_zh_a_hist_min_em(symbol="600000", period=..., ...)` | RemoteDisconnected | RemoteDisconnected |
+| `bs.query_history_k_data_plus("sh.600000", ..., frequency=...)` | 登录10002007，未查询到数据 | 登录10002007，未查询到数据 |
+
+新浪重叠窗口中可比较的985根60分钟线与两根30分钟线聚合结果一致（OHLC/成交量/成交额，金额允许0.01绝对误差）。
+这是单一标的单次验证，不能外推为所有股票、所有年份或持续服务质量保证。
+原始CSV、比较结果及探测摘要在 `output/market/minute_probe/`。
+
+关键限制：新浪函数没有start/end参数，当前安装源码将datalen固定为1970；
+东财函数虽有日期参数，当前源码也是拿上游滚动窗口后本地过滤，不能靠减小start_date回填更早数据。
+BaoStock支持按日期查询，但官网正文同时出现“近5年”和“2020-01-03至今”的表述，实际最早日期必须查询验证，不能保证固定回溯年限。
+BaoStock分钟不含指数；新浪文档支持股票或指数，但本轮只实测了上述股票。
+
+| 历史问题/根因 | 处理方案 | 验证 |
+|---|---|---|
+| 网络阻塞可能无限等待，线程timeout不能停止底层SDK | CLI每周期隔离子进程，完整进程超时后终止；不影响API事件循环 | BaoStock 10秒限时任务正常退出并生成错误清单 |
+| 多源字段名/单位不同；东财成交量为手 | 统一字段和股/元单位；保留source与adjustment；不跨源拼接 | 5项边界/数据正确性测试通过 |
+| 新浪部分版本复权查询失败后直接返回原始数据 | 项目新浪适配器只允许不复权，避免错误标记为前/后复权 | 复权拒绝回归通过 |
+| BaoStock分页中途失败可能留下部分行 | 检查最终error_code，失败不返回成功数据 | 分页错误回归通过 |
+
+新增只读入口：`tools/market/minute_history.py`（适配与规范化）、`jobs/fetch_minute_history.py`（超时与CSV导出）。
+新代码不建表、不写SQL、不启动调度器。先拉取原生30/60，无需先下载5分钟再合成。
+BaoStock已加入`pyproject.toml`的可选依赖`market`组；AKShare沿用项目现有依赖。
+本轮全目录Python测试372项通过，保留1条依赖弃用告警。
+
+在项目根目录执行：
+
+```powershell
+# 默认新浪源，导出当前可取的30/60分钟窗口
+.venv/Scripts/python.exe -m jobs.fetch_minute_history --code 600000.SH --periods 30 60
+
+# 日期是对当前可得窗口的过滤，不表示能补齐所请求历史
+.venv/Scripts/python.exe -m jobs.fetch_minute_history --code 600000.SH --periods 30 60 --start 2026-01-01 --end 2026-11-11
+
+# 东财：6位代码由适配器转换；支持none/forward/backward
+.venv/Scripts/python.exe -m jobs.fetch_minute_history --source akshare-em --code 600000.SH --periods 30 60 --start 2026-11-01
+
+# BaoStock：start必填；none/forward/backward映射为3/2/1
+.venv/Scripts/python.exe -m jobs.fetch_minute_history --source baostock --code 600000.SH --periods 30 60 --start 2025-01-01 --end 2026-11-11 --timeout 30
+```
+
+结果输出到 `output/market/minute_history/<本次运行时间>/`，每周期独立CSV，manifest保存参数、实际返回时间范围、耗时、完成时间及失败原因。
+默认不复权。导出时间是供应商bar_end，不凭供应商时间戳推断补齐/完整性；少量早期新浪响应可能没有成交额，规范化后保留空值，不伪造零。
+空结果与错误返回非零退出码；不会将网络失败写成“无数据”成功。
+未来对指数成分股批量同步时，仍需单独实现名单、限流、重叠回补、幂等入库及历史覆盖审计，当前脚本不宣称已具备生产批量同步能力。

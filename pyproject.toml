@@ -46,6 +46,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+market = ["baostock>=0.9.4"]
 dev = [
     "pytest>=7.0.0",
     "httpx>=0.27.0",
