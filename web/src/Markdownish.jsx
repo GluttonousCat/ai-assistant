@@ -1,12 +1,23 @@
+import { memo } from 'react'
+
 // Lightweight markdown renderer (shared by AgentChat / ChainView):
 // headings/bold/lists/tables/paragraphs (table rows must be consecutive lines starting with |)
-export default function Markdownish({ text }) {
+function Markdownish({ text }) {
   const lines = (text || '').split('\n')
   const out = []
   let i = 0
   let k = 0
   while (i < lines.length) {
     const t = lines[i].trim()
+    if (t.startsWith('```')) {
+      const language = t.slice(3).trim()
+      const code = []
+      i++
+      while (i < lines.length && !lines[i].trim().startsWith('```')) code.push(lines[i++])
+      if (i < lines.length) i++
+      out.push(<div key={k++}>{language && <div className="md-code-label">{language}</div>}<pre className="md-code"><code>{code.join('\n')}</code></pre></div>)
+      continue
+    }
     if (t.startsWith('|')) {
       const block = []
       while (i < lines.length && lines[i].trim().startsWith('|')) {
@@ -50,10 +61,13 @@ function MdTable({ block }) {
 }
 
 function inline(t) {
-  const parts = t.split(/(\*\*[^*]+\*\*)/g)
-  return parts.map((p, i) =>
-    p.startsWith('**') && p.endsWith('**')
-      ? <b key={i}>{p.slice(2, -2)}</b>
-      : <span key={i}>{p}</span>
-  )
+  return t.split(/(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)]+\))/g).map((part, i) => {
+    if (part.startsWith('**') && part.endsWith('**')) return <b key={i}>{part.slice(2, -2)}</b>
+    if (part.startsWith('`') && part.endsWith('`')) return <code key={i}>{part.slice(1, -1)}</code>
+    const link = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(part)
+    if (link && /^https?:\/\//i.test(link[2])) return <a key={i} href={link[2]} target="_blank" rel="noopener noreferrer">{link[1]}</a>
+    return <span key={i}>{part}</span>
+  })
 }
+
+export default memo(Markdownish)

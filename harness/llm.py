@@ -7,7 +7,7 @@ LLM client wrapper.
 config.yaml structure:
     llm:
       enable_thinking: true            # global default for the thinking switch (deep thinking = strongest reasoning; when enabled, max_tokens must be generous)
-      max_tokens: 16384                # global output budget (shared by thinking and body text; do not set it small)
+      max_tokens: 32768                # global output budget (shared by thinking and body text; do not set it small)
       models:
         default:   {model: xxx}          # fallback (required)
         agent:     {model: xxx}          # Skill/Agent reasoning (high performance)

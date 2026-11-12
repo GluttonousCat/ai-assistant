@@ -109,12 +109,12 @@ class Config:
         """Get per-purpose api_key/base_url override (defaults to the global .env config)"""
         if purpose in ("", "default"):
             return None
-        entry = self.get(f"llm.models.{purpose}")
+        entry = self.get(f"llm.models.{purpose}") or {}
         if not isinstance(entry, dict):
             return None
         override: Dict[str, str] = {}
         for k in ("api_key", "base_url"):
-            v = entry.get(k) or self.env(f"LLM_{purpose.upper()}_{k.upper()}", "")
+            v = self.env(f"LLM_{purpose.upper()}_{k.upper()}", "") or entry.get(k)
             if v:
                 override[k] = v
         return override or None

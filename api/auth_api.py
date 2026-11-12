@@ -33,7 +33,7 @@ class RegisterRequest(BaseModel):
 
 
 @auth_router.post("/login")
-async def login(req: LoginRequest) -> Dict[str, Any]:
+def login(req: LoginRequest) -> Dict[str, Any]:
     user = security.authenticate(req.username.strip(), req.password)
     if not user:
         raise HTTPException(status_code=401, detail="用户名或密码错误")
@@ -46,12 +46,13 @@ async def login(req: LoginRequest) -> Dict[str, Any]:
             "username": user["username"],
             "role": user["role"],
             "display_name": user.get("display_name") or user["username"],
+            "is_super_admin": user["role"] == "admin" and user["username"] == get_config().env("SUPER_ADMIN", "Gluttonouscat"),
         },
     }
 
 
 @auth_router.post("/register")
-async def register(req: RegisterRequest) -> Dict[str, Any]:
+def register(req: RegisterRequest) -> Dict[str, Any]:
     import re
     # Invite-code validation (controlled registration; override via .env AUTH_INVITE_CODE, default 123456)
     valid_code = get_config().env("AUTH_INVITE_CODE", "123456")
@@ -72,11 +73,17 @@ async def register(req: RegisterRequest) -> Dict[str, Any]:
 
 
 @auth_router.get("/me")
-async def me(current: TokenPayload = Depends(get_current_user)) -> Dict[str, Any]:
+def me(current: TokenPayload = Depends(get_current_user)) -> Dict[str, Any]:
+    user = security.get_user(current.username)
+    if not user or not user.get("is_active"):
+        raise HTTPException(status_code=401, detail="账户不可用，请重新登录")
+    super_name = get_config().env("SUPER_ADMIN", "Gluttonouscat")
     return {
-        "user_id": current.user_id,
-        "username": current.username,
-        "role": current.role,
+        "user_id": user["user_id"],
+        "username": user["username"],
+        "display_name": user.get("display_name") or user["username"],
+        "role": user["role"],
+        "is_super_admin": user["role"] == "admin" and user["username"] == super_name,
     }
 
 
@@ -86,7 +93,7 @@ class ChangePasswordRequest(BaseModel):
 
 
 @auth_router.post("/change-password")
-async def change_password(req: ChangePasswordRequest,
+def change_password(req: ChangePasswordRequest,
                           current: TokenPayload = Depends(get_current_user)) -> Dict[str, Any]:
     user = security.get_user(current.username)
     if not user or not security.verify_password(req.old_password, user["password_hash"]):
@@ -111,7 +118,7 @@ def _require_super(current: TokenPayload = Depends(require_admin)) -> TokenPaylo
 
 
 @auth_router.get("/users")
-async def list_users(current: TokenPayload = Depends(_require_super)):
+def list_users(current: TokenPayload = Depends(_require_super)):
     """List all accounts (admin)"""
     from storage.pg import PgClient
     with PgClient() as pg:
@@ -130,7 +137,7 @@ class RoleRequest(BaseModel):
 
 
 @auth_router.post("/users/{user_id}/role")
-async def set_user_role(user_id: int, req: RoleRequest,
+def set_user_role(user_id: int, req: RoleRequest,
                         current: TokenPayload = Depends(_require_super)) -> Dict[str, Any]:
     """Change account role (super admin only). Guard: cannot change own role (prevents the only admin from demoting themselves)."""
     if req.role not in ("admin", "user"):

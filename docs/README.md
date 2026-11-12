@@ -35,6 +35,8 @@ docs/
 | 我想… | 看 |
 |-------|-----|
 | 快速理解整个项目 | [AGENTS.md](../AGENTS.md) |
+| 查看技术审核、修复与后续工作 | [ops/technical_review.md](ops/technical_review.md) |
+| 数据库命名与兼容迁移 | [ops/schema_naming.md](ops/schema_naming.md) |
 | 改登录/注册逻辑 | [frontend/login.md](frontend/login.md) |
 | 改问答链路/加流式 | [frontend/chat.md](frontend/chat.md) |
 | 改研报展示/提取 | [frontend/reports.md](frontend/reports.md) |

@@ -23,8 +23,9 @@ logger = get_logger(__name__)
 OPEN_PATHS = {
     "/", "/health", "/login", "/favicon.ico",
     "/openapi.json", "/docs", "/docs/oauth2-redirect", "/redoc",
+    "/api/auth/login", "/api/auth/register",
 }
-OPEN_PREFIXES = ("/api/auth/login", "/api/auth/register", "/assets/")
+OPEN_PREFIXES = ("/assets/",)
 
 
 def _is_open(path: str) -> bool:

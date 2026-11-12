@@ -49,7 +49,10 @@ def validate_sql(sql: str, max_limit: int = 1000) -> SqlGuardResult:
         return SqlGuardResult(False, "SQL 为空")
 
     try:
-        parsed = sqlglot.parse_one(sql, dialect="postgres")
+        statements = [stmt for stmt in sqlglot.parse(sql, dialect="postgres") if stmt is not None]
+        if len(statements) != 1:
+            return SqlGuardResult(False, "仅允许单条只读查询")
+        parsed = statements[0]
     except Exception as e:
         return SqlGuardResult(False, f"SQL 语法解析失败: {e}")
 
@@ -59,6 +62,12 @@ def validate_sql(sql: str, max_limit: int = 1000) -> SqlGuardResult:
         return SqlGuardResult(
             False, f"仅允许只读查询 (SELECT/WITH), 检测到命令类型: {cmd}"
         )
+
+    # A SELECT root does not imply a read-only tree: writable CTEs, SELECT INTO
+    # and row locks can mutate data or block ingestion behind a query facade.
+    for node in parsed.walk():
+        if isinstance(node, (exp.DML, exp.DDL, exp.Into, exp.Lock, exp.Command)):
+            return SqlGuardResult(False, "查询包含写操作或锁定操作")
 
     warnings: List[str] = []
 
@@ -79,8 +88,10 @@ def validate_sql(sql: str, max_limit: int = 1000) -> SqlGuardResult:
     for table in parsed.find_all(exp.Table):
         table_name = table.name.lower()
         # Skip CTE references
-        if table_name in cte_names:
+        if table_name in cte_names and not table.db and not table.catalog:
             continue
+        if table.catalog:
+            return SqlGuardResult(False, "禁止跨数据库访问")
         # Skip window-function/subquery aliases (e.g. SELECT t.* FROM (sub) t)
         # In sqlglot a subquery alias in FROM is also a Table but has no real schema/table
         has_schema = table.args.get("db")

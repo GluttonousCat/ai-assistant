@@ -1,7 +1,7 @@
 # -*- encoding: utf-8 -*-
 """Agent conversation loop unit tests (no LLM calls / no DB).
 
-Run: .venv\\Scripts\\python.exe -m pytest agent/tests -q
+Run: .venv\\Scripts\\python.exe -m pytest harness/tests -q
 E2E (real LLM) see the verification records in docs/agents/agent_loop.md.
 """
 from __future__ import annotations
@@ -122,6 +122,17 @@ def test_history_ttl_cleanup():
             t["ts"] = time.time() - 3600
     history_store.append_user("t-tick", "触发清理")   # triggers lazy cleanup
     assert history_store.get_messages("t-s3") == []
+
+
+def test_history_character_budget_keeps_latest_pairs():
+    sid = "budget-recent"
+    history_store.reset(sid)
+    for i in range(4):
+        history_store.append_user(sid, f"question-{i}")
+        history_store.append_assistant(sid, f"answer-{i}")
+    messages = history_store.get_messages(sid, max_chars=40)
+    assert messages[-1]["content"] == "answer-3"
+    assert [m["role"] for m in messages] == ["user", "assistant"] * 2
 
 
 # ---------- Sandbox parameters ----------

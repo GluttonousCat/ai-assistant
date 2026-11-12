@@ -129,14 +129,20 @@ def get_messages(session_id: Optional[str],
     msgs: List[Dict[str, str]] = []
     tool_lines: List[str] = []
     used = 0
-    for u, a in pairs[-max_turns:]:
+    selected = []
+    # Budget from the newest pair backward, then restore chronological order.
+    # Iterating forward retained old turns and silently discarded the follow-up
+    # context the user was actually referring to.
+    for u, a in reversed(pairs[-max_turns:]):
         amsgs = _turn_to_messages(a) if a else []
         seg_chars = len(u["content"]) + sum(len(m["content"]) for m in amsgs)
-        if msgs and used + seg_chars > max_chars:
+        if selected and used + seg_chars > max_chars:
             break
+        selected.append((u, a, amsgs))
+        used += seg_chars
+    for u, a, amsgs in reversed(selected):
         msgs.append({"role": "user", "content": u["content"]})
         msgs.extend(amsgs)
-        used += seg_chars
         if a and a.get("tools"):
             head = u["content"][:16].replace("\n", " ")
             lines = "; ".join(_fmt_tool_line(t) for t in a["tools"][-6:])

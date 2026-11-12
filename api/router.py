@@ -12,7 +12,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Dict, Any
 
-from fastapi import HTTPException, BackgroundTasks, APIRouter
+from fastapi import HTTPException, BackgroundTasks, APIRouter, Depends
+
+from api.deps import require_admin
 
 from api.schemas import (
     CrawlRequest,
@@ -64,13 +66,13 @@ async def health():
 
 
 # ---------- ZSXQ crawler ----------
-@router.get("/crawl/status", tags=["zsxq"])
+@router.get("/crawl/status", tags=["zsxq"], dependencies=[Depends(require_admin)])
 async def crawl_status():
     """Background task status (simple in-memory state)"""
     return {"tasks": tasks, "count": len(tasks)}
 
 
-@router.post("/crawl/latest", tags=["zsxq"])
+@router.post("/crawl/latest", tags=["zsxq"], dependencies=[Depends(require_admin)])
 async def crawl_latest(request: CrawlRequest, background_tasks: BackgroundTasks):
     """Crawl the latest topics"""
     def task():
@@ -83,7 +85,7 @@ async def crawl_latest(request: CrawlRequest, background_tasks: BackgroundTasks)
     return {"status": "started", "message": "开始爬取最新话题"}
 
 
-@router.post("/crawl/historical", tags=["zsxq"])
+@router.post("/crawl/historical", tags=["zsxq"], dependencies=[Depends(require_admin)])
 async def crawl_historical(request: CrawlRequest, background_tasks: BackgroundTasks):
     """Crawl historical data"""
     def task():
@@ -96,7 +98,7 @@ async def crawl_historical(request: CrawlRequest, background_tasks: BackgroundTa
     return {"status": "started", "message": f"开始爬取{request.pages}页历史数据"}
 
 
-@router.post("/crawl/incremental", tags=["zsxq"])
+@router.post("/crawl/incremental", tags=["zsxq"], dependencies=[Depends(require_admin)])
 async def crawl_incremental(request: CrawlRequest, background_tasks: BackgroundTasks):
     """Incremental crawl"""
     def task():
@@ -110,7 +112,7 @@ async def crawl_incremental(request: CrawlRequest, background_tasks: BackgroundT
 
 
 # ---------- File download ----------
-@router.post("/files/collect", tags=["zsxq"])
+@router.post("/files/collect", tags=["zsxq"], dependencies=[Depends(require_admin)])
 async def collect_files(request: FileDownloadRequest, background_tasks: BackgroundTasks):
     """Collect the file list"""
     def task():
@@ -125,7 +127,7 @@ async def collect_files(request: FileDownloadRequest, background_tasks: Backgrou
     return {"status": "started", "message": "开始收集文件列表"}
 
 
-@router.post("/files/download", tags=["zsxq"])
+@router.post("/files/download", tags=["zsxq"], dependencies=[Depends(require_admin)])
 async def download_files(request: FileDownloadRequest, background_tasks: BackgroundTasks):
     """Download files - limited to 1 per request"""
     def task():
@@ -140,7 +142,7 @@ async def download_files(request: FileDownloadRequest, background_tasks: Backgro
     return {"status": "started", "message": "开始下载文件（每次1个）"}
 
 
-@router.post("/files/download-topic-files", tags=["zsxq"])
+@router.post("/files/download-topic-files", tags=["zsxq"], dependencies=[Depends(require_admin)])
 async def download_topic_files(request: FileDownloadRequest, background_tasks: BackgroundTasks):
     """Download topic attachments (topic_files; reports are mostly topic attachments)"""
     def task():
@@ -155,8 +157,8 @@ async def download_topic_files(request: FileDownloadRequest, background_tasks: B
     return {"status": "started", "message": "开始下载话题附件（每次1个）"}
 
 
-@router.get("/stats/{group_id}", tags=["zsxq"])
-async def get_stats(group_id: str):
+@router.get("/stats/{group_id}", tags=["zsxq"], dependencies=[Depends(require_admin)])
+def get_stats(group_id: str):
     """Get crawl statistics"""
     try:
         crawler = get_crawler(group_id)
@@ -168,8 +170,8 @@ async def get_stats(group_id: str):
 
 
 # ---------- Report management (fin.report_meta) ----------
-@router.get("/reports", tags=["zsxq"])
-async def list_reports(source: str = None, status: str = None, limit: int = 100):
+@router.get("/reports", tags=["zsxq"], dependencies=[Depends(require_admin)])
+def list_reports(source: str = None, status: str = None, limit: int = 100):
     """Report list (query on fin.report_meta)"""
     sql = f"""SELECT report_id, topic_id, file_id, ts_code, title, source,
                      extraction_status, content_chars, publish_date, created_at
@@ -190,8 +192,8 @@ async def list_reports(source: str = None, status: str = None, limit: int = 100)
     return {"total": total, "reports": rows}
 
 
-@router.get("/reports/{report_id}", tags=["zsxq"])
-async def get_report(report_id: int, include_text: bool = False):
+@router.get("/reports/{report_id}", tags=["zsxq"], dependencies=[Depends(require_admin)])
+def get_report(report_id: int, include_text: bool = False):
     """Report detail (full text omitted by default)"""
     with PgClient() as pg:
         row = pg.fetch_one(
@@ -203,8 +205,8 @@ async def get_report(report_id: int, include_text: bool = False):
     return row
 
 
-@router.post("/reports/upload", tags=["zsxq"])
-async def upload_report(request: dict):
+@router.post("/reports/upload", tags=["zsxq"], dependencies=[Depends(require_admin)])
+def upload_report(request: dict):
     """
     Manually upload report text into the DB (one of the report verification data sources)
     body: {"ts_code": "600519.SH", "title": "...", "content_text": "...", "source": "upload"}
@@ -229,8 +231,8 @@ async def upload_report(request: dict):
     return {"status": "ok", "report_id": report_id}
 
 
-@router.post("/crawl/sync-reports", tags=["zsxq"])
-async def sync_zxsq_reports(group_id: str = None, background_tasks: BackgroundTasks = None):
+@router.post("/crawl/sync-reports", tags=["zsxq"], dependencies=[Depends(require_admin)])
+def sync_zxsq_reports(group_id: str = None, background_tasks: BackgroundTasks = None):
     """Sync locally crawled zsxq data into the PG report store"""
     def task():
         from jobs.sync_zxsq_to_pg import ZSXQ2PGSync
@@ -250,16 +252,16 @@ async def sync_zxsq_reports(group_id: str = None, background_tasks: BackgroundTa
 
 
 # ---------- Account management ----------
-@router.post("/accounts", tags=["zsxq"])
-async def create_account(request: AccountCreateRequest):
+@router.post("/accounts", tags=["zsxq"], dependencies=[Depends(require_admin)])
+def create_account(request: AccountCreateRequest):
     """Create an account"""
     db = AccountDatabase()
     account = db.add_account(request.cookie, request.name)
     return {"status": "ok", "account": account}
 
 
-@router.get("/accounts", tags=["zsxq"])
-async def list_accounts():
+@router.get("/accounts", tags=["zsxq"], dependencies=[Depends(require_admin)])
+def list_accounts():
     """List accounts"""
     db = AccountDatabase()
     accounts = db.list_accounts()
@@ -267,7 +269,7 @@ async def list_accounts():
 
 
 # ---------- Agent chat (wired in phase 2) ----------
-@router.post("/agent/chat", tags=["agent"])
+@router.post("/agent/chat", tags=["agent"], dependencies=[Depends(require_admin)])
 async def agent_chat(request: dict):
     """
     Agent chat entry (phase 2)
@@ -281,7 +283,7 @@ async def agent_chat(request: dict):
 
 
 # ---------- Data sync scheduling ----------
-@router.post("/admin/sync-today", tags=["admin"])
+@router.post("/admin/sync-today", tags=["admin"], dependencies=[Depends(require_admin)])
 async def sync_today():
     """Manually trigger the daily incremental sync (the same job that runs automatically at 21:00 on trading days)"""
     from jobs.scheduler import get_scheduler
@@ -289,7 +291,7 @@ async def sync_today():
     return {"status": "done", "result": result}
 
 
-@router.get("/admin/scheduler-status", tags=["admin"])
+@router.get("/admin/scheduler-status", tags=["admin"], dependencies=[Depends(require_admin)])
 async def scheduler_status():
     """Scheduler status"""
     from jobs.scheduler import get_scheduler

@@ -7,7 +7,6 @@ import UserAdmin from './UserAdmin' // user management (admin only)
 import Monitor from './Monitor' // real-time monitor (agent sessions/tools/LLM, admin only)
 
 // Navigation definition: items with adminOnly are greyed out and unclickable for non-admins
-const SUPER_ADMIN = 'Gluttonouscat'
 
 const NAV = [
   { key: 'chat', label: 'Agent', icon: '✦' },
@@ -21,7 +20,7 @@ const NAV = [
 export default function Platform({ user, onLogout }) {
   const [nav, setNav] = useState('chat')
   const isAdmin = user?.role === 'admin'
-  const isSuper = isAdmin && user?.username === SUPER_ADMIN
+  const isSuper = isAdmin && user?.is_super_admin === true
 
   useEffect(() => {
     const onExpired = () => onLogout()
@@ -30,12 +29,17 @@ export default function Platform({ user, onLogout }) {
   }, [onLogout])
 
   useEffect(() => {
-    const hash = window.location.hash.replace('#', '')
-    const target = NAV.find((n) => n.key === hash)
-    // Direct hash navigation to an under-privileged target (adminOnly/superOnly) -> fall back to chat page
-    if (target && !(target.adminOnly && !isAdmin) && !(target.superOnly && !isSuper)) {
-      setNav(hash)
+    const syncHash = () => {
+      const hash = window.location.hash.replace('#', '')
+      const target = NAV.find((n) => n.key === hash)
+      // Direct hash navigation to an under-privileged target (adminOnly/superOnly) -> fall back to chat page
+      if (target && !(target.adminOnly && !isAdmin) && !(target.superOnly && !isSuper)) {
+        setNav(hash)
+      } else if (target) setNav('chat')
     }
+    syncHash()
+    window.addEventListener('hashchange', syncHash)
+    return () => window.removeEventListener('hashchange', syncHash)
   }, [isAdmin, isSuper])
 
   useEffect(() => {
@@ -102,7 +106,7 @@ export function useSession() {
     if (saved && token) {
       platformApi
         .me()
-        .then((me) => setUser({ ...saved, role: me.role }))
+        .then((me) => setUser({ ...saved, ...me }))
         .catch(() => auth.clear())
         .finally(() => setChecked(true))
     } else {

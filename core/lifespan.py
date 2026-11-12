@@ -43,7 +43,7 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"增量调度器启动失败 (非致命): {e}")
 
-    # Start the zsxq report crawler scheduler (daily 07:00/23:00 fetch + sync +
+    # Start the zsxq report crawler scheduler (daily configured-time fetch + sync +
     # LLM extraction, with a startup catch-up pass as a safety net)
     if config.get("zsxq_schedule.enabled", True):
         try:

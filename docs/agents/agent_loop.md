@@ -135,3 +135,13 @@ AgentChat.jsx (session_id 每页生成一次, 全程携带)
 - 运行：`.venv\Scripts\python.exe evals\run_agent_eval.py`（默认快车道开=线上路径；
   `--no-fast-lane` 强制全走 Agent 循环；`--only multiturn` 按类型过滤）
 - 报告：`evals/results/agent_eval_<ts>.json`（含 by_type 分组通过率）
+
+
+### 2026-11-12 历史问题与处理记录补充
+
+| 根因 | 处理方案 | 验证 |
+|---|---|---|
+| 历史字符预算从旧轮次向后截取，遗漏最新问题 | 从最新轮次向前选取，输出恢复时间顺序 | 新增字符预算回归通过 |
+| HTTP session_id 无用户命名空间 | api 层用认证 user_id 隔离，不改变引擎协议 | 双用户相同 ID 隔离回归通过 |
+
+停止 HTTP 消费不强杀已进入线程的同步调用；当前最终回答仍为全文生成后分块输出。

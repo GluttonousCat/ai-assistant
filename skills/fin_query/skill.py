@@ -362,7 +362,7 @@ class FinQuerySkill(BaseSkill):
         t0 = time.time()
         # enforce the LIMIT ceiling
         sql = force_limit(sql, max_limit=1000)
-        with PgClient() as pg:
+        with PgClient(read_only=True) as pg:
             df = pg.fetch_df(sql)
         return df, time.time() - t0
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 import math
 import os
 import threading
@@ -12,8 +11,9 @@ import pandas as pd
 import psycopg2
 import psycopg2.extras
 from psycopg2.pool import ThreadedConnectionPool
+from core.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 _CONN_KW = dict(
     application_name="ai-assistant",
@@ -152,12 +152,13 @@ class PgPool:
 class PgClient:
     """PG single-ticket client (context manager)"""
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, config: Optional[Dict[str, Any]] = None, *, read_only: bool = False):
         # Auto-initialize the connection pool
         if PgPool._pool is None:
             PgPool.init(config)
         self.conn = None
         self.cur = None
+        self.read_only = read_only
 
     def __enter__(self) -> "PgClient":
         self.conn = PgPool.get_conn()
@@ -176,8 +177,18 @@ class PgClient:
                 pass
             PgPool.put_conn(self.conn, close=True)  # explicitly discard the bad connection, keep it out of the usable pool
             self.conn = PgPool.get_conn()
-        self.conn.autocommit = False
-        self.cur = self.conn.cursor()
+        try:
+            self.conn.autocommit = False
+            self.cur = self.conn.cursor()
+            if self.read_only:
+                # Transaction-local: pooled connections remain usable by writers
+                # after commit/rollback, unlike persistent session settings.
+                self.cur.execute("SET TRANSACTION READ ONLY")
+        except BaseException:
+            # __exit__ is not called when __enter__ fails.
+            PgPool.put_conn(self.conn, close=True)
+            self.conn = None
+            raise
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
@@ -187,7 +198,7 @@ class PgClient:
                 # Connection-level errors (network drop/server disconnect) need no
                 # rollback; mark the connection as broken
                 msg = str(exc_val) if exc_val else ""
-                if "server closed" in msg or "connection" in msg.lower():
+                if isinstance(exc_val, (psycopg2.InterfaceError, psycopg2.OperationalError)) or self.conn.closed:
                     conn_broken = True
                     logger.error(f"PG 连接级错误: {msg[:120]}")
                 else:
@@ -198,6 +209,10 @@ class PgClient:
         except Exception as e:
             conn_broken = True
             logger.warning(f"PG 提交/回滚失败 (连接可能已断): {e}")
+            # A failed commit is a failed write. Never report success to callers;
+            # preserve the original body exception if rollback also failed.
+            if exc_type is None:
+                raise
         finally:
             try:
                 if self.cur:

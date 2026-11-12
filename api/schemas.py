@@ -7,7 +7,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # ---------- ZSXQ ----------
@@ -29,8 +29,17 @@ class AccountCreateRequest(BaseModel):
 
 # ---------- Agent ----------
 class AgentChatRequest(BaseModel):
-    session_id: str = "default"
-    text: str
+    session_id: Optional[str] = Field(default=None, min_length=1, max_length=128,
+                                      pattern=r"^[A-Za-z0-9_-]+$")
+    text: str = Field(min_length=1, max_length=16000)
+
+    @field_validator("text")
+    @classmethod
+    def non_blank_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("text 不能为空")
+        return value
 
 
 class TaskInfo(BaseModel):

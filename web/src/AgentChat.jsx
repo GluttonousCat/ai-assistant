@@ -1,7 +1,9 @@
-import { Fragment, useEffect, useRef, useState } from 'react'
+import { Fragment, memo, useEffect, useRef, useState } from 'react'
 import { platformApi } from './platformApi'
 import ResultChart, { buildChartSpec, COL_LABELS, parseNum, fmtDateCol } from './ResultChart'
 import Markdownish from './Markdownish'
+import useChatWorkspace from './useChatWorkspace'
+import './chat.css'
 
 const EXAMPLES = [
   { icon: '🤖', text: '中际旭创2025年报净利润多少？' },
@@ -54,27 +56,80 @@ function resultView(m) {
   return { caption, columns: show }
 }
 
+
+const ChatResults = memo(function ChatResults({ tables, data, columns }) {
+  const blocks = (tables?.length ? tables : data?.length ? [{ data, columns }] : [])
+    .map((tb) => ({ tb, view: resultView(tb) })).filter((block) => block.view)
+  return <>{blocks.map(({ tb, view }, k) => (
+                      <div className="chat-table-block" key={k}>
+                        {view.caption && <div className="chat-table-caption">{view.caption}</div>}
+                        {view.chart ? (
+                          <ResultChart spec={view.chart} />
+                        ) : (
+                          <div className="chat-table">
+                            <table className="grid">
+                              <thead>
+                                <tr>{view.columns.map((c) => <th key={c}>{COL_LABELS[c] || c}</th>)}</tr>
+                              </thead>
+                              <tbody>
+                                {tb.data.map((row, j) => (
+                                  <tr key={j}>
+                                    {view.columns.map((c) => (
+                                      <td key={c}>
+                                        {(c === 'end_date' || c === 'ann_date' || c === 'trade_date')
+                                          ? fmtDateCol(c, row[c])
+                                          : fmtCell(row[c])}
+                                      </td>
+                                    ))}
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </div>
+                    ))}</>
+})
+
 // Agent chat: natural language -> agent autonomous decision + tool loop (SSE streaming output, multi-turn follow-ups supported)
 export default function AgentChat() {
-  const [messages, setMessages] = useState([]) // {role, text, data?, columns?, stage?, intent?}
-  const [input, setInput] = useState('')
+  const workspace = useChatWorkspace()
+  const { messages, draft: input } = workspace.chat
+  const { setMessages, setInput } = workspace
+  const [copied, setCopied] = useState(null)
+  const [copyError, setCopyError] = useState('')
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const streamRef = useRef(null)
+  const inputRef = useRef(null)
   const [busy, setBusy] = useState(false)
   const [atBottom, setAtBottom] = useState(true)
   const scrollRef = useRef(null)
   const stickRef = useRef(true) // follow new content while user is at bottom; don't disturb while scrolled up
-  // Session ID: generated once on page entry and carried throughout — server injects multi-turn history from it
-  // (follow-ups may omit the subject)
-  const sessionRef = useRef(null)
-  if (!sessionRef.current) {
-    sessionRef.current = 'web-' + (crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`)
+  const sessionId = 'web-' + workspace.chat.id
+
+  useEffect(() => () => streamRef.current?.abort(), [])
+  useEffect(() => {
+    const el = inputRef.current
+    if (el) { el.style.height = 'auto'; el.style.height = `${Math.min(el.scrollHeight, 200)}px` }
+  }, [input])
+  useEffect(() => { stickRef.current = true; scrollToBottom() }, [workspace.chat.id])
+
+  async function copyAnswer(text, index) {
+    try { await navigator.clipboard.writeText(text); setCopied(index); setCopyError('') }
+    catch { setCopyError('复制失败，请选中文字后手动复制') }
   }
 
   // Cross-page linkage: other pages (e.g. chain-view stock chips) write chat:pending then jump here, auto-sending the question
   useEffect(() => {
     const pending = sessionStorage.getItem('chat:pending')
     if (pending) {
-      sessionStorage.removeItem('chat:pending')
-      send(pending)
+      // Defer the side effect so StrictMode's setup/cleanup replay does not
+      // consume the question and immediately abort its only request.
+      const timer = setTimeout(() => {
+        sessionStorage.removeItem('chat:pending')
+        send(pending)
+      }, 0)
+      return () => clearTimeout(timer)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -104,7 +159,9 @@ export default function AgentChat() {
 
   async function send(text) {
     const q = (text ?? input).trim()
-    if (!q || busy) return
+    if (!q || streamRef.current) return
+    if (!messages.length) workspace.rename(q.slice(0, 28))
+    setCopied(null)
     setInput('')
     scrollToBottom()
     setMessages((m) => [...m, { role: 'user', text: q }])
@@ -121,9 +178,11 @@ export default function AgentChat() {
       })
     }
 
-    try {
-      await platformApi.agentStream(q, sessionRef.current, (ev) => {
-        if (ev.type === 'stage') {
+    let receivedDone = false
+    let failed = false
+    const stream = platformApi.agentStreamRaw(q, sessionId, (ev) => {
+        if (ev.type === 'done') { receivedDone = true }
+        else if (ev.type === 'stage') {
           updateLast((msg) => {
             // First stage "意图识别: X" determines the answer type early (badge shows immediately)
             const im = /^意图识别:\s*(\w+)/.exec(ev.message || '')
@@ -169,31 +228,55 @@ export default function AgentChat() {
               : msg.stages,
           }))
         } else if (ev.type === 'error') {
+          failed = true
           updateLast((msg) => ({
-            ...msg, text: `❌ ${ev.message}`, stage: '',
+            ...msg, error: ev.message, stage: '',
             stages: (msg.stages || []).map((s) => ({ ...s, ok: true })),
           }))
         }
-      })
+    })
+    streamRef.current = stream
+    try {
+      await stream.promise
+      if (!receivedDone && !failed) updateLast((msg) => ({ ...msg, notice: '生成已停止或连接中断，可以继续提问。' }))
     } catch (err) {
-      updateLast((msg) => ({ ...msg, text: `❌ ${err.message}`, stage: '' }))
+      if (err.name === 'AbortError') updateLast((msg) => ({ ...msg, notice: '已停止生成' }))
+      else updateLast((msg) => ({ ...msg, error: err.message, stage: '' }))
     } finally {
       updateLast((msg) => ({
         ...msg, stage: '',
         stages: (msg.stages || []).map((s) => ({ ...s, ok: true })),
       }))
+      streamRef.current = null
       setBusy(false)
+      inputRef.current?.focus()
     }
   }
 
   return (
-    <div className="chat-page">
+    <div className="chat-workspace">
+      <aside className={`chat-history ${historyOpen ? 'visible' : ''}`} aria-label="对话历史">
+        <div className="history-heading"><span>研究对话</span><button disabled={busy} onClick={workspace.create} title="新建对话" aria-label="新建对话">＋</button></div>
+        <p className="history-caption">最近对话 · 当前标签页</p>
+        <div className="history-list">
+          {workspace.chats.map((chat) => <div key={chat.id} className={`history-item ${chat.id === workspace.chat.id ? 'selected' : ''}`}>
+            <button disabled={busy} onClick={() => { workspace.select(chat.id); setHistoryOpen(false) }}>{chat.title}</button>
+            <button className="history-delete" disabled={busy} aria-label={`删除对话 ${chat.title}`} onClick={() => workspace.remove(chat.id)}>×</button>
+          </div>)}
+        </div>
+        <p className="history-note">记录保存在当前标签页。服务端上下文保留约 30 分钟，超时可新建对话。</p>
+      </aside>
+      <div className="chat-page">
+      <header className="chat-toolbar">
+        <div><button className="history-toggle" aria-label="切换对话历史" aria-expanded={historyOpen} onClick={() => setHistoryOpen(!historyOpen)}>☰</button><span className="chat-product">Alpha Radar</span><span className="chat-toolbar-sub">研究助手</span></div>
+        <button className="chat-new" disabled={busy} onClick={workspace.create}>＋ 新对话</button>
+      </header>
       <div className="chat-window" ref={scrollRef} onScroll={onScroll}>
         {messages.length === 0 && !busy && (
           <div className="chat-empty">
             <div className="chat-empty-icon">✦</div>
-            <h3>Alpha Radar · Agent</h3>
-            <p>随意问 · 财务数据 / 研报观点 / 产业链 / 量化信号 · 支持多轮追问</p>
+            <div className="chat-eyebrow">从一个好问题开始</div><h3>今天，想研究什么？</h3>
+            <p>连接财务数据、研报与产业链，陪你把问题研究清楚。</p>
             <div className="chat-examples">
               {EXAMPLES.map((ex) => (
                 <button key={ex.text} onClick={() => send(ex.text)}>
@@ -206,14 +289,6 @@ export default function AgentChat() {
 
         {messages.map((m, i) => {
           const streaming = busy && i === messages.length - 1 && m.role === 'assistant'
-          // Result card stream: agent compound answers may produce multiple tables/charts (keep last 4)
-          const blocks = m.role === 'assistant'
-            ? (m.tables?.length
-                ? m.tables
-                : (m.data?.length ? [{ data: m.data, columns: m.columns }] : []))
-                .map((tb) => ({ tb, view: resultView(tb) }))
-                .filter((b) => b.view)
-            : []
           return (
             <div key={i} className={`chat-msg ${m.role}`}>
               {m.role === 'assistant' ? (
@@ -227,7 +302,7 @@ export default function AgentChat() {
                       </div>
                     )}
                     {m.stages?.length > 0 ? (
-                      <div className="agent-steps">
+                      <details className="chat-process"><summary>{streaming ? (m.stage || "正在生成回答") : `研究过程 · ${m.stages.length} 个步骤`}</summary><div className="agent-steps">
                         {m.stages.map((s, j) => {
                           // Same batch (>1 call) is a parallel group: prefix the first entry with a ⚡并行×N label, indent within the batch
                           const prev = m.stages[j - 1]
@@ -237,54 +312,29 @@ export default function AgentChat() {
                             <Fragment key={j}>
                               {firstOfBatch && <div className="agent-batch-label">⚡ 并行 ×{s.batchSize}</div>}
                               <div className={`agent-step ${parallel ? 'batched' : ''} ${s.failed ? 'failed' : s.ok ? 'ok' : 'active'}`}>
-                                <span className="agent-dot">{s.ok ? '✓' : s.failed ? '⚠' : ''}</span>
+                                <span className="agent-dot">{s.failed ? '⚠' : s.ok ? '✓' : ''}</span>
                                 {s.message}{s.meta ? ` (${s.meta})` : ''}
                               </div>
                             </Fragment>
                           )
                         })}
-                      </div>
+                      </div></details>
                     ) : (m.stage && (
                       <div className="chat-stage">
                         <span className="spinner-dot" /> {m.stage}
                       </div>
                     ))}
-                    {(m.text || !m.stage) && (
+                    {(m.text || (streaming && !m.stage)) && (
                       <div className={`chat-bubble md${streaming ? ' streaming' : ''}`}>
                         {m.text ? <Markdownish text={m.text} /> : (
                           <div className="chat-bubble typing"><span></span><span></span><span></span></div>
                         )}
                       </div>
                     )}
-                    {blocks.map(({ tb, view }, k) => (
-                      <div className="chat-table-block" key={k}>
-                        {view.caption && <div className="chat-table-caption">{view.caption}</div>}
-                        {view.chart ? (
-                          <ResultChart spec={view.chart} />
-                        ) : (
-                          <div className="chat-table">
-                            <table className="grid">
-                              <thead>
-                                <tr>{view.columns.map((c) => <th key={c}>{COL_LABELS[c] || c}</th>)}</tr>
-                              </thead>
-                              <tbody>
-                                {tb.data.map((row, j) => (
-                                  <tr key={j}>
-                                    {view.columns.map((c) => (
-                                      <td key={c}>
-                                        {(c === 'end_date' || c === 'ann_date' || c === 'trade_date')
-                                          ? fmtDateCol(c, row[c])
-                                          : fmtCell(row[c])}
-                                      </td>
-                                    ))}
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        )}
-                      </div>
-                    ))}
+                    <ChatResults tables={m.tables} data={m.data} columns={m.columns} />
+                    {m.error && <div className="chat-error" role="alert">{m.error}<button disabled={busy} onClick={() => send(messages[i - 1]?.text)}>重试</button></div>}
+                    {m.notice && <div className="chat-notice">{m.notice}</div>}
+                    {!streaming && m.text && <div className="chat-actions"><button onClick={() => copyAnswer(m.text, i)}>{copied === i ? '已复制' : '复制回答'}</button></div>}
                   </div>
                 </>
               ) : (
@@ -301,16 +351,30 @@ export default function AgentChat() {
       )}
 
       <div className="chat-inputbar">
-        <div className="chat-input-shell">
-          <input
+        <form className="chat-input-shell" onSubmit={(e) => { e.preventDefault(); send() }}>
+          <textarea
+            ref={inputRef}
+            aria-label="输入研究问题"
+            rows={1}
+            maxLength={16000}
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && send()}
-            placeholder="随意问, 例如: 中际旭创最近三年净利润 / 环比下降了吗, 数据对吗"
-            disabled={busy}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && e.keyCode !== 229) {
+                e.preventDefault()
+                send()
+              }
+              if (e.key === 'Escape') streamRef.current?.abort()
+            }}
+            placeholder="提出问题，或接着聊聊你的想法…"
           />
-          <button className="btn" onClick={() => send()} disabled={busy || !input.trim()}>发送</button>
-        </div>
+          <div className="composer-tools"><span>财务 · 研报 · 产业链</span>
+            {busy ? <button type="button" className="chat-send stop" onClick={() => streamRef.current?.abort()} aria-label="停止生成">■</button>
+              : <button type="submit" className="chat-send" disabled={!input.trim()} aria-label="发送问题">↑</button>}
+          </div>
+        </form>
+        <div className="composer-note" role="status">{copyError || (workspace.storageError ? '浏览器存储不可用，对话仅在本页面保留' : busy ? '正在研究 · Esc 停止' : 'Enter 发送 · Shift + Enter 换行')}</div>
+      </div>
       </div>
     </div>
   )
