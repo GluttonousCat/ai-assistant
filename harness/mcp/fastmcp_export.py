@@ -49,6 +49,8 @@ def _make_handler(spec: ToolSpec) -> Callable[..., Dict[str, Any]]:
 
 def build_fastmcp(read_only: bool = True, auth=None):
     """REGISTRY -> FastMCP instance; returns (mcp, number of registered tools). auth is a fastmcp authenticator or None."""
+    from core.config import get_config
+    get_config()
     from fastmcp import FastMCP
     from fastmcp.tools import Tool
 

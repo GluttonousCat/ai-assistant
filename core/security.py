@@ -28,18 +28,8 @@ logger = get_logger(__name__)
 
 _ALGO = "HS256"
 
-DDL_USERS = """
-CREATE TABLE IF NOT EXISTS auth.users (
-    user_id       SERIAL PRIMARY KEY,
-    username      VARCHAR(64) UNIQUE NOT NULL,
-    password_hash VARCHAR(128) NOT NULL,
-    role          VARCHAR(16) NOT NULL DEFAULT 'user',   -- admin / user
-    display_name  VARCHAR(64),
-    is_active     BOOLEAN NOT NULL DEFAULT TRUE,
-    last_login_at TIMESTAMP,
-    created_at    TIMESTAMP DEFAULT now()
-);
-"""
+from storage.schema.auth import DDL_USERS, ensure_auth_tables
+from storage.repositories import auth as auth_store
 
 
 # ============================================================
@@ -110,46 +100,24 @@ def decode_token(token: str) -> Optional[TokenPayload]:
 
 def ensure_auth_schema() -> None:
     """Idempotently create tables + seed the admin on first deployment"""
-    from storage.pg import PgClient
-    with PgClient() as pg:
-        pg.execute("CREATE SCHEMA IF NOT EXISTS auth")
-        pg.execute(DDL_USERS)
-
-        # The seed admin is created only when the user table is completely empty
-        # (first-deployment bootstrap). No more "recreate when admin is missing" —
-        # that would auto-resurrect a deleted weak-password account on restart.
-        # Day-to-day admin appointment goes through POST /api/auth/users/{id}/role (admin action).
-        cfg = get_config()
-        admin_user = cfg.env("AUTH_ADMIN_USER", "admin")
-        admin_pwd = cfg.env("AUTH_ADMIN_PASSWORD", "admin123")
-        n = pg.fetch_one("SELECT COUNT(*) AS n FROM auth.users")["n"]
-        if n == 0 and admin_user and admin_pwd:
-            create_user(admin_user, admin_pwd, role="admin",
-                        display_name="管理员")
-            logger.info(f"首次部署已创建种子管理员: {admin_user} (请尽快修改默认密码)")
+    ensure_auth_tables()
+    cfg = get_config()
+    admin_user = cfg.env("AUTH_ADMIN_USER", "admin")
+    admin_pwd = cfg.env("AUTH_ADMIN_PASSWORD", "admin123")
+    if auth_store.user_count() == 0 and admin_user and admin_pwd:
+        create_user(admin_user, admin_pwd, role="admin", display_name="管理员")
+        logger.info("首次部署已创建种子管理员")
 
 
 def get_user(username: str) -> Optional[Dict[str, Any]]:
-    from storage.pg import PgClient
-    with PgClient() as pg:
-        return pg.fetch_one(
-            "SELECT user_id, username, password_hash, role, display_name, "
-            "is_active, last_login_at FROM auth.users WHERE username=%s",
-            (username,),
-        )
+    return auth_store.find_user(username)
 
 
 def create_user(username: str, password: str, role: str = "user",
                 display_name: Optional[str] = None) -> Dict[str, Any]:
     if len(password) < 6:
         raise ValueError("密码至少 8 位")
-    from storage.pg import PgClient
-    with PgClient() as pg:
-        pg.execute(
-            "INSERT INTO auth.users (username, password_hash, role, display_name) "
-            "VALUES (%s, %s, %s, %s)",
-            (username, hash_password(password), role, display_name or username),
-        )
+    auth_store.insert_user(username, hash_password(password), role, display_name or username)
     return get_user(username) or {}
 
 
@@ -164,9 +132,4 @@ def authenticate(username: str, password: str) -> Optional[Dict[str, Any]]:
 
 
 def touch_login(username: str) -> None:
-    from storage.pg import PgClient
-    with PgClient() as pg:
-        pg.execute(
-            "UPDATE auth.users SET last_login_at=now() WHERE username=%s",
-            (username,),
-        )
+    auth_store.touch_login(username)

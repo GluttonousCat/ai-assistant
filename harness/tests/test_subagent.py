@@ -51,8 +51,8 @@ def test_domain_defs_well_formed():
     registered = {s.name for s in registry.specs()}
     for key, d in DOMAIN_DEFS.items():
         assert d["label"] and d["prompt"] and d["keywords"]
-        assert 2 <= len(d["tools"]) <= 8, \
-            f"{key} domain tool count should be 2~8 (upper bound checked by subagent._load_domain_defs)"
+        assert 2 <= len(d["tools"]) <= 16, \
+            f"{key} domain tool count should be 2~16 (upper bound checked by subagent._load_domain_defs)"
         for t in d["tools"]:
             assert t in registered, f"{key} references unregistered tool {t}"
             assert registry.get(t).read_only, f"{key} references non-read-only tool {t}"

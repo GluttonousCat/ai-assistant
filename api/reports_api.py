@@ -12,7 +12,6 @@ Report center API
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import queue as _queue
 import threading
@@ -24,6 +23,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 
 from core.logger import get_logger
 from core.security import TokenPayload
+from api.events import sse as _sse
 from api.deps import get_current_user, require_admin
 from skills.base import SkillContext
 from skills.report.skill import ReportSkill
@@ -231,10 +231,6 @@ async def analyze_report(report_id: int,
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     return result
-
-
-def _sse(event: str, data: Any) -> str:
-    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False, default=str)}\n\n"
 
 
 @reports_router.post("/{report_id}/analyze/stream")

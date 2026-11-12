@@ -26,7 +26,7 @@ AgentChat.jsx (session_id 每页生成一次, 全程携带)
         │   域内 2~4 工具 + escalate 伪工具 + 域专家提示词 → 共享决策循环
         │   └─ escalate_to_full_agent → 同一 messages 换全工具清单续跑 (上下文不丢)
         └─ 全工具循环: 未命中/复合/定义类/升级续跑 (兜底永在)
-            loop (≤8 轮): deepseek function-calling × 29 只读工具
+            loop (≤8 轮): deepseek function-calling × 30 只读工具
             ├─ 同轮多调用并行执行 (gather)
             └─ 执行层白名单: 只跑本次 manifest 列出的工具
     → harness/session (内存会话历史+股票槽位, 30min TTL)
@@ -145,3 +145,11 @@ AgentChat.jsx (session_id 每页生成一次, 全程携带)
 | HTTP session_id 无用户命名空间 | api 层用认证 user_id 隔离，不改变引擎协议 | 双用户相同 ID 隔离回归通过 |
 
 停止 HTTP 消费不强杀已进入线程的同步调用；当前最终回答仍为全文生成后分块输出。
+
+
+### 2026-11-12 分层与60F工具
+
+循环保留在harness/loop.py；专业口径在prompts.py，工具沙盒与并行执行在execution.py。
+新增query_intraday：原生60F、默认2026年、不复权，查询PG、单位股/元；分钟问题必须绕开日线快车道。
+HTTP入口改为api/agent_api.py，api/finance.py仅保留兼容聚合。工具总数33（30只读）。
+现有存储跨层访问按dependency_baseline登记，新增代码由jobs.check_boundaries及测试阻止增加。

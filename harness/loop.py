@@ -4,11 +4,11 @@ Agent conversation loop (core of the new conversation entry point).
 
 Paradigm: LLM autonomous decision + MCP tool loop (replaces the old intent-routing + fixed pipelines)
   user -> [system(caliber knowledge + rules) + session history + user]
-       -> LLM (deepseek, function-calling, 29 read-only tools)
+       -> LLM (deepseek, function-calling, 30 read-only tools)
        -> tool execution (thread + timeout) -> result fed back -> decide again ... -> final Chinese answer
 
 Sandbox policy (read-only safety):
-- Only read_only=True tools are exposed (29; write tools like forge_chain never enter the conversation)
+- Only read_only=True tools are exposed (30; write tools like forge_chain never enter the conversation)
 - Per-tool timeout (default 120s, OCR 600s); on timeout an error is returned to the LLM instead of waiting
 - Cap on LLM decision rounds (MAX_ROUNDS); repeated calls of the same tool+args guard against infinite loops
 - Tool results are truncated before injection into the LLM (MAX_RESULT_CHARS); tools themselves cap row counts (df_payload)
@@ -30,6 +30,8 @@ from core.logger import get_logger
 from core.config import get_config
 from core import metrics
 from harness import session, trajectory
+from harness.execution import TOOL_TIMEOUTS, DEFAULT_TOOL_TIMEOUT, run_tool as _run_tool, execute_batch
+from harness.prompts import build_system_prompt
 
 logger = get_logger(__name__)
 
@@ -42,58 +44,9 @@ MAX_ROUNDS = int(_sb.get("agent.sandbox.max_rounds", 8))
 MAX_RESULT_CHARS = int(_sb.get("agent.sandbox.max_result_chars", 4000))
 REPEAT_LIMIT = int(_sb.get("agent.sandbox.repeat_limit", 3))          # max calls of the same (tool, args)
 MAX_SAME_TOOL_CALLS = int(_sb.get("agent.sandbox.max_same_tool_calls", 4))   # per-tool-name cap, prevents grinding segment by segment
-TOOL_TIMEOUTS: Dict[str, int] = {    # seconds; unlisted tools use DEFAULT_TOOL_TIMEOUT
-    "extract_document": 600,         # scanned-document OCR
-    "read_report": 180,              # with a question it runs an LLM internally
-    "analyze_chain": 300,
-    # config overrides merged last (single keys override defaults)
-    **{k: int(v) for k, v in (_sb.get("agent.sandbox.tool_timeouts") or {}).items()},
-}
-DEFAULT_TOOL_TIMEOUT = int(_sb.get("agent.sandbox.default_tool_timeout", 120))
 
 
 # ---------- System prompt (professional know-how lives here) ----------
-def build_system_prompt() -> str:
-    from datetime import date
-    return f"""你是 Alpha Finance Radar 平台的投研助手 (今天是 {date.today().isoformat()})。
-平台有 A 股行情/财务三表/估值/主营构成/知识星球研报/产业链 全套数据, 你通过工具取数后回答。
-
-【数据纪律 — 最高优先级】
-1. 平台内的任何数字 (行情/财务/研报/预测) 必须来自工具返回, 严禁凭记忆报数; 没查到就明说没数据
-2. 通用金融概念/常识/方法论可直接讲解, 但要说明"这是通用知识, 非平台数据"
-3. 工具返回 ok=false 时, 把原因告诉用户并换正确参数重试一次; 仍失败就如实说明
-
-【财报口径 — "环比/数据对吗"类质疑的关键】
-财报各报告期是**累计口径**: 一季报=Q1累计, 中报=上半年累计, 三季报=前三季累计, 年报=全年。
-用户说"环比下降"时:
-- 若比较的是相邻报告期累计值 (如中报 vs 一季报), 必须先换算单季再下结论:
-  Q2单季=中报-Q1, Q3单季=三季报-中报, Q4单季=年报-三季报
-- 先用工具重新取数核验 (多取几期), 再回答"数据是对的, 口径是…"——用户质疑数据时,
-  禁止只凭上一轮回答辩护, 必须重新查证
-- 数据源是 Tushare 官方披露口径, 若确实异常 (如公告修正/口径变更) 如实说明
-
-【多轮对话】
-用户追问常省略主语 ("它呢"/"环比呢"/"那家呢")——从会话历史推断上一轮的股票/指标/链条;
-工具摘要里记录了上轮查了什么。推断不了就先用 resolve_stock 确认, 再反问用户。
-
-【工具使用】
-- 股票类工具**直接传股票名或代码** (工具内部自己解析, 不要先调 resolve_stock);
-  resolve_stock 只用于: 问公司身份/行业档案、一句话里多只股票批量解析、别名拿不准时
-- 查数值 query_financials (单股/对比/行业/全市场4模式); 估值历史水位 valuation_percentile;
-  主营构成 query_main_business
-- 券商预期与分歧 get_forecasts; 历史预测兑现校验 verify_forecasts; 预测+动量+估值四象限
-  综合判断 analyze_alpha (只要单一维度就用上面对应工具); 财务排雷 detect_financial_risk
-- 研报: 先 search_reports 检索清单, 需要某篇细节/单篇问答 read_report;
-  只有用户提供的本地文件才用 extract_document (库内研报不用它)
-- 产业链 analyze_chain (清单 list_chains)
-- 一次回答通常 1-3 个工具即可
-
-【表达】
-- 一律简体中文; 先直接回答, 再展开依据; 引用具体数值 (带单位: 亿/万/%)
-- 绝不向用户输出工具调用记录/执行日志/"[本轮工具调用]"之类的过程信息 —
-  工具过程界面已在步骤卡展示, 回答里只放面向用户的结论与依据
-- 结尾不做投资建议, 可给"后续观察点"
-- 表格数据用户能看到的就不再罗列流水账, 聚焦结论/趋势/口径/风险"""
 
 
 def _extract_table(data: Any) -> Optional[Dict[str, Any]]:
@@ -119,25 +72,11 @@ def _fmt_tool_args(args: Dict[str, Any]) -> str:
     return ", ".join(parts)[:90]
 
 
-async def _run_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
-    """Sandboxed execution."""
-    from harness.mcp import get_registry
-    registry = get_registry()
-    timeout = TOOL_TIMEOUTS.get(name, DEFAULT_TOOL_TIMEOUT)
-    try:
-        return await asyncio.wait_for(
-            asyncio.to_thread(registry.call, name, args), timeout=timeout)
-    except asyncio.TimeoutError:
-        return {"ok": False, "tool": name,
-                "error": f"工具执行超时 (> {timeout}s)。"
-                         f"若是全市场扫描类工具, 建议缩小范围或稍后再试"}
 
 
 async def _execute_batch(calls: List[tuple]) -> List[Dict[str, Any]]:
-    """Execute a batch of same-round tool calls in parallel (mutually independent); returns envelopes in input order."""
-    if len(calls) == 1:
-        return [await _run_tool(calls[0][0], calls[0][1])]
-    return list(await asyncio.gather(*[_run_tool(n, a) for n, a in calls]))
+    # Compatibility seam also preserves tests/clients overriding loop._run_tool.
+    return await execute_batch(calls, runner=_run_tool)
 
 
 # ============================================================
@@ -150,7 +89,7 @@ NL2SQL_TIMEOUT = 30           # fast-lane LLM SQL generation timeout (seconds); 
 # Deep-water words: any occurrence abandons the fast lane — these words imply compound intents /
 # extended domains / analysis needs, where the fast lane would answer only half
 # (e.g. "最新市盈率和估值分位一起看看" once returned only the wide quotes table)
-_DEEP_WORDS = ("分析", "怎么看", "怎么样", "为什么", "一起", "同时", "还有", "再看看",
+_DEEP_WORDS = ("分钟", "60F", "60f", "30F", "30f", "小时线", "分析", "怎么看", "怎么样", "为什么", "一起", "同时", "还有", "再看看",
                "对比分析", "分位", "水位", "预期差", "分歧", "研报", "风险", "排雷",
                "产业链", "环节", "受益", "形态", "扫描", "预测", "兑现", "财报体检")
 
@@ -530,7 +469,7 @@ async def run_agent_stream(text: str, session_id: Optional[str],
     from harness.subagent import DOMAIN_DEFS, domain_manifest, route_domain
 
     llm = get_agent_llm()
-    full_tools = openai_tools(include_write=False)   # sandbox: 17 read-only tools
+    full_tools = openai_tools(include_write=False)   # sandbox: registered read-only tools
     messages: List[Dict[str, Any]] = [{"role": "system",
                                        "content": build_system_prompt()}]
     messages.extend(session.get_messages(session_id))

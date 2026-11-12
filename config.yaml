@@ -81,15 +81,16 @@ agent:
       label: 财务数据
       tools: [query_financials, query_main_business, valuation_percentile,
               query_dividend, query_audit_opinion, disclosure_calendar,
-              analyze_cashflow, dupont_analysis]
-      keywords: [营收, 营业收入, 净利润, 毛利率, 净利率, roe, 净资产收益率, 市盈率,
+              analyze_cashflow, dupont_analysis, query_intraday]
+      keywords: [60F, 60f, 30F, 30f, 分钟, 营收, 营业收入, 净利润, 毛利率, 净利率, roe, 净资产收益率, 市盈率,
                  市净率, 股价, 收盘价, 市值, 换手率, 资产负债率, 流动比率, 速动比率,
                  每股收益, 营业利润, 经营现金流, 现金流, 总资产, 商誉, eps, 成交额,
                  靠什么赚钱, 收入结构, 主营构成, 估值贵不贵, 估值分位, 估值水位, 估值,
                  分红, 派息, 除权, 送转, 审计, 会计师, 财报披露, 披露, 延期,
                  净现比, 利润含金量, 杜邦]
       prompt: |-
-        你是财务数据子Agent, 配备 8 个数据工具。
+        你是财务数据子Agent, 配备 9 个数据工具。
+        分钟K线/60F使用query_intraday，禁止用日线替代。
         时间表述 (最近三年/2024年报) 与指标别名交给工具处理;
         查当期数值/时序/对比/行业排名用 query_financials,
         收入结构用 query_main_business, 历史估值水位用 valuation_percentile;

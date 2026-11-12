@@ -45,14 +45,11 @@ def _resolve_metric(metric: str):
 
 
 def _run_sql(sql: str) -> Dict[str, Any]:
-    from tools.finance.sql_guard import validate_sql, force_limit
-    sql = force_limit(sql, max_limit=1000)
-    guard = validate_sql(sql)
-    if not guard.valid:
-        raise ToolError(f"SQL 校验失败: {guard.error}")
-    from storage.pg import PgClient
-    with PgClient() as pg:
-        df = pg.fetch_df(sql)
+    from tools.finance.query import execute_readonly
+    try:
+        df = execute_readonly(sql)
+    except ValueError as error:
+        raise ToolError(str(error)) from error
     out = df_payload(df)
     out["sql"] = sql
     return out
@@ -61,6 +58,33 @@ def _run_sql(sql: str) -> Dict[str, Any]:
 # ============================================================
 # 4. query_financials
 # ============================================================
+
+@REGISTRY.tool(
+    name="query_intraday", domain="financial",
+    description=("查询已入库的分钟K线，重点60F趋势。默认2026年以来、不复权，返回OHLC、成交量股、成交额元。"
+                 "分钟行情必须用此工具，不能用日线代替；无数据如实说明，不触发外网采集。"),
+    params_schema=obj_schema({
+        "stock": param("股票名或带市场后缀代码", "string"),
+        "start": param("开始日期YYYY-MM-DD", "string", default="2026-01-01"),
+        "end": param("结束日期YYYY-MM-DD", "string", default="2026-12-31"),
+        "period": param("分钟周期", "integer", enum=[5, 15, 30, 60], default=60),
+        "limit": param("返回最近行数，最多1000", "integer", default=1000),
+    }, required=["stock"]), read_only=True)
+def query_intraday(stock: str, start: str = "2026-01-01", end: str = "2026-12-31",
+                   period: int = 60, limit: int = 1000) -> Dict[str, Any]:
+    from tools.market.queries import query_intraday as query
+    import re
+    # Minute coverage can precede the daily stock-name dictionary (e.g. BJ).
+    # A fully qualified code needs no potentially stale entity lookup.
+    hit = {"ts_code": stock.upper(), "name": stock.upper()} if re.fullmatch(
+        r"\d{6}\.(SH|SZ|BJ)", stock.upper()) else resolve_one(stock)
+    try:
+        frame = query(hit["ts_code"], start, end, period, limit)
+    except ValueError as error:
+        raise ToolError(str(error)) from error
+    out = df_payload(frame)
+    out.update(stock=hit, time_zone="Asia/Shanghai", volume_unit="share", amount_unit="CNY")
+    return out
 
 @REGISTRY.tool(
     name="query_financials",

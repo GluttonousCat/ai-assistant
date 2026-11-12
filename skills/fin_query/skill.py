@@ -19,8 +19,8 @@ import pandas as pd
 
 from core.config import get_config
 from core.logger import get_logger
-from storage.pg import PgClient
-from tools.finance.sql_guard import validate_sql, force_limit, SqlGuardResult
+from tools.finance.query import execute_readonly, lookup_ts_code
+from tools.finance.sql_guard import validate_sql, SqlGuardResult
 from tools.finance.schema_info import get_schema_info
 from skills.base import BaseSkill, SkillContext
 
@@ -30,42 +30,6 @@ logger = get_logger(__name__)
 # ============================================================
 # Stock name mapping and utilities
 # ============================================================
-
-def lookup_ts_code(name_or_code: str) -> Optional[str]:
-    """Convert a stock name or code to ts_code (e.g. '贵州茅台' -> '600519.SH')"""
-    name = name_or_code.strip()
-    if not name:
-        return None
-
-    # Already in ts_code format (6 digits + .SH/.SZ)
-    if re.match(r"^\d{6}\.(SH|SZ|BJ)$", name.upper()):
-        return name.upper()
-
-    with PgClient() as pg:
-        # exact name match
-        row = pg.fetch_one(
-            "SELECT ts_code FROM stock.stock_basic WHERE name=%s",
-            (name,),
-        )
-        if row:
-            return row["ts_code"]
-        # fuzzy name match (name contains)
-        row = pg.fetch_one(
-            "SELECT ts_code FROM stock.stock_basic WHERE name LIKE %s LIMIT 1",
-            (f"%{name}%",),
-        )
-        if row:
-            return row["ts_code"]
-        # 6-digit code without suffix
-        if re.match(r"^\d{6}$", name):
-            row = pg.fetch_one(
-                "SELECT ts_code FROM stock.stock_basic WHERE symbol=%s",
-                (name,),
-            )
-            if row:
-                return row["ts_code"]
-    return None
-
 
 # Common metric Chinese aliases -> (field, data source type)
 # source: financial = three financial statements + indicator tables / market = quote + valuation tables
@@ -361,9 +325,7 @@ class FinQuerySkill(BaseSkill):
     def _execute_sql(self, sql: str) -> tuple[pd.DataFrame, float]:
         t0 = time.time()
         # enforce the LIMIT ceiling
-        sql = force_limit(sql, max_limit=1000)
-        with PgClient(read_only=True) as pg:
-            df = pg.fetch_df(sql)
+        df = execute_readonly(sql)
         return df, time.time() - t0
 
     # ---------- Result interpretation ----------

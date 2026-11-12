@@ -47,12 +47,9 @@ def get_current_user(
 
 def require_admin(current: TokenPayload = Depends(get_current_user)) -> TokenPayload:
     """Admin check: the live DB role is authoritative (token role is not trusted, so demotion takes effect immediately)"""
-    from storage.pg import PgClient
+    from tools.auth.users import active_role
     try:
-        with PgClient() as pg:
-            row = pg.fetch_one(
-                "SELECT role FROM auth.users WHERE user_id=%s AND is_active",
-                (current.user_id,))
+        row = active_role(current.user_id)
     except Exception:
         row = None
     if not row or row.get("role") != "admin":

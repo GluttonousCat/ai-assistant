@@ -1,6 +1,6 @@
 # 模块边界与渐进重构方案
 
-> 2026-11-12；状态：已审核并形成方案，以下目录迁移尚未执行。
+> 2026-11-12；状态：首轮边界收敛已落地；剩余存储访问债务逐项迁移。
 
 ## 一、系统设计
 
@@ -15,7 +15,7 @@ MCP 与 HTTP 只做协议、校验、鉴权和结果转换，不能成为另一�
 
 ## 三、问题
 
-本轮静态统计（不含 tests）：`storage/pg_schema.py` 1322 行，`skills/report/skill.py` 765 行，
+重构前静态统计（不含 tests）：`storage/pg_schema.py` 1322 行，`skills/report/skill.py` 765 行，
 `harness/loop.py` 630 行，`harness/mcp/tools/financial.py` 582 行。
 仅 harness/skills 中就有 16 个模块直接导入 storage；代码实态尚未满足声明的分层契约。
 
@@ -52,6 +52,18 @@ MCP 与 HTTP 只做协议、校验、鉴权和结果转换，不能成为另一�
 
 ## 五、验证记录
 
-已完成模块行数、AST 导入统计和关键调用方阅读，未移动运行时代码。
-迁移实施时需保持既有 367 项 Python 测试、前端协议测试、lint/build，并增加导入兼容、CLI/MCP 冒烟和数据幂等回归。
-无调用引用的 Vite 模板 CSS/SVG 等可在单独清理提交中删除；本轮未删除。
+2026-11-12 首轮实施：
+
+- `storage/schema/` 按 stock/financial/views/aliases/reports/industry/auth/market 分域；DDL连接单独归档。原 `pg_schema` 的53个公开常量值逐一验证不变，旧导入路径保留。
+- `storage/repositories/` 收敛市场、认证和财务查询持久化；FinQuery Skill 与MCP财务查询共用 `tools/finance/query.py` 的校验/只读执行路径。
+- `api/finance.py` 改为兼容聚合；agent/chains/schema独立，SSE编码收敛到 `api/events.py`，新增market查询入口只读PG。
+- `harness/prompts.py` 与 `harness/execution.py` 从循环中抽出，原函数名和覆盖测试接缝保留。
+- 新60F入库以 tools供应商 → jobs编排 → storage仓储运行，无DDL/网络混在业务事务中。
+- `jobs/check_boundaries.py` + 自动测试阻止新增跨层导入；现存50个历史导入逐项登记（具体边及次数以JSON为准），不是已消除全部债务。前端按功能目录迁移及其余研报仓储迁移仍待实施。
+- 新增 `query_intraday` 只读工具，全部工具33个，其中30个只读；分钟请求绕过日线快车道。
+
+无调用引用的Vite模板文件和原有未跟踪目录未删除；不把他人临时文件混入本轮提交。
+完整数据入库验收见 [数据源记录](data_sources.md)。
+
+验收：382项Python测试通过，分层检查无新增违规；真实MCP stdio握手、30只读工具清单和BJ分钟查询通过。
+独立MCP启动显式初始化配置，不再依赖行情模块导入的副作用。

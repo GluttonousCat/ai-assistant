@@ -17,6 +17,7 @@ from core import security
 from core.config import get_config
 from core.security import TokenPayload
 from api.deps import get_current_user, require_admin
+from tools.auth import users as accounts
 
 auth_router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -98,10 +99,7 @@ def change_password(req: ChangePasswordRequest,
     user = security.get_user(current.username)
     if not user or not security.verify_password(req.old_password, user["password_hash"]):
         raise HTTPException(status_code=400, detail="原密码错误")
-    from storage.pg import PgClient
-    with PgClient() as pg:
-        pg.execute("UPDATE auth.users SET password_hash=%s WHERE username=%s",
-                   (security.hash_password(req.new_password), current.username))
+    accounts.set_password(current.username, security.hash_password(req.new_password))
     return {"ok": True}
 
 
@@ -120,11 +118,7 @@ def _require_super(current: TokenPayload = Depends(require_admin)) -> TokenPaylo
 @auth_router.get("/users")
 def list_users(current: TokenPayload = Depends(_require_super)):
     """List all accounts (admin)"""
-    from storage.pg import PgClient
-    with PgClient() as pg:
-        rows = pg.fetch_all(
-            "SELECT user_id, username, role, display_name, is_active, "
-            "last_login_at, created_at FROM auth.users ORDER BY user_id")
+    rows = accounts.list_users()
     for r in rows:
         for k in ("last_login_at", "created_at"):
             if r.get(k):
@@ -144,12 +138,6 @@ def set_user_role(user_id: int, req: RoleRequest,
         raise HTTPException(status_code=400, detail="role 仅支持 admin / user")
     if user_id == current.user_id:
         raise HTTPException(status_code=400, detail="不能变更自己的角色")
-    from storage.pg import PgClient
-    with PgClient() as pg:
-        row = pg.fetch_one(
-            "SELECT username FROM auth.users WHERE user_id=%s", (user_id,))
-        if not row:
-            raise HTTPException(status_code=404, detail="用户不存在")
-        pg.execute("UPDATE auth.users SET role=%s WHERE user_id=%s",
-                   (req.role, user_id))
+    if not accounts.set_role(user_id, req.role):
+        raise HTTPException(status_code=404, detail="用户不存在")
     return {"ok": True, "user_id": user_id, "role": req.role}

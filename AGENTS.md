@@ -17,10 +17,10 @@
 ## 2. 目录与分层契约（关键 30 秒）
 
 ```
-harness/     引擎层 (Agent Harness — 模型之外的一圈机器, 借鉴 DSH/Cordis 范式):
+harness/     prompts(数据口径)/execution(工具沙盒)/loop(决策入口)；引擎层 (Agent Harness — 模型之外的一圈机器, 借鉴 DSH/Cordis 范式):
              loop(三级漏斗决策循环)/subagent(五域子代理)/intent(分层意图)/
              session(会话=历史+股票槽位)/trajectory(全量轨迹JSONL)/llm.py(模型路由工厂)/
-             mcp(工具协议层: 32工具ToolSpec+stdio server, 外部客户端 python -m harness.mcp.server)
+             mcp(工具协议层: 33工具ToolSpec+stdio server, 外部客户端 python -m harness.mcp.server)
              (ctx 事件总线/插件化: 已有设计, 按 YAGNI 未落地)
 core/        基础设施 (引擎与各层共用的地基, 不含业务):
              config(.env+yaml)/logger(按顶层包分桶)/security(JWT+bcrypt)/
@@ -30,14 +30,17 @@ skills/      领域技能 (每技能一目录, 专业知识放 prompt):
              beta_alpha(产业链Beta+个股Alpha: chains种子链/analysis/tests) /
              content(内容资产管线: 画像/公众号文章/PPT/年报解读) /
              research(研究生产线: 证据→十章草稿→成稿, 任务分派见 docs/research/tasks/)
-jobs/        任务层一体: scheduler(Tushare 21:00) / zsxq_scheduler(爬虫 00:00/12:00) /
+jobs/        sync_intraday(2026年60F入库/五指数成分并集/断点续传) / check_boundaries(分层检查) /
+             任务层一体: scheduler(Tushare 21:00) / zsxq_scheduler(爬虫 00:00/12:00) /
              管线入口(daily_fetch_zxsq, sync_zxsq_to_pg, merge_report_duplicates, smoke) /
              health_sentinel(独立心跳哨兵: API探活+WS广播+自动拉起, 8209) /
              wecom_bot(企微智能机器人 wss 长连接桥接→本地Agent, 见 docs/agents/wecom_bot.md)
 tools/       pdf(通用PDF工具: 文本/渲染/OCR/表格) / zsxq爬虫 / market行情同步 /
              cninfo巨潮定期报告(获取+解析, 自包含) / langgraph(LangGraph原子封装: 建图/记忆) / finance(SQL guard, KB, 研报文件提取器)
-storage/     pg.py(连接池) / sqlite(爬虫) / pg_schema.py(全部DDL,改表先看这)
-api/         路由+鉴权中间件(JWT) / finance(SSE流式) / reports / auth
+storage/     pg.py(连接池) / sqlite(爬虫) / schema/(领域DDL) / repositories/(仓储SQL)
+             pg_schema.py保留旧导入兼容；新增DDL按域归档，独立连接部署
+api/         路由+鉴权中间件(JWT) / agent_api(SSE) / chains_api / schema_api / market_api / reports / auth
+             finance.py仅保留兼容路由聚合；events.py统一SSE编码
 web/src/     Login / Platform(侧边栏壳+角色门控) / AgentChat(SSE) / ChainView(产业链页)
              Reports / UserAdmin / Monitor(实时监控SSE, adminOnly); Markdownish 共享渲染器
 ```
@@ -49,7 +52,7 @@ core 是全层共用的基础设施，harness.mcp 是对外的工具协议出口
 - **harness**：引擎——LLM 决策循环、意图路由、工具协议(mcp)；不直接摸 storage
 - **skills**：领域方法论，编排 tools + LLM prompt
 - **tools**：原子能力，无业务状态；新视觉/提取能力进 tools/pdf（PDF 文本/渲染/OCR/表格）
-- **storage**：唯一碰 PG/SQLite 的层；DDL 全部集中在 `pg_schema.py`/各模块 ensure 函数
+- **storage**：唯一碰 PG/SQLite 的层；DDL 集中在 `storage/schema/`/各模块 ensure 函数，`pg_schema.py`仅兼容旧导入
 
 **写代码前先看**：`core/config.py`（配置优先级 env > yaml）、`api/deps.py`（require_admin 是
 DB 实时角色校验）、`storage/pg.py`（PgClient 是上下文管理器，事务自动提交/回滚）。
@@ -119,7 +122,7 @@ vision=qwen3.8-flash（deepseek 不收图片）。**思考开关由 `llm.enable_
 
 ## 7. 开发规范（提交前自查）
 
-1. **加表/加列**：DDL 写进 `pg_schema.py` 或模块内 ensure 函数；用 `ADD COLUMN IF NOT EXISTS`；
+1. **加表/加列**：DDL 写进 `storage/schema/` 对应领域模块或模块内 ensure 函数；用 `ADD COLUMN IF NOT EXISTS`；
    独立连接执行，绝不放在业务事务里
 2. **加 API**：想清楚挂在哪个 router；除登录/注册外自动被鉴权中间件覆盖；管理类加
    `require_admin`；重逻辑 `asyncio.to_thread`
@@ -132,7 +135,10 @@ vision=qwen3.8-flash（deepseek 不收图片）。**思考开关由 `llm.enable_
    改 beta_alpha 跑 `pytest skills/beta_alpha/tests`
    （改链模板另跑 `python -m skills.beta_alpha.analysis.chain_analysis <chain_id>`）；
    改完 git commit（消息带日期与模块）
-6. **日志**：一律 `get_logger(__name__)`（core/logger 按顶层包聚合落
+6. **分层验证**：提交前运行 `python -m jobs.check_boundaries` 与 `pytest harness/tests/test_boundaries.py`。
+   禁止新增跨层依赖；历史债务精确登记于 `docs/ops/dependency_baseline.json`，迁移后减少基线，不能整目录豁免。
+   新API/Agent通过tools访问仓储，禁止直接写SQL或在HTTP请求里拉取外部分钟行情。
+7. **日志**：一律 `get_logger(__name__)`（core/logger 按顶层包聚合落
    logs/agent.log / tools.log 等；禁止裸 `logging.getLogger` 与库代码 print；
    CLI 最终汇总/报表输出可保留 print）；级别/保留天数在 config.yaml `logging` 段
 
@@ -146,7 +152,7 @@ vision=qwen3.8-flash（deepseek 不收图片）。**思考开关由 `llm.enable_
 | 前端框架 | [docs/frontend/framework_theme.md](docs/frontend/framework_theme.md) | 品牌/深黑暗棕主题/桌面入口 |
 | 模型体系 | [docs/agents/llm_models.md](docs/agents/llm_models.md) | 用途路由/两个模型的坑 |
 | 扫描件 Agent | [docs/agents/scanned_report_agent.md](docs/agents/scanned_report_agent.md) | PDF→PNG→视觉OCR 解耦设计 |
-| MCP 工具层 | [harness/mcp/README.md](harness/mcp/README.md) | 32 工具(29 只读)/ToolSpec 规范/中文description约定/stdio 服务(默认只读) |
+| MCP 工具层 | [harness/mcp/README.md](harness/mcp/README.md) | 33 工具(30 只读)/ToolSpec 规范/中文description约定/stdio 服务(默认只读) |
 | 企微机器人桥接 | [docs/agents/wecom_bot.md](docs/agents/wecom_bot.md) | wss外拨收消息/流式回复/会话映射; python -m jobs.wecom_bot |
 | Agent 对话循环 | [docs/agents/agent_loop.md](docs/agents/agent_loop.md) | LLM 自主决策+工具循环/多轮追问/累计口径知识/沙盒；新入口 `/api/v1/agent/stream`；沙盒参数与五域定义在 config.yaml `agent:` 段，全量轨迹落 logs/trajectories/ |
 | dsh 客户端接入 | [docs/agents/dsh_client.md](docs/agents/dsh_client.md) | 外部 harness(dsh/Claude Desktop)连 MCP server；stdio 握手冒烟 jobs/smoke_mcp_stdio.py |
@@ -155,8 +161,8 @@ vision=qwen3.8-flash（deepseek 不收图片）。**思考开关由 `llm.enable_
 | 年报存储设计 | [docs/agents/annual_storage.md](docs/agents/annual_storage.md) | PG真相源+Milvus annual_chunks/锚点/单写路/双路召回；定稿待实现 |
 | Beta/Alpha Skill | [docs/agents/chain_beta_skill.md](docs/agents/chain_beta_skill.md) | 产业链种子链/三源映射/环节指数/预期差四象限；Agent 会话入口在 `.agents/skills/beta-skill`、`.agents/skills/alpha-skill` |
 | 安全 | [docs/ops/security.md](docs/ops/security.md) | 分层防护/事件审计/加固清单 |
-| 结构优化方案 | [docs/ops/module_boundaries.md](docs/ops/module_boundaries.md) | 模块化单体/仓储收敛/DDL与Agent拆分/旧入口兼容；方案待实施 |
-| 行情与新闻选型 | [docs/ops/data_sources.md](docs/ops/data_sources.md) | 五组指数成分池/免费盘后分钟与付费实时/新闻快照；含价格和本机探测记录，待接入 |
+| 结构优化方案 | [docs/ops/module_boundaries.md](docs/ops/module_boundaries.md) | 模块化单体/仓储收敛/DDL与Agent拆分/旧入口兼容；DDL/路由/执行/认证及财务查询已首轮收敛；遗留依赖登记并阻止新增 |
+| 行情与新闻选型 | [docs/ops/data_sources.md](docs/ops/data_sources.md) | 五组指数成分池/免费盘后分钟与付费实时/新闻快照；含价格/探测记录；2026年60F五指数并集已入库，新闻待接入 |
 | 数据处理 | [docs/ops/data_process.md](docs/ops/data_process.md) | 历史：同步全流程 |
 | 爬虫 | [docs/ops/spider.md](docs/ops/spider.md) | 历史：反检测设计 |
 | 产品全貌 | [docs/PRD.md](docs/PRD.md) | v1.0 需求与架构（部分过时，以本文件为准） |

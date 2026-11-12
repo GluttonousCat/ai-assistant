@@ -5,7 +5,7 @@
 ## 一、系统设计
 
 现有 PostgreSQL：`stock` 存行情、标的与行业，`fin` 存财务和研报，`auth` 存用户。
-`storage/pg_schema.py` 集中大部分 DDL，认证 DDL 当前由 `core/security.py` ensure 管理。
+DDL已按域收敛到 `storage/schema/`；`storage/pg_schema.py`保留兼容导出，认证DDL归入schema/auth，由core/security调用ensure。
 Text-to-SQL 依赖 schema_info、SQL guard 白名单、业务视图和提示词；同步程序依赖 Tushare 字段名。
 
 ## 二、需求优化

@@ -1,4 +1,4 @@
-# harness/mcp/ — MCP 工具层 (29 只读 + 3 写类 = 32 个投研能力)
+# harness/mcp/ — MCP 工具层 (30 只读 + 3 写类 = 32 个投研能力)
 
 > 2026-09-07 首版。目标: 把平台散落在 skills/tools/beta_alpha 的原子能力
 > 统一包成 **带 JSON Schema 的标准工具**, 同时服务两条消费链路:
@@ -14,7 +14,7 @@
 harness/mcp/
   spec.py       ToolSpec 规范 (一个工具长什么样, 见下节)
   registry.py   注册表: @REGISTRY.tool 装饰器 / call 统一入口 / 双协议导出
-  tools/        32 个工具实现 (29 只读 + forge_chain/fetch_annual_report/write_article 3 写类), 按 5 域分组
+  tools/        32 个工具实现 (30 只读 + forge_chain/fetch_annual_report/write_article 3 写类), 按 5 域分组
     _common.py        公共助手 (股票解析/DataFrame 序列化/日K加载)
     entity.py         8 个: 实体与知识
     financial.py      8 个: 财务与行情
@@ -27,7 +27,7 @@ harness/mcp/
 ../../jobs/smoke_mcp_tools.py      全量冒烟 (fast/heavy 两档)
 ```
 
-## 二、工具清单 (29 只读 + 3 写类 = 32)
+## 二、工具清单 (30 只读 + 3 写类 = 32)
 
 | # | 域 | 工具 | 能力 | 底座 (既有代码) | 只读 |
 |---|----|------|------|----------------|------|

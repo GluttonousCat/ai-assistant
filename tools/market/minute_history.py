@@ -18,9 +18,9 @@ FIELDS = "date,time,code,open,high,low,close,volume,amount,adjustflag"
 
 
 def _symbol(code: str) -> tuple[str, str]:
-    match = re.fullmatch(r"(\d{6})\.(SH|SZ)", code.upper())
+    match = re.fullmatch(r"(\d{6})\.(SH|SZ|BJ)", code.upper())
     if not match:
-        raise ValueError("代码必须包含市场后缀，例如 600000.SH 或 000001.SZ")
+        raise ValueError("代码必须包含SH/SZ/BJ市场后缀，例如600000.SH或920001.BJ")
     return match[1], match[2].lower()
 
 
@@ -92,6 +92,8 @@ def fetch_minute_history(source: str, code: str, period: int, *, start: str | No
     if lower is not None and lower > upper:
         raise ValueError("开始时间不能晚于结束时间")
     if source == "baostock":
+        if market == "bj":
+            raise ValueError("BaoStock不支持BJ股票，请使用新浪源")
         if lower is None:
             raise ValueError("BaoStock 查询必须指定 --start")
         import baostock as bs

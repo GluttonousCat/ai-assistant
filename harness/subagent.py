@@ -61,17 +61,17 @@ def escalate_tool_manifest() -> Dict[str, Any]:
 _DEFAULT_DOMAINS: Dict[str, Dict[str, Any]] = {
     "financial": {
         "label": "财务数据",
-        "tools": ["query_financials", "query_main_business", "valuation_percentile"],
-        "keywords": ["营收", "营业收入", "净利润", "毛利率", "净利率", "roe",
+        "tools": ["query_financials", "query_main_business", "valuation_percentile", "query_intraday"],
+        "keywords": ["分钟", "60F", "60f", "K线", "营收", "营业收入", "净利润", "毛利率", "净利率", "roe",
                      "净资产收益率", "市盈率", "市净率", "股价", "收盘价", "市值",
                      "换手率", "资产负债率", "流动比率", "速动比率", "每股收益",
                      "营业利润", "经营现金流", "总资产", "商誉", "eps", "成交额",
                      "靠什么赚钱", "收入结构", "主营构成", "估值贵不贵", "估值分位",
                      "估值水位", "估值"],
         "prompt": (
-            "你是财务数据子Agent, 只配备 3 个数据工具。"
+            "你是财务数据子Agent, 按配置配备数据工具。"
             "时间表述 (最近三年/2024年报) 与指标别名交给工具处理; "
-            "查当期数值/时序/对比/行业排名用 query_financials, "
+            "分钟K线/60F用query_intraday，禁止用日线代替；查当期数值/时序/对比/行业排名用 query_financials, "
             "收入结构用 query_main_business, 历史估值水位用 valuation_percentile。"
             "需要研报观点/盈利预测/产业链/量化/排雷等域外能力时, "
             "调用 escalate_to_full_agent 说明。"),
@@ -146,7 +146,7 @@ def _load_domain_defs() -> Dict[str, Dict[str, Any]]:
         ok = (isinstance(d, dict)
               and isinstance(d.get("label"), str) and d["label"]
               and isinstance(d.get("prompt"), str) and d["prompt"]
-              and isinstance(d.get("tools"), list) and 1 <= len(d["tools"]) <= 8
+              and isinstance(d.get("tools"), list) and 1 <= len(d["tools"]) <= 16
               and isinstance(d.get("keywords"), list) and d["keywords"])
         if not ok:
             logger.warning(f"agent.domains.{key} 结构不完整 "

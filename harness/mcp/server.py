@@ -102,6 +102,10 @@ def handle(msg: Any) -> Optional[str]:
 
 
 def main() -> None:
+    # Standalone clients do not pass through FastAPI lifespan. Initialize env
+    # explicitly instead of depending on incidental sync-module imports.
+    from core.config import get_config
+    get_config()
     # Windows console defaults to GBK; force UTF-8 for stdin/stdout (the MCP transport is UTF-8)
     try:
         sys.stdin.reconfigure(encoding="utf-8")
