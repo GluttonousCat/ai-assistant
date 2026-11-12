@@ -54,7 +54,7 @@ AGENT_CASES = [
          "tools_any": ["detect_financial_risk"],
          "contains_any": ["风险", "现金流", "毛利率"]}]},
 
-    # ---------- Single turn: chain/alpha/quant ----------
+    # ---------- Single turn: chain/alpha ----------
     {"id": "chain_overview", "type": "chain", "turns": [
         {"q": "AI算力产业链有哪些环节",
          "tools_any": ["analyze_chain", "list_chains"], "contains_any": ["环节"]}]},
@@ -64,10 +64,6 @@ AGENT_CASES = [
     {"id": "alpha_zhongji", "type": "alpha", "turns": [
         {"q": "中际旭创的预期差怎么样",
          "tools_any": ["analyze_alpha"], "contains_any": ["预期", "分歧"]}]},
-    {"id": "quant_regime", "type": "quant", "turns": [
-        {"q": "贵州茅台现在处于什么形态",
-         "tools_any": ["run_quant_scan", "compute_indicators"],
-         "contains_any": ["区间", "趋势", "形态", "震荡"]}]},
 
     # ---------- Compound intents (regression cases for the fast-lane deep-water keyword guard) ----------
     # Pass signal: valuation_percentile must be called (the fast lane never calls it;

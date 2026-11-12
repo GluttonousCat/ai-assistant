@@ -13,7 +13,6 @@
 2. **知识星球研报**：爬虫每日抓取 → LLM 解读入库（券商研报结构化：机构/标的/评级/盈利预测）
 3. **Agent 问答**：自然语言 → 意图路由 → Text-to-SQL 查询 / 研报解读，SSE 流式输出
 
-另含独立量化子系统 `range_trading/`（震荡区间+趋势双系统全市场扫描，见 docs/quant/）。
 
 ## 2. 目录与分层契约（关键 30 秒）
 
@@ -41,7 +40,6 @@ storage/     pg.py(连接池) / sqlite(爬虫) / pg_schema.py(全部DDL,改表�
 api/         路由+鉴权中间件(JWT) / finance(SSE流式) / reports / auth
 web/src/     Login / Platform(侧边栏壳+角色门控) / AgentChat(SSE) / ChainView(产业链页)
              Reports / UserAdmin / Monitor(实时监控SSE, adminOnly); Markdownish 共享渲染器
-range_trading/  量化子系统(特征/regime状态机/扫描/回测, 自带tests)
 ```
 
 **分层契约**：`api → harness(引擎)+skills(领域) → tools → storage`，
@@ -95,9 +93,9 @@ vision=qwen3.8-flash（deepseek 不收图片）。**思考开关由 `llm.enable_
 ## 5. 认证与角色（改权限先读）
 
 - 全 API 需 JWT（登录/注册/health 白名单）；注册需邀请码（.env `AUTH_INVITE_CODE`）
-- 三级角色：超级管理员（.env `SUPER_ADMIN`，用户管理独占）/ admin（区间看板）/ user
+- 三级角色：超级管理员（.env `SUPER_ADMIN`，用户管理独占）/ admin（实时监控）/ user
 - `require_admin` 查 DB 实时角色（不信 token 内 role）——提权/降权即时生效
-- `/api/range/*` 整组 require_admin；`/api/auth/users*` 整组仅超级管理员
+- `/api/auth/users*` 整组仅超级管理员
 - 种子管理员仅当用户表为空时创建（防删除后重启复活）
 
 ## 6. 已踩过的坑（新代码必读，防复发）
@@ -131,7 +129,7 @@ vision=qwen3.8-flash（deepseek 不收图片）。**思考开关由 `llm.enable_
 4. **加前端页**：`web/src/` 下新组件 + `Platform.jsx` NAV 注册（注意 adminOnly/superOnly）；
    改完必须 `npm run build`（后端托管 dist，不构建不生效）
 5. **验证**：改研报链路后跑 `python -m tools.finance.report_meta_analysis` 单篇验证；
-   改量化跑 `pytest range_trading/tests`；改 beta_alpha 跑 `pytest skills/beta_alpha/tests`
+   改 beta_alpha 跑 `pytest skills/beta_alpha/tests`
    （改链模板另跑 `python -m skills.beta_alpha.analysis.chain_analysis <chain_id>`）；
    改完 git commit（消息带日期与模块）
 6. **日志**：一律 `get_logger(__name__)`（core/logger 按顶层包聚合落
@@ -148,7 +146,7 @@ vision=qwen3.8-flash（deepseek 不收图片）。**思考开关由 `llm.enable_
 | 前端框架 | [docs/frontend/framework_theme.md](docs/frontend/framework_theme.md) | 品牌/深黑暗棕主题/桌面入口 |
 | 模型体系 | [docs/agents/llm_models.md](docs/agents/llm_models.md) | 用途路由/两个模型的坑 |
 | 扫描件 Agent | [docs/agents/scanned_report_agent.md](docs/agents/scanned_report_agent.md) | PDF→PNG→视觉OCR 解耦设计 |
-| MCP 工具层 | [harness/mcp/README.md](harness/mcp/README.md) | 34 工具(31 只读)/ToolSpec 规范/中文description约定/stdio 服务(默认只读) |
+| MCP 工具层 | [harness/mcp/README.md](harness/mcp/README.md) | 32 工具(29 只读)/ToolSpec 规范/中文description约定/stdio 服务(默认只读) |
 | 企微机器人桥接 | [docs/agents/wecom_bot.md](docs/agents/wecom_bot.md) | wss外拨收消息/流式回复/会话映射; python -m jobs.wecom_bot |
 | Agent 对话循环 | [docs/agents/agent_loop.md](docs/agents/agent_loop.md) | LLM 自主决策+工具循环/多轮追问/累计口径知识/沙盒；新入口 `/api/v1/agent/stream`；沙盒参数与六域定义在 config.yaml `agent:` 段，全量轨迹落 logs/trajectories/ |
 | dsh 客户端接入 | [docs/agents/dsh_client.md](docs/agents/dsh_client.md) | 外部 harness(dsh/Claude Desktop)连 MCP server；stdio 握手冒烟 jobs/smoke_mcp_stdio.py |
@@ -159,7 +157,6 @@ vision=qwen3.8-flash（deepseek 不收图片）。**思考开关由 `llm.enable_
 | 安全 | [docs/ops/security.md](docs/ops/security.md) | 分层防护/事件审计/加固清单 |
 | 数据处理 | [docs/ops/data_process.md](docs/ops/data_process.md) | 历史：同步全流程 |
 | 爬虫 | [docs/ops/spider.md](docs/ops/spider.md) | 历史：反检测设计 |
-| 量化 | [docs/quant/](docs/quant/) | 震荡/趋势/动量矛三指南 |
 | 产品全貌 | [docs/PRD.md](docs/PRD.md) | v1.0 需求与架构（部分过时，以本文件为准） |
 
 ## 9. 文档维护约定（写文档前读）

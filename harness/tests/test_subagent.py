@@ -13,15 +13,18 @@ def test_route_single_domain():
     assert route_domain("茅台最新的研报观点") == "report"
     assert route_domain("AI算力产业链有哪些环节") == "chain"
     assert route_domain("中际旭创的预期差") == "chain"
-    assert route_domain("贵州茅台现在什么形态") == "quant"
     assert route_domain("中际旭创有没有财务风险") == "risk"
     assert route_domain("宁德时代属于哪个行业") == "entity"
+    # quant domain removed with range_trading: pattern/shape questions now fall
+    # through to the full-tool loop
+    assert route_domain("贵州茅台现在什么形态") is None
 
 
 def test_route_compound_and_miss_goes_full():
     """Compound signals (>=2 domains) and misses -> None (full-tool loop; the fallback always remains)."""
-    # forecast (report domain) + pattern (quant domain) compound
-    assert route_domain("中际旭创的盈利预测和现在的形态怎么样") is None
+    # forecast (report domain) only now — the old pattern keyword no longer forms
+    # a compound since the quant domain was removed
+    assert route_domain("中际旭创的盈利预测和现在的形态怎么样") == "report"
     # colloquial follow-up (no domain word)
     assert route_domain("环比竟然下降了，数据对吗？") is None
     # definition/explanation phrasing always goes to the full loop (model answers directly, enters no domain)
@@ -57,7 +60,7 @@ def test_domain_defs_well_formed():
 
 
 def test_domains_cover_most_tools():
-    """The union of the 6 domains' tools should cover most read-only tools (uncovered ones should be justifiable)."""
+    """The union of the 5 domains' tools should cover most read-only tools (uncovered ones should be justifiable)."""
     from harness.mcp import get_registry
     covered = {t for d in DOMAIN_DEFS.values() for t in d["tools"]}
     uncovered = ({s.name for s in get_registry().specs()
@@ -81,8 +84,8 @@ def test_domain_manifest_includes_escalate():
 
 
 def test_domain_manifest_without_escalate():
-    names = [t["function"]["name"] for t in domain_manifest("quant", False)]
-    assert names == DOMAIN_DEFS["quant"]["tools"]
+    names = [t["function"]["name"] for t in domain_manifest("risk", False)]
+    assert names == DOMAIN_DEFS["risk"]["tools"]
 
 
 def test_escalate_manifest_shape():

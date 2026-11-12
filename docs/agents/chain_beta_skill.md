@@ -29,7 +29,7 @@
 ### 1.4 代码形态（分层契约遵守）
 
 ```
-skills/beta_alpha/                                     自治模块（对标 range_trading/, 对外只暴露稳定入口）
+skills/beta_alpha/                                     自治模块（对外只暴露稳定入口）
 ├── chains/*.yaml                种子链模板（专业知识载体）
 ├── analysis/chain_analysis.py   原子能力：load_chains/match_chain/map_chain（纯 SQL+pandas）
 ├── analysis/chain_extract.py    原子能力：研报正文→环节抽取入库（Phase 2）

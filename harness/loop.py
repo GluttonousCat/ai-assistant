@@ -43,7 +43,6 @@ MAX_RESULT_CHARS = int(_sb.get("agent.sandbox.max_result_chars", 4000))
 REPEAT_LIMIT = int(_sb.get("agent.sandbox.repeat_limit", 3))          # max calls of the same (tool, args)
 MAX_SAME_TOOL_CALLS = int(_sb.get("agent.sandbox.max_same_tool_calls", 4))   # per-tool-name cap, prevents grinding segment by segment
 TOOL_TIMEOUTS: Dict[str, int] = {    # seconds; unlisted tools use DEFAULT_TOOL_TIMEOUT
-    "run_quant_scan": 900,           # full-market scan takes minutes
     "extract_document": 600,         # scanned-document OCR
     "read_report": 180,              # with a question it runs an LLM internally
     "analyze_chain": 300,
@@ -86,10 +85,8 @@ def build_system_prompt() -> str:
   综合判断 analyze_alpha (只要单一维度就用上面对应工具); 财务排雷 detect_financial_risk
 - 研报: 先 search_reports 检索清单, 需要某篇细节/单篇问答 read_report;
   只有用户提供的本地文件才用 extract_document (库内研报不用它)
-- 产业链 analyze_chain (清单 list_chains); 形态/区间状态 run_quant_scan(regime);
-  技术指标数值 (ADX/POC/Wyckoff) compute_indicators
-- 一次回答通常 1-3 个工具即可; 全市场扫描 (run_quant_scan 的 range/trend/setup) 很慢,
-  用户明确要才用
+- 产业链 analyze_chain (清单 list_chains)
+- 一次回答通常 1-3 个工具即可
 
 【表达】
 - 一律简体中文; 先直接回答, 再展开依据; 引用具体数值 (带单位: 亿/万/%)

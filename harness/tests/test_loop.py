@@ -129,7 +129,7 @@ def test_history_ttl_cleanup():
 def test_sandbox_config():
     assert MAX_ROUNDS <= 10
     assert REPEAT_LIMIT >= 2
-    assert TOOL_TIMEOUTS["run_quant_scan"] > DEFAULT_TOOL_TIMEOUT
+    assert TOOL_TIMEOUTS["extract_document"] > DEFAULT_TOOL_TIMEOUT
     assert DEFAULT_TOOL_TIMEOUT >= 60
 
 
@@ -139,7 +139,7 @@ def test_tool_manifest_read_only():
     tools = openai_tools(include_write=False)
     names = {t["function"]["name"] for t in tools}
     assert "forge_chain" not in names
-    assert len(names) == 31   # 31 read-only (including build_company_profile)
+    assert len(names) == 29   # 29 read-only (including build_company_profile)
     assert "query_financials" in names and "verify_forecasts" in names
 
 

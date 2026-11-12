@@ -18,7 +18,7 @@ agent/      智能体域: 意图路由/工具循环 + skills/ + beta_alpha/ + co
 mcp/        MCP 工具协议层 (stdio server, 21 工具)
 api/        路由 + JWT 鉴权中间件          tools/      爬虫 / 行情同步 / SQL guard / 视觉OCR
 core/       配置 / 安全 / 调度器 / LLM工厂  storage/    PG 连接池 + 全部 DDL
-web/        React 前端（登录/问答/研报/看板） range_trading/  量化扫描子系统
+web/        React 前端（登录/问答/研报）
 ```
 
 分层调用：`api → agent(skills/beta_alpha/content) → tools → storage`。新 Agent 请先读 [AGENTS.md](AGENTS.md)。

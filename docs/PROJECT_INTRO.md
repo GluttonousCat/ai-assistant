@@ -78,14 +78,13 @@ prompt 内置规则保证，如"最近三年"= 最近 3 个年报）；域子 Ag
 或定义/解释类问法（"什么是…"）→ 全工具循环。漏路由只是少优化，误路由才是事故，
 因此任何复合嫌疑都放行全循环。
 
-### 4.2 六个域子 Agent（缩小菜单 = 降低弱模型误选率）
+### 4.2 五个域子 Agent（缩小菜单 = 降低弱模型误选率）
 
 | 子 Agent | 域内工具 | 职责 |
 |---|---|---|
 | 财务数据 | query_financials / query_main_business / valuation_percentile | 指标查询·主营构成·估值分位 |
 | 研报观点 | search_reports / read_report / get_forecasts / extract_document | 研报检索·单篇问答·盈利预测 |
 | 产业链预期差 | list_chains / analyze_chain / analyze_alpha | 环节映射·四象限综合 |
-| 量化形态 | compute_indicators / run_quant_scan | 状态机形态·技术指标·扫描 |
 | 风控校验 | detect_financial_risk / verify_forecasts | 财务排雷·预测兑现校验 |
 | 实体日历 | resolve_stock / get_schema / trading_calendar | 实体解析·数据字典·交易日 |
 

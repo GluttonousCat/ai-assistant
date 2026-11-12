@@ -14,7 +14,6 @@ from core.lifespan import lifespan
 from api.middleware import AuthMiddleware
 from api import router
 from api.finance import fin_router
-from api.range_api import range_router
 from api.auth_api import auth_router
 from api.reports_api import reports_router
 from api.monitor_api import monitor_router
@@ -38,7 +37,6 @@ app.add_middleware(
 
 app.include_router(router)
 app.include_router(fin_router)
-app.include_router(range_router)
 app.include_router(auth_router)
 app.include_router(reports_router)
 app.include_router(monitor_router)
@@ -55,11 +53,6 @@ if _WEB_DIST.exists():
 
     @app.get("/login", include_in_schema=False)
     async def login_page():
-        return FileResponse(_WEB_DIST / "index.html")
-
-    @app.get("/range", include_in_schema=False)
-    async def range_dashboard():
-        """Range scan dashboard (same SPA)"""
         return FileResponse(_WEB_DIST / "index.html")
 
 

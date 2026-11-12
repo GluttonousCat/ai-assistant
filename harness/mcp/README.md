@@ -1,6 +1,6 @@
-# mcp/ — MCP 工具层 (31 只读 + 3 写类 = 34 个投研能力)
+# mcp/ — MCP 工具层 (29 只读 + 3 写类 = 32 个投研能力)
 
-> 2026-09-07 首版。目标: 把平台散落在 skills/tools/beta_alpha/range_trading 的原子能力
+> 2026-09-07 首版。目标: 把平台散落在 skills/tools/beta_alpha 的原子能力
 > 统一包成 **带 JSON Schema 的标准工具**, 同时服务两条消费链路:
 > ① 内部对话 Agent 的 function-calling 循环 (deepseek-v4-flash);
 > ② 外部 MCP 客户端 (ZCode / Claude 等) 经 stdio 调用。
@@ -14,14 +14,14 @@
 mcp/
   spec.py       ToolSpec 规范 (一个工具长什么样, 见下节)
   registry.py   注册表: @REGISTRY.tool 装饰器 / call 统一入口 / 双协议导出
-  tools/        23 个工具实现 (20 只读 + forge_chain/fetch_annual_report/write_article 3 写类), 按 7 域分组
+  tools/        32 个工具实现 (29 只读 + forge_chain/fetch_annual_report/write_article 3 写类), 按 5 域分组
     _common.py        公共助手 (股票解析/DataFrame 序列化/日K加载)
-    entity.py         3 个: 实体与知识
-    financial.py      3 个: 财务与行情
-    reports.py        4 个: 研报
-    chain_alpha.py    4 个: 产业链与预期差
-    quant.py          2 个: 技术与量化
-    risk.py           2 个: 风控 (全新逻辑, 无既有底座)
+    entity.py         8 个: 实体与知识
+    financial.py      8 个: 财务与行情
+    reports.py        7 个: 研报
+    chain_alpha.py    5 个: 产业链与预期差
+    risk.py           2 个: 风控
+    content.py        2 个: 内容资产 (挂 report 域)
   server.py     stdio MCP 服务 (零依赖手写 JSON-RPC)
   bridge.py     OpenAI function-calling 桥 (内部 Agent Loop 用)
 ../../jobs/smoke_mcp_tools.py      全量冒烟 (fast/heavy 两档)
@@ -49,10 +49,8 @@ mcp/
 | 12 | chain | `analyze_chain` | 环节→标的映射+环节指数超额收益 | 同上 (`map_chain_members`) | ✓ |
 | 13 | chain | `forge_chain` | LLM 生成新链模板 (YAML 草稿, 不落盘) | `beta_alpha/forge` | ✗ |
 | 14 | chain | `analyze_alpha` | 预期差四象限 (纯量化) | `beta_alpha/skills/alpha` | ✓ |
-| 15 | quant | `compute_indicators` | ADX / POC / Wyckoff Spring | `tools/kline/indicators` | ✓ |
-| 16 | quant | `run_quant_scan` | regime 单标的 / range / trend / setup 全市场扫描 | `range_trading` | ✓ |
-| 17 | risk | `detect_financial_risk` | 8 规则财务排雷 (毛利率连降/背离/商誉/杠杆…) | **全新** (fina_indicator+三表) | ✓ |
-| 18 | risk | `verify_forecasts` | 券商预测兑现校验 (历史预测 vs 实际, 命中率/偏向) | **全新** (report_forecast+income) | ✓ |
+| 15 | risk | `detect_financial_risk` | 8 规则财务排雷 (毛利率连降/背离/商誉/杠杆…) | **全新** (fina_indicator+三表) | ✓ |
+| 16 | risk | `verify_forecasts` | 券商预测兑现校验 (历史预测 vs 实际, 命中率/偏向) | **全新** (report_forecast+income) | ✓ |
 
 ## 三、ToolSpec 设计格式 (审核重点)
 
@@ -137,7 +135,7 @@ env = run_tool_call(tc.name, tc.arguments_json)   # -> 统一信封
 
 协议支持: `initialize` / `notifications/initialized` / `ping` / `tools/list` / `tools/call`,
 protocolVersion `2024-11-05`, 零第三方依赖 (手写 JSON-RPC, UTF-8)。
-工具执行期间的底座 print 输出 (如 range_trading 扫描排名) 被强制重定向到 stderr,
+工具执行期间的底座 print 输出 (如扫描/管线排名) 被强制重定向到 stderr,
 保证 stdout 只有 JSON-RPC 帧。
 
 ## 六、验证记录
@@ -157,10 +155,9 @@ protocolVersion `2024-11-05`, 零第三方依赖 (手写 JSON-RPC, UTF-8)。
    如需共存可整体改名 `mcptools/` (内部引用只有 `mcp.` 前缀, 机械替换即可)。
 2. verify_forecasts 现库可回验样本少: forecast 表仅 252 行且多为 2026E+ 期间/外币口径
    (中芯国际的预测全是美元)。随研报持续入库自动改善。
-3. run_quant_scan 的 range/trend/setup 为全市场重扫描 (分钟级); regime 秒级。
    Agent 侧建议对重工具做耗时提示。
-4. read_report 带 question 时内部走 LLM (ReportSkill qa), 首次调用有冷启动延迟。
-5. forge_chain 为多轮 LLM 生成 (1-3 分钟), 产物是 YAML 草稿, **不自动写文件** (save 由人工执行)。
+3. read_report 带 question 时内部走 LLM (ReportSkill qa), 首次调用有冷启动延迟。
+4. forge_chain 为多轮 LLM 生成 (1-3 分钟), 产物是 YAML 草稿, **不自动写文件** (save 由人工执行)。
 
 ## 七、接入状态 (2026-09-07 已实施)
 

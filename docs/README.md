@@ -27,10 +27,6 @@ docs/
 |   +-- data_process.md      数据同步全流程（历史文档）
 |   +-- spider.md            知识星球爬虫设计（历史文档）
 |   +-- cninfo_spider.md     巨潮定期报告爬虫（按需拉取/幂等/orgId三级策略）
-+-- quant/              量化子系统
-|   +-- range_trading_guide.md   震荡区间挖掘系统工程指南
-|   +-- trend_trading_guide.md   趋势行情捕捉系统工程指南
-|   +-- momentum_spear.md        动量矛设计文档
 +-- PRD.md              产品需求与技术研发 v1.0（历史快照，架构演进以 AGENTS.md 为准）
 ```
 
@@ -51,7 +47,6 @@ docs/
 | 改主题/品牌 | [frontend/framework_theme.md](frontend/framework_theme.md) |
 | 域名/启动/看日志 | [ops/domain_setup.md](ops/domain_setup.md) |
 | 安全与加固 | [ops/security.md](ops/security.md) |
-| 量化扫描系统 | [quant/](quant/) |
 
 ## 维护约定
 

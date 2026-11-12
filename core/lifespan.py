@@ -49,24 +49,9 @@ async def lifespan(app: FastAPI):
         try:
             from jobs.zsxq_scheduler import get_zsxq_scheduler
             get_zsxq_scheduler().start()
-            logger.info("知识星球研报抓取调度器已启动 (每日 07:00/23:00)")
+            logger.info("知识星球研报抓取调度器已启动")
         except Exception as e:
             logger.warning(f"知识星球调度器启动失败 (非致命): {e}")
-
-    # Start the daily 21:30 range+trend scan scheduler (the day's daily bars are
-    # already synced by the 21:00 job)
-    try:
-        from api.range_api import start_scheduler as start_range_scheduler
-        start_range_scheduler()
-    except Exception as e:
-        logger.warning(f"区间扫描调度器启动失败 (非致命): {e}")
-
-    # Detect staleness at startup and catch up (handles timers missed by shutdown/sleep)
-    try:
-        from api.range_api import catchup_if_stale
-        catchup_if_stale()
-    except Exception as e:
-        logger.warning(f"启动补跑检查失败 (非致命): {e}")
 
     logger.info(f"应用启动: {config.get('app.name', 'ai-assistant')} v{config.get('app.version', '2.0.0')}")
     yield

@@ -85,7 +85,7 @@ def handle(msg: Any) -> Optional[str]:
                     ensure_ascii=False)}],
                 "isError": True,
             })
-        # Foundation modules (e.g. the range_trading scanner) print progress/rankings;
+        # Foundation modules (scanners, report pipelines) print progress/rankings;
         # under the stdio protocol stdout must carry JSON-RPC only, so redirect all of it to stderr
         import contextlib
         with contextlib.redirect_stdout(sys.stderr):

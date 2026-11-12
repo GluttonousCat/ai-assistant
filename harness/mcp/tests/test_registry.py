@@ -14,16 +14,16 @@ from harness.mcp.spec import ToolError
 REGISTRY = get_registry()
 
 
-def test_34_tools_registered():
+def test_32_tools_registered():
     specs = REGISTRY.specs()
-    assert len(specs) == 34      # 31 read-only + 3 write (forge_chain/fetch_annual_report/write_article)
+    assert len(specs) == 32      # 29 read-only + 3 write (forge_chain/fetch_annual_report/write_article)
     names = [s.name for s in specs]
-    assert len(set(names)) == 34  # no duplicate names
+    assert len(set(names)) == 32  # no duplicate names
 
 
-def test_domains_cover_six_groups():
+def test_domains_cover_five_groups():
     domains = {s.domain for s in REGISTRY.specs()}
-    assert domains == {"entity", "financial", "report", "chain", "quant", "risk"}
+    assert domains == {"entity", "financial", "report", "chain", "risk"}
 
 
 @pytest.mark.parametrize("spec", REGISTRY.specs(), ids=lambda s: s.name)
@@ -83,8 +83,8 @@ def test_manifests_consistent():
     openai_manifest = REGISTRY.openai_manifest()
     assert len(mcp_manifest) == len(REGISTRY.specs())
     assert len(openai_manifest) == len(REGISTRY.specs())
-    # Read-only filter: 31 read-only (3 write tools excluded)
-    assert len(REGISTRY.openai_manifest(include_write=False)) == 31
+    # Read-only filter: 29 read-only (3 write tools excluded)
+    assert len(REGISTRY.openai_manifest(include_write=False)) == 29
     for entry in mcp_manifest:
         assert set(entry) == {"name", "description", "inputSchema"}
     for entry in openai_manifest:

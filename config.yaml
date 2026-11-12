@@ -78,7 +78,6 @@ agent:
     max_same_tool_calls: 4      # 同名工具 (任意参数) 最多调用次数
     default_tool_timeout: 120   # 工具超时默认 (秒)
     tool_timeouts:              # 个别工具超时覆盖 (秒)
-      run_quant_scan: 900       # 全市场扫描分钟级
       extract_document: 600     # 扫描件 OCR
       read_report: 180          # 带 question 时内部走 LLM
       analyze_chain: 300
@@ -138,16 +137,6 @@ agent:
         同行业横向对比 (估值/成长/盈利排名) 用 industry_peers。
         只要单一维度 (仅估值分位/仅盈利预测) 属域外工具, 需要就升级。
         需要行情/研报细节/排雷等域外能力时调用 escalate_to_full_agent。
-    quant:
-      label: 量化形态
-      tools: [compute_indicators, run_quant_scan]
-      keywords: [形态, 区间状态, 震荡区间, 趋势状态, adx, poc, wyckoff, 弹簧,
-                 技术指标, 全市场扫描, 蓄势盾]
-      prompt: |-
-        你是量化形态子Agent。单标的当前形态/区间状态用 run_quant_scan 的 regime
-        (秒级); 要 ADX/POC/Wyckoff 指标数值用 compute_indicators;
-        全市场扫描 (range/trend/setup) 分钟级, 用户明确要才用。
-        需要财务/研报/产业链等域外能力时调用 escalate_to_full_agent。
     risk:
       label: 风控校验
       tools: [detect_financial_risk, verify_forecasts]

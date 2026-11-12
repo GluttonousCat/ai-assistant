@@ -3,7 +3,6 @@ import { platformApi, auth } from './platformApi'
 import AgentChat from './AgentChat'
 import Reports from './Reports'
 import ChainView from './ChainView'
-import App from './App' // range scanner dashboard (legacy page, admin only)
 import UserAdmin from './UserAdmin' // user management (admin only)
 import Monitor from './Monitor' // real-time monitor (agent sessions/tools/LLM, admin only)
 
@@ -14,7 +13,6 @@ const NAV = [
   { key: 'chat', label: 'Agent', icon: '✦' },
   { key: 'chain', label: '产业链', icon: '⛓' },
   { key: 'reports', label: '研报中心', icon: '▤' },
-  { key: 'range', label: '区间看板', icon: '◫', adminOnly: true },      // clickable for admin, greyed out with 🔒 for user
   { key: 'monitor', label: '实时监控', icon: '◉', adminOnly: true },
   { key: 'users', label: '用户管理', icon: '⚙', superOnly: true },       // rendered for super admin only
 ]
@@ -86,7 +84,6 @@ export default function Platform({ user, onLogout }) {
         {nav === 'chat' && <AgentChat />}
         {nav === 'chain' && <ChainView />}
         {nav === 'reports' && <Reports />}
-        {nav === 'range' && isAdmin && <App embedded />}
         {nav === 'monitor' && isAdmin && <Monitor />}
         {nav === 'users' && isSuper && <UserAdmin />}
       </main>

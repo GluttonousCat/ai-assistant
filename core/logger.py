@@ -4,7 +4,7 @@ Unified logging (aggregated into one file per top-level package)
 
 Design (normalized 2026-09-10, replacing the old runaway one-file-per-module scheme):
 - One log file per top-level package: logs/agent.log / mcp.log / core.log / api.log /
-  storage.log / tools.log / range_trading.log / scripts.log / evals.log /
+  storage.log / tools.log / scripts.log / evals.log /
   app.log — the module full name rides in the log line's %(name)s, so triage can
   still filter by module
 - When run via `python -m`, __name__=="__main__"; take sys.modules['__main__'].__package__

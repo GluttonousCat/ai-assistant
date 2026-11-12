@@ -41,8 +41,6 @@ FAST_CASES = [
     ("list_chains", {}),
     ("analyze_chain", {"chain": "AI算力", "node": "光模块"}),
     ("analyze_alpha", {"stock": "中际旭创"}),
-    ("compute_indicators", {"stock": "贵州茅台", "days": 200}),
-    ("run_quant_scan", {"scan_type": "regime", "stock": "贵州茅台"}),
     ("detect_financial_risk", {"stock": "中际旭创"}),
 ]
 
@@ -56,11 +54,8 @@ def _first_report_id() -> int:
         reports = (env.get("data") or {}).get("reports") or []
     return reports[0]["report_id"]
 
-# Heavy tier: minutes-level (LLM generation / full-market scans)
+# Heavy tier: minutes-level (LLM generation)
 HEAVY_CASES = [
-    ("run_quant_scan", {"scan_type": "range", "top": 5}),
-    ("run_quant_scan", {"scan_type": "trend", "top": 5}),
-    ("run_quant_scan", {"scan_type": "setup"}),
     ("forge_chain", {"theme": "固态电池"}),
     ("extract_document", {"file_path": "NOT_EXIST_FOR_TEST.pdf"}),  # expected ToolError
 ]

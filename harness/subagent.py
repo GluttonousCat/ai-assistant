@@ -104,17 +104,6 @@ _DEFAULT_DOMAINS: Dict[str, Dict[str, Any]] = {
             "只要单一维度 (仅估值分位/仅盈利预测) 属域外工具, 需要就升级。"
             "需要行情/研报细节/排雷等域外能力时调用 escalate_to_full_agent。"),
     },
-    "quant": {
-        "label": "量化形态",
-        "tools": ["compute_indicators", "run_quant_scan"],
-        "keywords": ["形态", "区间状态", "震荡区间", "趋势状态", "adx", "poc",
-                     "wyckoff", "弹簧", "技术指标", "全市场扫描", "蓄势盾"],
-        "prompt": (
-            "你是量化形态子Agent。单标的当前形态/区间状态用 run_quant_scan 的 regime"
-            " (秒级); 要 ADX/POC/Wyckoff 指标数值用 compute_indicators; "
-            "全市场扫描 (range/trend/setup) 分钟级, 用户明确要才用。"
-            "需要财务/研报/产业链等域外能力时调用 escalate_to_full_agent。"),
-    },
     "risk": {
         "label": "风控校验",
         "tools": ["detect_financial_risk", "verify_forecasts"],
