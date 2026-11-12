@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api } from './api'
 
 const STATE_LABEL = {
@@ -16,11 +16,10 @@ const STATE_CLASS = {
 const fmt = (v, d = 2) => (v === null || v === undefined || isNaN(v) ? '—' : Number(v).toFixed(d))
 const pct = (v) => (v === null || v === undefined || isNaN(v) ? '—' : `${(v * 100).toFixed(1)}%`)
 
-// 简易折线图 (SVG): 滚动胜率
+// Simple line chart (SVG): rolling win rate
 function LineChart({ data, height = 180 }) {
   if (!data || data.length === 0) return <div className="empty">暂无成熟数据</div>
   const W = 720, H = height, P = { l: 40, r: 14, t: 14, b: 26 }
-  const vals = data.map((d) => d.hq_holding_rate ?? d.holding_rate)
   const allVals = data.flatMap((d) => [d.holding_rate, d.hq_holding_rate].filter((v) => v != null))
   const maxV = Math.max(1, ...allVals), minV = Math.min(0, ...allVals)
   const x = (i) => P.l + (i / Math.max(1, data.length - 1)) * (W - P.l - P.r)
@@ -49,7 +48,7 @@ function LineChart({ data, height = 180 }) {
   )
 }
 
-// 简易柱状图 (SVG): 分数档维持率
+// Simple bar chart (SVG): holding rate by score bin
 function BarChart({ data, height = 180 }) {
   if (!data || data.length === 0) return <div className="empty">暂无成熟数据</div>
   const W = 480, H = height, P = { l: 40, r: 14, t: 14, b: 30 }

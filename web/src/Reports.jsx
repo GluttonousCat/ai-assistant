@@ -8,7 +8,7 @@ const METRIC_LABEL = {
   roe: 'ROE', target_price: '目标价', gross_margin: '毛利率',
 }
 
-// 研报中心: 知识星球研报库 + LLM 提取结果
+// Reports center: Zhixingqiu (知识星球) report library + LLM extraction results
 export default function Reports() {
   const [items, setItems] = useState([])
   const [total, setTotal] = useState(0)
@@ -22,7 +22,7 @@ export default function Reports() {
   const [detail, setDetail] = useState(null)
   const [busyId, setBusyId] = useState(null)
   const [jumpInput, setJumpInput] = useState('')
-  // AI 分析流式弹窗: { id, title, stages:[{message,status}], text, data, error, done }
+  // AI analysis streaming modal state: { id, title, stages:[{message,status}], text, data, error, done }
   const [ai, setAi] = useState(null)
   const aiAbortRef = useRef(null)
   const streamBoxRef = useRef(null)
@@ -69,7 +69,7 @@ export default function Reports() {
     }
   }
 
-  // 下载研报原文 PDF (本地已下载文件, 经鉴权 fetch blob 保存)
+  // Download the original report PDF (locally downloaded file, saved via authorized fetch blob)
   async function downloadOriginal(d) {
     try {
       await platformApi.downloadReport(d.report_id)
@@ -78,20 +78,20 @@ export default function Reports() {
     }
   }
 
-  // 流式输出时贴底跟随
+  // Stick to bottom while streaming
   useEffect(() => {
     const el = streamBoxRef.current
     if (el && ai && !ai.done) el.scrollTop = el.scrollHeight
   }, [ai?.text]) // eslint-disable-line
 
   function closeAi() {
-    // 中断未完成的 SSE 连接 (后端分析线程不受影响, 仍会完成入库)
+    // Abort the unfinished SSE connection (the backend analysis thread is unaffected and still completes ingestion)
     aiAbortRef.current?.()
     aiAbortRef.current = null
     setAi(null)
   }
 
-  // AI 分析: 打开流式弹窗, 展示后台 Agent 流程 + 模型输出
+  // AI analysis: open the streaming modal showing the backend agent flow + model output
   function analyze(r) {
     setBusyId(r.report_id)
     setAi({ id: r.report_id, title: r.title, stages: [], text: '', data: null, error: null, done: false })
@@ -99,7 +99,7 @@ export default function Reports() {
       setAi((prev) => {
         if (!prev || prev.id !== r.report_id) return prev
         if (ev.type === 'stage') {
-          // 新阶段到达: 之前全部标记完成, 当前为活动步
+          // New stage arrived: mark all previous as done, current one becomes the active step
           return { ...prev, stages: [...prev.stages.map((s) => ({ ...s, status: 'ok' })), { message: ev.message, status: 'active' }] }
         }
         if (ev.type === 'delta') return { ...prev, text: prev.text + ev.text }
@@ -115,7 +115,7 @@ export default function Reports() {
       .finally(() => {
         setBusyId(null)
         aiAbortRef.current = null
-        load(page) // 刷新列表状态徽章
+        load(page) // refresh the list status badges
       })
   }
 

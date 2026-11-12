@@ -1,12 +1,12 @@
 import { useEffect, useRef } from 'react'
 import { createChart, ColorType, LineSeries } from 'lightweight-charts'
 
-// 结果数据可视化:
-// - 报告期序列 (end_date/ann_date) -> 同花顺式分期柱状图 (Q1/H1/Q3/年报 各自独立柱, 不连线)
-//   长序列 (>20 期) 自动聚合为年度柱 (近 12 年年报)
-// - 日线序列 (trade_date) -> 折线图 (连续交易日, 连线有意义)
-// - 分类对比 (股票+数值)     -> 横向条形图
-// 与 AgentChat 共享的展示工具也集中在此 (COL_LABELS/parseNum/compactNum/fmtDateCol)
+// Result data visualization:
+// - Report-period series (end_date/ann_date) -> Tonghuaxun-style per-period bar chart (Q1/H1/Q3/annual each an independent bar, no connecting line)
+//   Long series (>20 periods) auto-aggregate into annual bars (last 12 annual reports)
+// - Daily series (trade_date) -> line chart (consecutive trading days, connecting line is meaningful)
+// - Categorical comparison (stock + value) -> horizontal bar chart
+// Display utilities shared with AgentChat also live here (COL_LABELS/parseNum/compactNum/fmtDateCol)
 
 export const COL_LABELS = {
   stock_name: '股票', name: '股票', industry: '行业',
@@ -38,15 +38,15 @@ export const COL_LABELS = {
 }
 
 const PERIOD_LABELS = { '03-31': '一季报', '06-30': '中报', '09-30': '三季报', '12-31': '年报' }
-// X 轴紧凑期别: 24Q1 / 24H1 / 24Q3 / 24年报
+// Compact X-axis period labels: 24Q1 / 24H1 / 24Q3 / 24年报
 const PERIOD_SHORT = { '03-31': 'Q1', '06-30': 'H1', '09-30': 'Q3', '12-31': '年报' }
 const DATE_COLS = ['end_date', 'ann_date', 'trade_date']
 const NAME_COLS = ['stock_name', 'name']
 const SERIES_COLORS = ['#f43f5e', '#f5b942', '#b8a8f5', '#4aa3ff']
 const BAR_MAX_ROWS = 12
-const ANNUAL_TRIGGER = 20 // 报告期超过此数 -> 聚合为年度柱
+const ANNUAL_TRIGGER = 20 // report periods beyond this count -> aggregate into annual bars
 
-// 数值解析: 兼容 PG NUMERIC 序列化成的纯数字字符串
+// Numeric parsing: accepts plain numeric strings serialized from PG NUMERIC
 export function parseNum(v) {
   if (typeof v === 'number') return Number.isFinite(v) ? v : null
   if (typeof v === 'string' && /^[+-]?\d+(\.\d+)?$/.test(v.trim())) {
@@ -56,7 +56,7 @@ export function parseNum(v) {
   return null
 }
 
-// 坐标轴/图例用的紧凑数值 (亿/万为单位缩写, 与字段单位无关)
+// Compact numbers for axes/legends (abbreviated with 亿/万 units, independent of the field's own unit)
 export function compactNum(v) {
   if (v === null || v === undefined || !Number.isFinite(v)) return '—'
   const a = Math.abs(v)
@@ -88,18 +88,18 @@ function isNumericCol(data, col) {
   return seen > 0
 }
 
-// 柱状 X 轴标签: 全为年报时用年份, 混合期别用 短标签
+// Bar X-axis labels: year only when all annual, otherwise short period labels
 function periodLabel(t, annualOnly) {
   if (annualOnly) return t.slice(2, 4) + '年'
   return t.slice(2, 4) + (PERIOD_SHORT[t.slice(5, 10)] || t.slice(5, 10))
 }
 
 /**
- * 识别结果集的可视化形态:
- * - period: 报告期序列 (end_date/ann_date) + 1~4 数值列, 单实体 -> 分期柱状图
- * - line  : 日线序列 (trade_date) + 1~4 数值列, 单实体 -> 折线图
- * - bar   : 名称列 + 恰好 1 个数值列, 2~30 行 (多实体对比/行业排名) -> 横向条形图
- * - null  : 不可图示 (调用方回退表格)
+ * Detect the visualizable shape of a result set:
+ * - period: report-period series (end_date/ann_date) + 1~4 numeric columns, single entity -> per-period bar chart
+ * - line  : daily series (trade_date) + 1~4 numeric columns, single entity -> line chart
+ * - bar   : name column + exactly 1 numeric column, 2~30 rows (multi-entity comparison/industry ranking) -> horizontal bar chart
+ * - null  : not chartable (caller falls back to a table)
  */
 export function buildChartSpec(columns, data) {
   const cols = (columns || []).filter((c) => c !== 'ts_code')
@@ -113,7 +113,7 @@ export function buildChartSpec(columns, data) {
     || [...new Set(data.map((r) => r[nameCol]).filter((v) => v !== null && v !== undefined))].length <= 1
 
   if (dateCol && metricCols.length >= 1 && metricCols.length <= 4 && singleEntity) {
-    // 升序去重 (SQL 常为 DESC), 同日多行取最后一行
+    // Sort ascending and dedupe (SQL often returns DESC); for multiple rows on the same date keep the last
     const byDate = new Map()
     for (const r of data) {
       const t = String(r[dateCol] ?? '').slice(0, 10)
@@ -124,7 +124,7 @@ export function buildChartSpec(columns, data) {
 
     let annualOnly = false
     if (dateCol !== 'trade_date' && times.length > ANNUAL_TRIGGER) {
-      // 季度数据跨度太长 -> 聚合为年度柱 (近 12 年年报), 避免 40+ 根拥挤柱
+      // Quarterly data spans too long -> aggregate into annual bars (last 12 annual reports), avoiding 40+ crowded bars
       const annual = times.filter((t) => t.endsWith('-12-31'))
       if (annual.length >= 5) {
         times = annual
@@ -143,7 +143,7 @@ export function buildChartSpec(columns, data) {
     }
   }
 
-  // 多实体 (对比/行业排名) 或无日期: 名称 + 单一数值 -> 横向条形图
+  // Multi-entity (comparison/industry ranking) or no date column: names + single value -> horizontal bar chart
   if (nameCol && metricCols.length === 1 && data.length >= 2 && data.length <= 30) {
     const col = metricCols[0]
     const rows = data
@@ -163,7 +163,7 @@ export function buildChartSpec(columns, data) {
   return null
 }
 
-// ---------- 渲染 ----------
+// ---------- Rendering ----------
 
 export default function ResultChart({ spec }) {
   if (!spec) return null
@@ -176,7 +176,7 @@ export default function ResultChart({ spec }) {
   )
 }
 
-// 同花顺式分期柱状图: 每个报告期一根柱, 不连线 (Q1/H1/Q3/年报 累计口径互不可比)
+// Tonghuaxun-style per-period bar chart: one bar per report period, no connecting line (Q1/H1/Q3/annual are cumulative and mutually incomparable)
 function PeriodChart({ spec }) {
   const W = 660, H = 250
   const padL = 56, padR = 8, padT = 12, padB = 34
@@ -186,7 +186,7 @@ function PeriodChart({ spec }) {
   const plotH = H - padT - padB
   const slot = plotW / n
 
-  // Y 范围 (含 0 基线)
+  // Y range (including the 0 baseline)
   let min = 0, max = 0
   for (const t of spec.times) {
     for (const mt of spec.metrics) {
@@ -198,7 +198,7 @@ function PeriodChart({ spec }) {
   const span = (max - min) || 1
   max += span * 0.08
   if (min < 0) min -= span * 0.08
-  const y0 = padT + plotH * (max / (max - min)) // 零轴 y
+  const y0 = padT + plotH * (max / (max - min)) // y of the zero axis
   const yOf = (v) => padT + plotH * ((max - v) / (max - min))
 
   const ticks = 4
@@ -264,7 +264,7 @@ function PeriodChart({ spec }) {
 
 function LineChart({ spec }) {
   const ref = useRef(null)
-  // 流式期间父组件每次渲染都会重建 spec 对象, 以内容为 key 避免图表反复重建
+  // During streaming the parent rebuilds the spec object on every render; key by content to avoid chart rebuilds
   const key = JSON.stringify([spec.kind, spec.times, spec.metrics.map((m) => m.col)])
   const specRef = useRef(spec)
   specRef.current = spec
@@ -342,7 +342,7 @@ function BarChart({ spec }) {
   const min = Math.min(0, ...vals)
   const span = max - min || 1
   const barMax = W - labelW - valW - 12
-  const x0 = labelW + ((-min) / span) * barMax // 零轴位置
+  const x0 = labelW + ((-min) / span) * barMax // zero-axis position
 
   return (
     <>

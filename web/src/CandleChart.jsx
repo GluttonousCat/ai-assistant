@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react'
 import { createChart, ColorType, CrosshairMode, CandlestickSeries, HistogramSeries } from 'lightweight-charts'
 
 /**
- * 蜡烛图 + 成交量副图 + 区间带 (lightweight-charts v5)
+ * Candlestick chart + volume sub-pane + range band (lightweight-charts v5)
  * props: candles [{t,o,h,l,c,v}], range {upper, lower}, height?
  */
 export default function CandleChart({ candles, range, height = 478 }) {
@@ -11,7 +11,7 @@ export default function CandleChart({ candles, range, height = 478 }) {
   useEffect(() => {
     if (!ref.current || !candles || candles.length === 0) return undefined
 
-    // 主图 + 成交量副图 布局: 主体 78%, 成交量 22%
+    // Main pane + volume sub-pane layout: body 78%, volume 22%
     const chart = createChart(ref.current, {
       layout: {
         background: { type: ColorType.Solid, color: '#131722' },
@@ -32,7 +32,7 @@ export default function CandleChart({ candles, range, height = 478 }) {
       },
       rightPriceScale: {
         borderColor: '#2a3140',
-        scaleMargins: { top: 0.08, bottom: 0.28 },   // 下方留成交量空间
+        scaleMargins: { top: 0.08, bottom: 0.28 },   // leave room for volume below
       },
       timeScale: {
         borderColor: '#2a3140',
@@ -44,7 +44,7 @@ export default function CandleChart({ candles, range, height = 478 }) {
       handleScale: { axisPressedMouseMove: { time: true, price: false } },
     })
 
-    // ---- 蜡烛 (A股配色: 红涨绿跌, 更柔和的现代色) ----
+    // ---- Candles (A-share palette: red up / green down, softer modern tones) ----
     const series = chart.addSeries(CandlestickSeries, {
       upColor: '#ef5350', downColor: '#26a69a',
       borderUpColor: '#ef5350', borderDownColor: '#26a69a',
@@ -57,7 +57,7 @@ export default function CandleChart({ candles, range, height = 478 }) {
       time: c.t, open: c.o, high: c.h, low: c.l, close: c.c,
     })))
 
-    // ---- 区间带: 上/下沿 + 中轴 ----
+    // ---- Range band: upper/lower edges + midline ----
     if (range) {
       series.createPriceLine({
         price: range.upper, color: '#f5b942', lineWidth: 2,
@@ -74,18 +74,18 @@ export default function CandleChart({ candles, range, height = 478 }) {
       })
     }
 
-    // ---- 成交量副图 (叠在主图底部) ----
+    // ---- Volume sub-pane (overlaid at the bottom of the main pane) ----
     const volSeries = chart.addSeries(HistogramSeries, {
       priceFormat: { type: 'volume' },
       priceScaleId: 'vol',
       color: '#4aa3ff40',
     })
     chart.priceScale('vol').applyOptions({
-      scaleMargins: { top: 0.80, bottom: 0 },   // 成交量只占底部 20%
+      scaleMargins: { top: 0.80, bottom: 0 },   // volume occupies only the bottom 20%
     })
     volSeries.setData(candles.map((c) => ({
       time: c.t, value: c.v,
-      color: c.c >= c.o ? '#ef535045' : '#26a69a45',   // 红涨绿跌 (半透明)
+      color: c.c >= c.o ? '#ef535045' : '#26a69a45',   // red up / green down (semi-transparent)
     })))
 
     chart.timeScale().fitContent()

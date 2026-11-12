@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { platformApi } from './platformApi'
 import Markdownish from './Markdownish'
 
-// 新建链弹窗: 双通道共用 — LLM 生成草稿(可编辑) / 直接手写 YAML; 保存前服务端校验
+// New-chain modal: dual channels — LLM-generated draft (editable) / hand-written YAML; server validates before saving
 function ForgeModal({ onClose, onCreated }) {
   const [theme, setTheme] = useState('')
   const [stages, setStages] = useState([])
@@ -119,8 +119,8 @@ function ForgeModal({ onClose, onCreated }) {
   )
 }
 
-// 产业链页: 链选择 -> 环节卡片墙(超额/景气/成员) -> AI 流式解读(按需)
-// 标的 chip 点击 -> 跳对话页自动发「XX的预期差」(chat:pending 机制)
+// Chain page: chain selection -> node card wall (excess/prosperity/members) -> on-demand AI streaming commentary
+// Stock chip click -> jump to chat page and auto-send "XX的预期差" (chat:pending mechanism)
 function cls(v) { return v == null ? 'na' : v > 0 ? 'up' : 'down' }
 function fmtPct(v) { return v == null ? '—' : `${v > 0 ? '+' : ''}${v}%` }
 const TIER_CLS = { 强: 'strong', 中: 'mid', 弱: 'weak' }
@@ -151,7 +151,7 @@ export default function ChainView() {
     platformApi.chains()
       .then((r) => setChains(r.chains || []))
       .catch(() => {})
-    setActive(chainId)   // 自动切到新链 (analysis effect 触发)
+    setActive(chainId)   // auto-switch to the new chain (triggers the analysis effect)
   }
 
   useEffect(() => {
@@ -165,7 +165,7 @@ export default function ChainView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, refreshKey])
 
-  useEffect(() => () => stopAI(), []) // 离开页面中断 AI 流
+  useEffect(() => () => stopAI(), []) // abort the AI stream when leaving the page
 
   function stopAI() {
     aiRef.current?.abort()

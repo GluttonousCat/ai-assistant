@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { platformApi } from './platformApi'
 
-// 用户管理 (仅 admin): 账号列表 + 角色切换 (赋予/收回管理员)
+// User management (admin only): account list + role toggle (grant/revoke admin)
 export default function UserAdmin() {
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(true)

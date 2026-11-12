@@ -1,4 +1,4 @@
-// 实时监控页 (adminOnly): SSE 2s 一帧 — Agent 会话/漏斗/工具/LLM + PG 数据新鲜度
+// Real-time monitor page (adminOnly): one SSE frame every 2s — agent sessions/funnel/tools/LLM + PG data freshness
 import { useEffect, useRef, useState } from 'react'
 import { platformApi } from './platformApi'
 
@@ -52,7 +52,7 @@ export default function Monitor() {
         if (ev.state) setSt(ev.state)
       })
       streamRef.current = handle
-      // 流断开/服务重启后自动重连 (3s); 组件卸载或暂停时 stopped 拦住重连
+      // Auto-reconnect (3s) after stream drop/server restart; `stopped` blocks reconnection on unmount or pause
       const retry = (msg) => {
         if (stopped) return
         setErr(msg)

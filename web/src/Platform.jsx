@@ -3,23 +3,23 @@ import { platformApi, auth } from './platformApi'
 import AgentChat from './AgentChat'
 import Reports from './Reports'
 import ChainView from './ChainView'
-import App from './App' // 区间扫描看板 (原有页面, 仅 admin)
-import UserAdmin from './UserAdmin' // 用户管理 (仅 admin)
-import Monitor from './Monitor' // 实时监控 (Agent 会话/工具/LLM, 仅 admin)
+import App from './App' // range scanner dashboard (legacy page, admin only)
+import UserAdmin from './UserAdmin' // user management (admin only)
+import Monitor from './Monitor' // real-time monitor (agent sessions/tools/LLM, admin only)
 
-// 导航定义: adminOnly 的项非管理员置灰不可点
+// Navigation definition: items with adminOnly are greyed out and unclickable for non-admins
 const SUPER_ADMIN = 'Gluttonouscat'
 
 const NAV = [
   { key: 'chat', label: 'Agent', icon: '✦' },
   { key: 'chain', label: '产业链', icon: '⛓' },
   { key: 'reports', label: '研报中心', icon: '▤' },
-  { key: 'range', label: '区间看板', icon: '◫', adminOnly: true },      // admin 可见可点, user 置灰 🔒
+  { key: 'range', label: '区间看板', icon: '◫', adminOnly: true },      // clickable for admin, greyed out with 🔒 for user
   { key: 'monitor', label: '实时监控', icon: '◉', adminOnly: true },
-  { key: 'users', label: '用户管理', icon: '⚙', superOnly: true },       // 仅超级管理员渲染
+  { key: 'users', label: '用户管理', icon: '⚙', superOnly: true },       // rendered for super admin only
 ]
 
-// 平台主框架: 侧边导航 + 顶栏(用户信息/退出) + 角色门控
+// Platform shell: sidebar nav + top bar (user info/logout) + role gating
 export default function Platform({ user, onLogout }) {
   const [nav, setNav] = useState('chat')
   const isAdmin = user?.role === 'admin'
@@ -34,7 +34,7 @@ export default function Platform({ user, onLogout }) {
   useEffect(() => {
     const hash = window.location.hash.replace('#', '')
     const target = NAV.find((n) => n.key === hash)
-    // 权限不足的 hash 直达 (adminOnly/superOnly) -> 回落对话页
+    // Direct hash navigation to an under-privileged target (adminOnly/superOnly) -> fall back to chat page
     if (target && !(target.adminOnly && !isAdmin) && !(target.superOnly && !isSuper)) {
       setNav(hash)
     }
@@ -94,7 +94,7 @@ export default function Platform({ user, onLogout }) {
   )
 }
 
-// 持久登录态检查
+// Persistent login session check
 export function useSession() {
   const [user, setUser] = useState(null)
   const [checked, setChecked] = useState(false)

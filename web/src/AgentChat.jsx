@@ -10,7 +10,7 @@ const EXAMPLES = [
   { icon: '🛡️', text: '中际旭创有没有财务风险' },
 ]
 
-// 回答类型徽章: SSE data 事件携带 intent, 前端按类型显示图标
+// Answer type badge: SSE data events carry intent; frontend shows an icon per type
 const INTENT_META = {
   agent: { icon: '🤖', label: 'Agent' },
   query: { icon: '📊', label: '财务数据' },
@@ -29,13 +29,13 @@ function fmtCell(v) {
   const n = parseNum(v)
   if (n !== null) {
     if (Math.abs(n) >= 1000) return n.toLocaleString('zh-CN', { maximumFractionDigits: 2 })
-    return String(parseFloat(n.toFixed(4))) // 去掉浮点尾噪
+    return String(parseFloat(n.toFixed(4))) // strip floating-point trailing noise
   }
   return String(v)
 }
 
-// 结果呈现: 可视化优先 (折线/柱状), 不可图示时回退精简表格
-// 单值列 (股票名/报告期) 折叠为标题; ts_code 一律隐藏
+// Result presentation: visualization first (line/bar chart), fall back to a compact table when not chartable
+// Single-valued columns (stock name / report period) collapse into the caption; ts_code is always hidden
 function resultView(m) {
   const cols = (m.columns || []).filter((c) => c !== 'ts_code')
   if (!m.data?.length) return null
@@ -54,21 +54,22 @@ function resultView(m) {
   return { caption, columns: show }
 }
 
-// Agent 对话: 自然语言 -> Agent 自主决策+工具循环 (SSE 流式输出, 支持多轮追问)
+// Agent chat: natural language -> agent autonomous decision + tool loop (SSE streaming output, multi-turn follow-ups supported)
 export default function AgentChat() {
   const [messages, setMessages] = useState([]) // {role, text, data?, columns?, stage?, intent?}
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [atBottom, setAtBottom] = useState(true)
   const scrollRef = useRef(null)
-  const stickRef = useRef(true) // 用户贴底时跟随新内容, 上翻查看时不打扰
-  // 会话 ID: 每次进入页面生成一次, 全程携带 — 服务端据此注入多轮历史 (追问可省略主语)
+  const stickRef = useRef(true) // follow new content while user is at bottom; don't disturb while scrolled up
+  // Session ID: generated once on page entry and carried throughout — server injects multi-turn history from it
+  // (follow-ups may omit the subject)
   const sessionRef = useRef(null)
   if (!sessionRef.current) {
     sessionRef.current = 'web-' + (crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`)
   }
 
-  // 跨页联动: 其他页面 (如产业链页标的 chip) 写入 chat:pending 后跳转过来, 自动发出提问
+  // Cross-page linkage: other pages (e.g. chain-view stock chips) write chat:pending then jump here, auto-sending the question
   useEffect(() => {
     const pending = sessionStorage.getItem('chat:pending')
     if (pending) {
@@ -85,7 +86,7 @@ export default function AgentChat() {
     el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' })
   }
 
-  // 流式输出时贴底跟随; 用户上翻后不再强制拉回
+  // Stick to bottom while streaming; stop forcing back down once the user scrolls up
   useEffect(() => {
     if (stickRef.current) {
       const el = scrollRef.current
@@ -109,7 +110,7 @@ export default function AgentChat() {
     setMessages((m) => [...m, { role: 'user', text: q }])
     setBusy(true)
 
-    // 流式消息: text 逐块增长, stage 显示当前阶段
+    // Streaming message: text grows chunk by chunk, stage shows the current phase
     setMessages((m) => [...m, { role: 'assistant', text: '', stage: '' }])
 
     const updateLast = (fn) => {
@@ -124,9 +125,9 @@ export default function AgentChat() {
       await platformApi.agentStream(q, sessionRef.current, (ev) => {
         if (ev.type === 'stage') {
           updateLast((msg) => {
-            // 首个 stage "意图识别: X" 提前确定回答类型 (徽章即时显示)
+            // First stage "意图识别: X" determines the answer type early (badge shows immediately)
             const im = /^意图识别:\s*(\w+)/.exec(ev.message || '')
-            // 步骤卡片: 已有步骤标 ok, 新步骤 active; batch=决策轮号(并行分组用)
+            // Step cards: existing steps marked ok, new step active; batch = decision round number (for parallel grouping)
             const stages = [
               ...(msg.stages || []).map((s) => ({ ...s, ok: true })),
               { message: ev.message, batch: ev.batch, batchSize: ev.batch_size, ok: false },
@@ -134,7 +135,7 @@ export default function AgentChat() {
             return { ...msg, stage: ev.message, stages, intent: im ? im[1] : msg.intent }
           })
         } else if (ev.type === 'tool_call') {
-          // 工具执行完: 按 同轮+同名 匹配步骤补耗时/行数, 失败标红
+          // Tool finished: match step by same-batch + same-name to fill in elapsed/rows; mark red on failure
           updateLast((msg) => {
             const stages = (msg.stages || []).slice()
             const prefix = `调用 ${ev.tool}(`
@@ -151,7 +152,7 @@ export default function AgentChat() {
             return { ...msg, stages }
           })
         } else if (ev.type === 'data') {
-          // 表格型结果累积为卡片流 (复合回答可能多张图表, 保留最近 4 张)
+          // Tabular results accumulate into a card stream (compound answers may yield multiple charts; keep last 4)
           updateLast((msg) => ({
             ...msg,
             intent: msg.intent || ev.intent,
@@ -205,7 +206,7 @@ export default function AgentChat() {
 
         {messages.map((m, i) => {
           const streaming = busy && i === messages.length - 1 && m.role === 'assistant'
-          // 结果卡片流: agent 复合回答可能产生多张表格/图表 (保留最近 4 张)
+          // Result card stream: agent compound answers may produce multiple tables/charts (keep last 4)
           const blocks = m.role === 'assistant'
             ? (m.tables?.length
                 ? m.tables
@@ -228,7 +229,7 @@ export default function AgentChat() {
                     {m.stages?.length > 0 ? (
                       <div className="agent-steps">
                         {m.stages.map((s, j) => {
-                          // 同轮(>1个调用)为并行批: 首条前加 ⚡并行×N 标签, 批内缩进
+                          // Same batch (>1 call) is a parallel group: prefix the first entry with a ⚡并行×N label, indent within the batch
                           const prev = m.stages[j - 1]
                           const parallel = s.batch != null && s.batchSize > 1
                           const firstOfBatch = parallel && (!prev || prev.batch !== s.batch)

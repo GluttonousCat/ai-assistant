@@ -1,5 +1,5 @@
-// 轻量 markdown 渲染 (AgentChat / ChainView 共用):
-// 标题/加粗/列表/表格/段落 (表格行需连续 | 开头)
+// Lightweight markdown renderer (shared by AgentChat / ChainView):
+// headings/bold/lists/tables/paragraphs (table rows must be consecutive lines starting with |)
 export default function Markdownish({ text }) {
   const lines = (text || '').split('\n')
   const out = []
@@ -28,7 +28,7 @@ export default function Markdownish({ text }) {
   return out
 }
 
-// markdown 表格: | a | b | 行 + |---|---| 分隔行
+// Markdown table: rows like "| a | b |" plus a "|---|---|" separator row
 function MdTable({ block }) {
   const rows = block
     .filter((l) => !/^\|?[\s:|-]+\|?$/.test(l))

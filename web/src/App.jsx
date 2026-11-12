@@ -35,7 +35,7 @@ export default function App({ embedded = false }) {
   const [minScore, setMinScore] = useState(70)
   const [zoneFilter, setZoneFilter] = useState('all')
   const [riskFilter, setRiskFilter] = useState('all')
-  const [stateFilter, setStateFilter] = useState([])   // 多选: [] = 全部
+  const [stateFilter, setStateFilter] = useState([])   // multi-select: [] = all
   const [sortKey, setSortKey] = useState('range_score')
   const [sortDir, setSortDir] = useState(-1)
   const [chartSym, setChartSym] = useState(null)

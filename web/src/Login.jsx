@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import { platformApi, auth } from './platformApi'
 
-// 登录/注册页: 需要认证的平台入口
-// 校验规则: 用户名仅英文/数字/下划线且 >=6 位; 密码 >=8 位
+// Login/register page: authenticated platform entry
+// Validation rules: username must be alphanumeric/underscore only and >=6 chars; password >=8 chars
 const USERNAME_RE = /^[A-Za-z0-9_]{6,}$/
 
 export default function Login({ onLogin }) {
@@ -39,7 +39,7 @@ export default function Login({ onLogin }) {
         onLogin(res.user)
       } else {
         await platformApi.register(username.trim(), password, inviteCode.trim())
-        // 注册成功直接登录
+        // Log in immediately after successful registration
         const res = await platformApi.login(username.trim(), password)
         auth.save(res.token, res.user)
         onLogin(res.user)

@@ -6,8 +6,8 @@ const fmt = (v, d = 2) => (v === null || v === undefined || isNaN(v) ? '—' : N
 const pct = (v, d = 1) => (v === null || v === undefined || isNaN(v) ? '—' : `${(v * 100).toFixed(d)}%`)
 
 function scoreColor(s) {
-  if (s >= 75) return 'var(--up)'        // 已偏热
-  if (s >= 60) return 'var(--accent)'    // 黄金区间
+  if (s >= 75) return 'var(--up)'        // already overheated
+  if (s >= 60) return 'var(--accent)'    // golden zone
   if (s >= 55) return 'var(--gold)'
   return 'var(--text-dim)'
 }
@@ -23,8 +23,8 @@ export default function Setup({ onOpenChart, onDateChange }) {
   const [maxScore, setMaxScore] = useState(75)
   const [search, setSearch] = useState('')
   const [scanning, setScanning] = useState(false)
-  const [boardFilter, setBoardFilter] = useState([])   // 多选: [] = 全部
-  const [mvFilter, setMvFilter] = useState(false)      // true = 市值>100亿
+  const [boardFilter, setBoardFilter] = useState([])   // multi-select: [] = all
+  const [mvFilter, setMvFilter] = useState(false)      // true = market cap > 10B CNY
 
   useEffect(() => {
     api.setupMarket().then(setMarket).catch(() => {})
@@ -130,7 +130,7 @@ export default function Setup({ onOpenChart, onDateChange }) {
         </button>
       </div>
 
-      {/* 大盘状态条 */}
+      {/* Market status bar */}
       {market && (
         <div className="panel" style={{ margin: '0 28px 12px', padding: '12px 18px' }}>
           <div className="panel-title" style={{ marginBottom: 0 }}>

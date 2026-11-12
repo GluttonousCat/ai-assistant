@@ -1,4 +1,4 @@
-// range_trading 数据 API 客户端 (带 JWT 鉴权, 复用平台 token)
+// range_trading data API client (JWT-authenticated, reuses the platform token)
 import { auth } from './platformApi'
 
 const BASE = '/api/range'

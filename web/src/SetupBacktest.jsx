@@ -1,22 +1,21 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api } from './api'
 
-const fmt = (v, d = 2) => (v === null || v === undefined || isNaN(v) ? '—' : Number(v).toFixed(d))
 const pct = (v) => (v === null || v === undefined || isNaN(v) ? '—' : `${(v * 100).toFixed(1)}%`)
 const pct1 = (v) => (v === null || v === undefined || isNaN(v) ? '—' : `${(v * 100).toFixed(0)}%`)
 
-// 命中率折线图 (SVG): 逐日胜率 / 主升率
-// 大盘 × 策略对照图: 上证指数收盘 (右轴) vs 逐日胜率 (左轴)
+// Hit-rate line charts (SVG): daily win rate / surge rate
+// Market × strategy overlay: SSE (Shanghai Composite) close (right axis) vs daily win rate (left axis)
 function MarketVsRate({ byDay, shSeries, height = 200 }) {
   if (!byDay || byDay.length === 0 || !shSeries || shSeries.length === 0) {
     return <div className="empty">暂无指数数据</div>
   }
   const W = 760, H = height, P = { l: 44, r: 44, t: 14, b: 26 }
-  // 按日期对齐: 指数收盘取回测区间内
+  // Align by date: index closes taken within the backtest window
   const dates = byDay.map((d) => d.date)
   const shMap = {}
   for (const p of shSeries) shMap[p.t] = p.c
-  // 只保留回测区间内的指数点
+  // Keep only index points inside the backtest window
   const idxSeries = dates.map((d) => shMap[d]).filter((v) => v != null)
   const allIdx = idxSeries
   const maxI = Math.max(...allIdx), minI = Math.min(...allIdx)
@@ -38,7 +37,7 @@ function MarketVsRate({ byDay, shSeries, height = 200 }) {
           <text x={P.l - 5} y={yRate(g) + 4} fill="#8b949e" fontSize="9" textAnchor="end">{Math.round(g * 100)}%</text>
         </g>
       ))}
-      {/* 指数右轴刻度 */}
+      {/* Index right-axis ticks */}
       {[0, 0.5, 1].map((g) => (
         <text key={`r${g}`} x={W - P.r + 5} y={yIdx(minI + g * iRange) + 4} fill="#5b6470" fontSize="9">
           {Math.round(minI + g * iRange)}
@@ -87,7 +86,7 @@ function RateChart({ data, keyA, keyB, height = 190 }) {
   )
 }
 
-// 每日候选数柱状图
+// Daily candidate-count bar chart
 function NBar({ data, height = 150 }) {
   if (!data || data.length === 0) return <div className="empty">暂无数据</div>
   const W = 760, H = height, P = { l: 40, r: 14, t: 14, b: 26 }
@@ -160,7 +159,7 @@ export default function SetupBacktest({ onOpenChart }) {
             </div>
           )}
 
-          {/* 大盘指引 */}
+          {/* Market guidance */}
           {market && market.series && market.series['000001.SH'] && (
             <div className="panel" style={{ margin: '0 28px 16px' }}>
               <div className="panel-title">

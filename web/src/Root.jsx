@@ -1,9 +1,8 @@
-import { useState } from 'react'
 import Login from './Login.jsx'
 import Platform, { useSession } from './Platform.jsx'
 import { auth } from './platformApi'
 
-// 根组件: 有登录态 -> 平台; 无 -> 登录页
+// Root component: with a logged-in session -> platform; without -> login page
 export default function Root() {
   const { user, checked, setUser } = useSession()
 
