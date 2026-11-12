@@ -1,10 +1,10 @@
 # -*- encoding: utf-8 -*-
 """
-研报分析 Prompts (M4: 知识星球研报解读)
+Report analysis prompts (M4: zsxq report interpretation)
 """
 from __future__ import annotations
 
-# ---- 研报结构化提取 (单篇研报 -> JSON) ----
+# ---- Report structured extraction (single report -> JSON) ----
 REPORT_EXTRACT_PROMPT = """你是一名券商研报结构化提取引擎。从下面的研报文本中提取关键信息。
 
 【输出语言——最高优先级规则】无论研报原文是什么语言 (英文/日文/韩文等原版), 所有输出字段一律使用简体中文:
@@ -54,7 +54,7 @@ A 股 forecast 的 symbol 用 ts_code (如 600519.SH); 美股/港股用其代码
 研报文本 (可能截断):
 {report_text}"""
 
-# ---- 多篇研报综合解读 (某标的/主题的全部研报 -> 分析报告) ----
+# ---- Multi-report synthesis (all reports on a target/theme -> analysis report) ----
 REPORT_SUMMARY_PROMPT = """你是一名专业卖方研究分析师。基于下方关于同一标的或主题的多份研报提取结果, 撰写一份综合分析。
 
 要求:
@@ -68,7 +68,7 @@ REPORT_SUMMARY_PROMPT = """你是一名专业卖方研究分析师。基于下�
 
 用户补充问题 (可空, 若有则优先围绕它展开): {user_question}"""
 
-# ---- 单篇研报问答 ----
+# ---- Single report Q&A ----
 REPORT_QA_PROMPT = """你是一名研报解读助手。基于研报内容回答用户问题。
 
 要求: 只依据研报内容作答, 研报中没有的信息明确说"研报未提及"; 中文回答, 300 字以内。
@@ -79,7 +79,7 @@ REPORT_QA_PROMPT = """你是一名研报解读助手。基于研报内容回答�
 
 用户问题: {question}"""
 
-# ---- 研报正文中文翻译 (英文原版 → report_meta.content_text_cn) ----
+# ---- Report body Chinese translation (English original → report_meta.content_text_cn) ----
 TRANSLATE_PROMPT = """你是金融研报翻译引擎。把下面的研报正文片段完整译成简体中文, 逐段对应, 不遗漏不增译:
 - 机构名用中文通用名: J.P. Morgan→摩根大通, Morgan Stanley→摩根士丹利, Goldman Sachs→高盛,
   UBS→瑞银, Bernstein→伯恩斯坦, BofA→美银证券, Nomura→野村, TSMC→台积电;
@@ -91,7 +91,7 @@ TRANSLATE_PROMPT = """你是金融研报翻译引擎。把下面的研报正文�
 正文片段:
 {text}"""
 
-# 视觉 OCR 版式要求 (金融研报; 供 tools/pdf/ocr.py 的 prompt 注入)
+# Vision OCR layout requirements (financial reports; injected into the prompt used by tools/pdf/ocr.py)
 VISION_OCR_PROMPT = (
     "你是金融研报 OCR 引擎。逐字提取图片中的全部内容, 保持原始顺序:\n"
     "- 正文、标题、要点符号 (■/●) 完整保留\n"

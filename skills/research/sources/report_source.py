@@ -1,26 +1,33 @@
 # -*- encoding: utf-8 -*-
 """
-T04 · 研报观点与主张抽取 (Stage 1 证据层, 任务: docs/research/tasks/T04_研报观点与主张抽取.md)
+T04 · research-report view and claim extraction (Stage 1 evidence layer; task:
+docs/research/tasks/T04_研报观点与主张抽取.md)
 
-把研报库中对某公司的**观点**整理为 View 分片 (output/research/<ts_code>/views_reports.json)。
-观点永远不是事实 — org+publish_date 是观点的身份证 (三层分离契约见 skills/research/contracts)。
+Organizes the report library's **views** on a company into a View shard
+(output/research/<ts_code>/views_reports.json). A view is never a fact — org+publish_date
+is a view's identity card (three-layer separation contract in skills/research/contracts).
 
-数据通路: 只走 harness.mcp 注册表, 禁直连 SQL:
-  search_reports (检索清单) → read_report (单篇: 结构化 analysis 优先, 缺核心观点时
-  以单篇问答兜底, 默认上限 6 篇) → get_forecasts (盈利预测时序+分歧度, 补齐表内预测)
+Data path: goes only through the harness.mcp registry, direct SQL forbidden:
+  search_reports (result list) -> read_report (per report: structured analysis preferred,
+  single-report QA as fallback when the core view is missing, default cap 6 reports)
+  -> get_forecasts (earnings-forecast time series + divergence, fills in table forecasts)
 
-View 分类 (category):
-  viewpoint  核心观点/要点转述 (analysis.core_view / key_points)
-  forecast   盈利预测 (必带期间与数值口径; analysis.forecasts / fin.report_forecast)
-  rating     评级/目标价 (analysis.rating / target_price 预测)
-  risk       风险提示 (analysis.risks)
+View categories (category):
+  viewpoint  core view / key-point paraphrase (analysis.core_view / key_points)
+  forecast   earnings forecast (period and value caliber mandatory; analysis.forecasts / fin.report_forecast)
+  rating     rating / target price (analysis.rating / target_price forecast)
+  risk       risk warnings (analysis.risks)
 
-冲突观点都保留 (多来源交叉, 冲突本身是信息, 不做仲裁);
-org 经 core.helpers.normalize_org_name 归一 (英文投行名→中文通用名);
-vid = R:<report_id>.<seq> (同一篇内按 核心观点→要点→评级/目标价→预测→风险 顺序编号)。
-主标的判定 (analysis.ts_codes 优先, 标题/绑定标的/公司名兜底): 检索可能经 tags 命中
-非主标的报告 (如五粮液报告出现在茅台检索), 其观点加「【主标的名】」前缀标注归属,
-防止评级/预测数值被误引到目标公司 — 前缀只加归属, 不改原文口径。
+Conflicting views are all kept (multi-source cross-checking; the conflict itself is
+information, no arbitration); org normalized via core.helpers.normalize_org_name
+(English investment-bank names -> common Chinese names); vid = R:<report_id>.<seq>
+(numbered within one report in core-view -> key-points -> rating/target-price ->
+forecast -> risk order). Primary-subject detection (analysis.ts_codes first, with
+title/bound-target/company-name fallbacks): a search may hit non-primary reports via
+tags (e.g. a Wuliangye report appearing in a Moutai search); their views carry a
+「【primary subject name】」prefix to mark attribution so ratings/forecast numbers are
+never misattributed to the target company — the prefix only marks ownership, never
+changes the original caliber.
 
 CLI: python -m skills.research.sources.report_source 贵州茅台 [--days 365] [--qa 6]
 """
@@ -43,10 +50,10 @@ from skills.research.contracts import (
 
 log = get_logger(__name__)
 
-# View 分类闭集 (T04 任务定义)
+# Closed set of view categories (T04 task definition)
 CATEGORIES = ("viewpoint", "forecast", "rating", "risk")
 
-# 盈利预测 metric -> 中文名 (report_forecast.forecast_type / analysis.forecasts.metric)
+# earnings-forecast metric -> Chinese name (report_forecast.forecast_type / analysis.forecasts.metric)
 _METRIC_CN = {
     "revenue": "营业收入",
     "net_profit": "净利润",
@@ -56,7 +63,8 @@ _METRIC_CN = {
     "gross_margin": "毛利率",
 }
 
-# 单篇问答兜底的提问 (read_report question 参数; 要求逐行带标签, 便于确定性解析)
+# Question for the single-report QA fallback (read_report question parameter; asks for one
+# labeled item per line, easing deterministic parsing)
 _QA_QUESTION = (
     "请从这篇研报中提取观点并逐行输出, 每行一项, 格式为「标签: 内容」。"
     "标签只能取: 核心观点/评级/目标价/盈利预测/风险。"
@@ -67,10 +75,10 @@ _QA_QUESTION = (
 _VID_RE = re.compile(r"^R:\d+\.\d+$")
 
 
-# ---------- 纯函数 (离线可测) ----------
+# ---------- pure functions (offline testable) ----------
 
 def _fmt_num(v: Any) -> str:
-    """数值转陈述友好的字符串 (整数值去 .0, 其余原样)"""
+    """Number -> statement-friendly string (drop .0 on integral floats, else verbatim)"""
     if v is None:
         return ""
     if isinstance(v, float) and v.is_integer():
@@ -79,8 +87,9 @@ def _fmt_num(v: Any) -> str:
 
 
 def norm_period(p: str) -> str:
-    """预测期间归一: 'NA'→''; '2026E' 在契约 valid_period 不认 E 后缀时降级 '2026'
-    (估计口径由 statement 原文保留; 契约后续若扩展 YYYYE 则自动保留 E)。"""
+    """Forecast-period normalization: 'NA'->''; '2026E' downgrades to '2026' while the
+    contract's valid_period doesn't accept the E suffix (the estimate caliber survives in
+    the statement's wording; if the contract later extends to YYYYE, E is kept automatically)."""
     p = (p or "").strip()
     if not p or p.upper() == "NA":
         return ""
@@ -95,22 +104,23 @@ def norm_period(p: str) -> str:
 
 
 def _forecast_parts(fc: Dict[str, Any]):
-    """analysis.forecasts 单条 -> (category, statement, period); 口径不全则 (None,..) 丢弃。
-    raw_text 是入库时 LLM 的中文转述 (期间+数值+单位自含), 优先原样保留。"""
+    """One analysis.forecasts entry -> (category, statement, period); if the caliber is
+    incomplete -> (None,..) dropped. raw_text is the LLM's Chinese paraphrase stored at
+    ingestion (period+value+unit self-contained); kept verbatim when present."""
     metric = str(fc.get("metric") or "").strip()
     period = norm_period(str(fc.get("period") or "").strip())
     value, unit = fc.get("value"), str(fc.get("unit") or "").strip()
     raw = str(fc.get("raw_text") or "").strip()
     is_tp = metric == "target_price"
     if not is_tp and not period and raw:
-        pm = re.search(r"20\d{2}", raw)     # 期间缺失时从转述原文抽年份兜底
+        pm = re.search(r"20\d{2}", raw)     # period missing: fall back to extracting a year from the paraphrase
         period = norm_period(pm.group(0)) if pm else ""
     if not is_tp and not period:
-        return (None, "", "")               # forecast 必带期间, 缺则丢弃
+        return (None, "", "")               # a forecast must carry a period; drop otherwise
     if raw:
         return ("rating" if is_tp else "forecast", raw, "" if is_tp else period)
     if value is None or not unit:
-        return (None, "", "")   # 数值口径不完整, 宁缺毋滥
+        return (None, "", "")   # numeric caliber incomplete — better missing than wrong
     stmt = (f"目标价 {_fmt_num(value)}{unit}" if is_tp
             else f"预计 {period} {_METRIC_CN.get(metric, metric)}{_fmt_num(value)}{unit}")
     return ("rating" if is_tp else "forecast", stmt, "" if is_tp else period)
@@ -118,11 +128,13 @@ def _forecast_parts(fc: Dict[str, Any]):
 
 def _context_prefix(detail: Optional[Dict[str, Any]], brief: Dict[str, Any],
                     ts_code: str, name: str) -> str:
-    """主标的判定: 研报可能经 tags 命中检索而非主标的 (如五粮液报告出现在茅台检索里,
-    其评级/预测数值属于五粮液)。主标的报告返回 ''; 非主标的返回语句前缀
-    「【主标的名】」— 标注归属防误引, 不改原文口径。判定链:
-    analysis.ts_codes 含目标代码 → 主标的; 否则 标题/绑定标的/公司名含目标名 → 主标的;
-    均无法判定 → 「【关联提及】」。"""
+    """Primary-subject detection: a report may hit the search via tags rather than being a
+    primary subject (e.g. a Wuliangye report inside a Moutai search — its rating/forecast
+    numbers belong to Wuliangye). Primary-subject reports return ''; others return a
+    statement prefix「【primary subject name】」— marking attribution prevents
+    misattribution without changing the original caliber. Decision chain:
+    analysis.ts_codes contains the target code -> primary; else title/bound-target/
+    company-name contains the target name -> primary; undecidable ->「【关联提及】」."""
     detail = detail or {}
     analysis = detail.get("analysis") or {}
     bare = (ts_code or "").split(".")[0]
@@ -143,11 +155,13 @@ def _context_prefix(detail: Optional[Dict[str, Any]], brief: Dict[str, Any],
 def build_views_from_report(detail: Optional[Dict[str, Any]], brief: Dict[str, Any],
                             ts_code: str = "", max_points: int = 4,
                             max_risks: int = 2, context_prefix: str = "") -> List[View]:
-    """read_report 返回体 (或仅 search 清单 brief) -> 该篇的 View 列表 (vid 留空, 统一分配)。
+    """read_report response body (or just the search-list brief) -> that report's View
+    list (vid left empty, assigned uniformly).
 
-    顺序: 核心观点 → 要点(截断) → 评级 → 预测(目标价归 rating) → 风险(截断);
-    篇内 (category, statement) 重复丢弃。org 一律归一;
-    context_prefix 为非主标的报告的归属前缀 (见 _context_prefix)。"""
+    Order: core view -> key points (truncated) -> rating -> forecasts (target price goes
+    to rating) -> risks (truncated); within one report, duplicate (category, statement)
+    dropped. org always normalized; context_prefix is the attribution prefix for
+    non-primary-subject reports (see _context_prefix)."""
     detail = detail or {}
     rid = int(detail.get("report_id") or brief.get("report_id") or 0)
     org = normalize_org_name(str(detail.get("org") or brief.get("org") or ""))
@@ -177,7 +191,7 @@ def build_views_from_report(detail: Optional[Dict[str, Any]], brief: Dict[str, A
     views, seen = [], set()
     for cat, stmt, period in pieces:
         if not stmt or not date or not org:
-            continue    # 观点缺机构/日期即失身份证, 不产出
+            continue    # a view without org/date loses its identity card; not emitted
         key = (cat, stmt)
         if key in seen:
             continue
@@ -189,7 +203,7 @@ def build_views_from_report(detail: Optional[Dict[str, Any]], brief: Dict[str, A
 
 
 def build_forecast_view(row: Dict[str, Any], ts_code: str = "") -> Optional[View]:
-    """get_forecasts.recent_forecasts 单行 (report_forecast 表) -> forecast/rating View"""
+    """One get_forecasts.recent_forecasts row (report_forecast table) -> forecast/rating View"""
     try:
         rid = int(row.get("report_id") or 0)
     except (TypeError, ValueError):
@@ -203,7 +217,7 @@ def build_forecast_view(row: Dict[str, Any], ts_code: str = "") -> Optional[View
         return None
     metric = _METRIC_CN.get(ftype, ftype or "指标")
     if ftype != "target_price" and not period:
-        return None                         # forecast 必带期间
+        return None                         # a forecast must carry a period
     if ftype == "target_price":
         return View(vid="", statement=f"目标价 {_fmt_num(value)}{unit}", org=org,
                     publish_date=date, report_id=rid, layer="view", ts_code=ts_code,
@@ -213,7 +227,7 @@ def build_forecast_view(row: Dict[str, Any], ts_code: str = "") -> Optional[View
                 ts_code=ts_code, period=period, category="forecast")
 
 
-# 问答兜底输出的行标签 -> 分类 (长标签在前防误配)
+# QA-fallback line labels -> category (longer labels first to prevent mis-matching)
 _QA_LABELS = [("核心观点", "viewpoint"), ("盈利预测", "forecast"), ("目标价", "rating"),
               ("评级", "rating"), ("风险", "risk"), ("观点", "viewpoint"),
               ("预测", "forecast")]
@@ -224,11 +238,12 @@ _QA_LINE_RE = re.compile(
 def parse_qa_views(answer: str, report_id: int, org: str, publish_date: str,
                    ts_code: str = "", max_views: int = 6,
                    context_prefix: str = "") -> List[View]:
-    """单篇问答的逐行回答 -> View 列表 (宽容解析: 剥 bullets/序号, 未提及跳过)"""
+    """Single-report QA line-by-line answer -> View list (lenient parsing: strip
+    bullets/numbering, skip not-mentioned lines)"""
     org = normalize_org_name(str(org or ""))
     views: List[View] = []
     if not org or not str(publish_date or "").strip():
-        return views                        # 观点缺机构/日期即失身份证, 不产出
+        return views                        # a view without org/date loses its identity card; not emitted
     for line in (answer or "").splitlines():
         s = re.sub(r"^[\s\-–—*•·]+", "", line.strip())
         s = re.sub(r"^\d+\s*[.、)．]\s*", "", s, count=1).strip()
@@ -240,7 +255,7 @@ def parse_qa_views(answer: str, report_id: int, org: str, publish_date: str,
         label, content = m.group(1), m.group(2).strip()
         if not content:
             continue
-        if label == "目标价":             # 保持单句自含, 脱离上下文仍可读
+        if label == "目标价":             # keep the sentence self-contained, readable out of context
             content = f"目标价 {content}"
         elif label == "评级":
             content = f"评级为「{content}」"
@@ -264,7 +279,7 @@ def parse_qa_views(answer: str, report_id: int, org: str, publish_date: str,
 
 
 def finalize_vids(views: List[View]) -> List[View]:
-    """按列表顺序分配 vid = R:<report_id>.<seq> (同一篇内从 1 递增, 跨篇独立)"""
+    """Assign vid = R:<report_id>.<seq> in list order (increments from 1 within a report, independent across reports)"""
     seq: Dict[int, int] = {}
     for v in views:
         rid = int(v.report_id or 0)
@@ -274,9 +289,10 @@ def finalize_vids(views: List[View]) -> List[View]:
 
 
 def validate_views(views: List[View]) -> List[str]:
-    """T04 语义自检 (T01 validate_shard 之外的分类/口径规则), 返回问题清单 (空=通过):
-    category 闭集; forecast 必带 period 且 statement 含数字; vid 格式与唯一;
-    statement/org 非空。"""
+    """T04 semantic self-check (category/caliber rules beyond T01's validate_shard);
+    returns the problem list (empty = pass): category within the closed set; forecast
+    must carry a period and its statement contain digits; vid format and uniqueness;
+    statement/org non-empty."""
     problems: List[str] = []
     seen = set()
     for i, v in enumerate(views):
@@ -300,7 +316,7 @@ def validate_views(views: List[View]) -> List[str]:
     return problems
 
 
-# ---------- 编排 (走 MCP 注册表) ----------
+# ---------- orchestration (via the MCP registry) ----------
 
 def _mcp():
     from harness.mcp import get_registry
@@ -308,7 +324,7 @@ def _mcp():
 
 
 def _call(reg, name: str, **kwargs) -> Optional[Dict[str, Any]]:
-    """MCP 统一调用; 失败记日志返回 None (单篇失败不拖垮整批)"""
+    """Unified MCP call; log failures and return None (one report failing must not sink the batch)"""
     env = reg.call(name, {k: v for k, v in kwargs.items() if v is not None})
     if not env.get("ok"):
         log.warning("MCP %s(%s) 失败: %s", name, kwargs, env.get("error"))
@@ -317,18 +333,21 @@ def _call(reg, name: str, **kwargs) -> Optional[Dict[str, Any]]:
 
 
 def _dup_forecast(views: List[View], rid: int, period: str, metric_cn: str) -> bool:
-    """同篇同期间同指标的预测是否已存在 (statement 内含指标词判重, 兼容 raw_text 转述)"""
+    """Whether a forecast of the same report+period+metric already exists (dup detection
+    via the metric word inside the statement, compatible with raw_text paraphrases)"""
     return any(v.category == "forecast" and v.report_id == rid
                and v.period == period and metric_cn in v.statement for v in views)
 
 
 def collect_report_views(stock: str, days: int = 365, out_dir: Path | None = None,
                          limit: int = 30, qa_fallback: int = 6) -> EvidenceShard:
-    """收集某股票近 N 天研报观点 -> View 分片并落盘 views_reports.json。
+    """Collect a stock's research-report views from the last N days -> a View shard
+    persisted as views_reports.json.
 
-    stock: 股票名或代码; days: 回看天数; out_dir: 输出目录
-    (默认 output/research/<ts_code>/); limit: 检索篇数上限 (MCP 上限 30);
-    qa_fallback: 结构化 analysis 缺核心观点时单篇问答兜底的篇数上限 (0=关闭)。
+    stock: stock name or code; days: look-back days; out_dir: output directory
+    (default output/research/<ts_code>/); limit: search report-count cap (MCP cap 30);
+    qa_fallback: cap on single-report QA fallbacks when structured analysis lacks a core
+    view (0 = disabled).
     """
     reg = _mcp()
 
@@ -369,7 +388,8 @@ def collect_report_views(stock: str, days: int = 365, out_dir: Path | None = Non
                                           ts_code=ts_code, context_prefix=prefix)
         views += got
 
-    # report_forecast 表补齐: 同篇同期间同指标未覆盖才补 (含 search 窗口外的旧预测)
+    # report_forecast table fill-in: only fill same report+period+metric gaps (includes
+    # older forecasts outside the search window)
     for row in fc.get("recent_forecasts") or []:
         v = build_forecast_view(row, ts_code=ts_code)
         if v is None:
@@ -381,7 +401,8 @@ def collect_report_views(stock: str, days: int = 365, out_dir: Path | None = Non
                 continue
         views.append(v)
 
-    # 收尾: 篇内口径去重 -> 补 ts_code -> 分配 vid -> 契约/语义双校验
+    # wrap-up: dedupe by caliber within a report -> fill ts_code -> assign vids ->
+    # dual contract/semantic validation
     dedup, seen = [], set()
     for v in views:
         if not v.ts_code:
@@ -425,7 +446,8 @@ def collect_report_views(stock: str, days: int = 365, out_dir: Path | None = Non
 
 
 def shard_probe(views: List[View], ts_code: str) -> EvidenceShard:
-    """为契约校验器组装临时分片 (collect 内部用, 避免先建 shard 再改 views)"""
+    """Assemble a temporary shard for the contract validator (used inside collect; avoids
+    building the shard first and then mutating views)"""
     return EvidenceShard(kind="reports", ts_code=ts_code, views=views)
 
 

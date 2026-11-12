@@ -1,16 +1,17 @@
 """
-规则查询引擎 (Rule Query Engine)
-基于 StockKB 词典匹配 + SQL 模板拼接, 覆盖封闭域固定句式
+Rule query engine
+StockKB dictionary matching + SQL template stitching; covers fixed closed-domain phrasings
 
-三态返回:
+Three-state return:
 - ("sql", sql, meta)
-- ("unsupported", None)   -> 规则不支持, 交棒 LLM
-- ("error", None)         -> 词典可用但参数异常 (如股票不存在)
+- ("unsupported", None)   -> rule does not apply, hand off to the LLM
+- ("error", None)         -> dictionary usable but bad parameters (e.g. stock not found)
 
-能力:
-- 单股单指标 [时间] 查询 (时间含 年报/季报/半年报/去年/最近N年)
-- 单股多指标 (最多 3 列, 不再丢弃后续指标)
-- 多股同指标对比 (识别 "和/与/、/谁更高")
+Capabilities:
+- Single stock, single metric [time] query (time covers annual/quarterly/semi-annual
+  reports / last year / last N years)
+- Single stock, multiple metrics (up to 3 columns; later metrics are no longer dropped)
+- Multiple stocks, same metric comparison (recognizes "和/与/、/谁更高")
 """
 from __future__ import annotations
 
@@ -21,14 +22,14 @@ from typing import Dict, List, Optional, Tuple
 from tools.finance.stock_kb import get_stock_kb, parse_time_phrase
 from tools.finance.sql_builder import build_single_query, build_compare_query
 
-# 动作词 (统一清理)
+# Action words (stripped uniformly)
 _ACTION_WORDS = [
     "帮我查一下", "帮我查询", "帮我查", "请问", "查一下", "查一查",
     "查询", "看看", "查看", "请查", "帮我", "请", "查", "看",
     "的", "、", "和", "与", "哪个", "谁", "更高", "更高", "对比", "比较",
     "最近", "最新", "近",
 ]
-# 时间词 (统一清理)
+# Time words (stripped uniformly)
 _TIME_WORDS = [
     "最近一年", "最近两年", "最近三年", "近一年", "近两年", "近三年",
     "今年以来", "去年", "今年", "上季度", "本季度",
@@ -36,7 +37,7 @@ _TIME_WORDS = [
 
 
 def _clean_entity_text(text: str) -> str:
-    """清理文本中的动作词/连接词/时间词"""
+    """Strip action/connective/time words from the text"""
     t = text
     for w in _ACTION_WORDS:
         t = t.replace(w, "")
@@ -46,7 +47,7 @@ def _clean_entity_text(text: str) -> str:
     return t.strip()
 
 
-# 排名/筛选句式 (全市场或行业)
+# Ranking/filtering patterns (whole market or industry)
 _TOP_N_PAT = re.compile(
     r"最高的?\s*(\d{1,3})\s*[家只个股]?\s*$|排名前\s*(\d{1,3})|前\s*(\d{1,3})\s*名|top\s*(\d{1,3})",
     re.IGNORECASE,
@@ -63,7 +64,7 @@ _COND_OP_MAP = {
 
 
 def _parse_rank_params(text: str) -> Optional[Dict]:
-    """解析排名/筛选参数. 返回 {top_n, op, value} 或 None (非排名/筛选句)"""
+    """Parse ranking/filtering parameters. Returns {top_n, op, value} or None (not a ranking/filtering phrase)"""
     top_n, op, value = None, None, None
     m = _COND_PAT.search(text)
     if m:
@@ -78,42 +79,43 @@ def _parse_rank_params(text: str) -> Optional[Dict]:
 
 
 class RuleEngine:
-    """规则查询引擎"""
+    """Rule query engine"""
 
     def __init__(self):
         self.kb = get_stock_kb()
-        self.kb.load()  # 确保词典已加载
+        self.kb.load()  # ensure the dictionary is loaded
 
     def parse(self, user_input: str, context_stocks: Optional[List[Tuple[str, str]]] = None):
         """
-        解析查询 -> SQL
-        context_stocks: 会话上轮股票 [(ts_code, name)], 当前句省略主语时继承
-        返回 (sql, meta_dict) 或 (None, {"reason": "unsupported"|"error"})
+        Parse a query -> SQL
+        context_stocks: stocks from the previous conversation turn [(ts_code, name)];
+        inherited when the current phrase omits the subject
+        Returns (sql, meta_dict) or (None, {"reason": "unsupported"|"error"})
         """
         text = user_input.strip()
         if not text:
             return None, {"reason": "unsupported"}
 
-        # 1. 股票实体 (可能多个: 对比)
+        # 1. Stock entities (possibly multiple: comparison)
         stocks = self._extract_stocks(text)
 
-        # 2. 指标实体 (可能多个: 多指标)
+        # 2. Metric entities (possibly multiple: multi-metric)
         metrics = self._extract_metrics(text)
 
-        # 3. 行业实体 ("XX行业的YY指标")
+        # 3. Industry entity ("YY metric of XX industry")
         industry = self.kb.match_industry(text)
 
         time_phrase = parse_time_phrase(text)
-        # 相对时间 -> 绝对年份 ("去年" = 上一年年报)
+        # Relative time -> absolute year ("去年" = previous year's annual report)
         if time_phrase and time_phrase[0] == "previous_year":
             time_phrase = ("year", date.today().year - 1)
         elif time_phrase and time_phrase[0] == "this_year":
-            # 今年尚未出年报, 退化为最新期
+            # No annual report for this year yet, degrade to the latest period
             time_phrase = ("recent", None)
 
         rank_params = _parse_rank_params(text)
 
-        # 无股票但有行业: 行业查询 / 行业排名 / 行业筛选
+        # No stock but an industry: industry query / industry ranking / industry filtering
         if not stocks and industry and metrics:
             from tools.finance.sql_builder import build_industry_query
             index_code, ind_name, level = industry
@@ -132,7 +134,7 @@ class RuleEngine:
                              "metric": field}
             return None, {"reason": "error"}
 
-        # 无股票但有指标 + 排名/筛选句式: 全市场排名
+        # No stock but a metric + ranking/filtering pattern: whole-market ranking
         if not stocks and metrics and rank_params:
             from tools.finance.sql_builder import build_rank_query
             field, prefix = metrics[0]
@@ -151,7 +153,8 @@ class RuleEngine:
                 return sql, meta
             return None, {"reason": "error"}
 
-        # 无股票 + 有指标 + 有会话上下文股票: 继承上轮主语 (追问场景)
+        # No stock + metric present + session context stocks: inherit the previous
+        # subject (follow-up question scenario)
         context_inherited = False
         if not stocks and metrics and context_stocks:
             stocks = list(context_stocks)[:2]
@@ -162,9 +165,9 @@ class RuleEngine:
         if not metrics:
             return None, {"reason": "unsupported", "missing": "metric"}
 
-        # 4. 意图: 对比 (>=2 股票) or 单股
+        # 4. Intent: comparison (>=2 stocks) or single stock
         if len(stocks) >= 2:
-            # 取第一个指标做对比
+            # Compare on the first metric
             field, prefix = metrics[0]
             sql = build_compare_query(stocks, field, prefix, time_phrase)
             if sql:
@@ -172,7 +175,7 @@ class RuleEngine:
                              "metric": field}
             return None, {"reason": "error"}
 
-        # 5. 单股: 单指标或多指标 (多列 SELECT, 不丢弃)
+        # 5. Single stock: single or multiple metrics (multi-column SELECT, nothing dropped)
         ts_code, name = stocks[0]
         field, prefix = metrics[0]
         extra = [m for m in metrics[1:3]]
@@ -187,39 +190,39 @@ class RuleEngine:
             return sql, meta
         return None, {"reason": "error"}
 
-    # ---------- 实体提取 ----------
+    # ---------- Entity extraction ----------
     def _extract_stocks(self, text: str) -> List[Tuple[str, str]]:
-        """提取文本中的所有股票 (ts_code, 标准名)"""
+        """Extract all stocks in the text (ts_code, canonical name)"""
         found: List[Tuple[str, str]] = []
-        # 方法: 对每个词典别名, 若在文本中且未被覆盖, 记录位置
-        # 简化: 匹配所有出现在文本中的别名, 去重
+        # Method: for each dictionary alias, record its position if present in the
+        # text and not yet covered
+        # Simplified: match every alias appearing in the text, dedupe
         codes_seen = set()
-        # 按别名长度降序, 优先长名 (全称 > 简称)
+        # Sort aliases by length descending, prefer long names (full name > short name)
         for alias, code in sorted(
             self.kb._stock_alias.items(), key=lambda x: -len(x[0])
         ):
             if code in codes_seen:
-                continue  # 同一股票只取一个别名
+                continue  # take only one alias per stock
             if alias and alias.lower() in text.lower():
-                # 记录该股票的标准名
+                # record the stock's canonical name
                 name = self.kb.get_name(code) or alias
                 found.append((code, name))
                 codes_seen.add(code)
-                # 匹配后从文本移除, 避免影响其他别名
-                text_clean = text
+                # remove the matched alias from the text so it cannot match other aliases
                 text = text.replace(alias, " ")
-                _ = text_clean
                 if len(found) >= 3:
                     break
         return found
 
     def _extract_metrics(self, text: str) -> List[Tuple[str, str]]:
-        """提取文本中的指标 (field, prefix), 最多 3 个.
-        按别名长度降序匹配, 已命中区间不再重复匹配
-        (避免 "赚了多少钱" 命中净利润后, 子串 "多少钱" 再命中股价)"""
+        """Extract metrics in the text (field, prefix), at most 3.
+        Match aliases by length descending; already-matched spans are not
+        re-matched (avoids "赚了多少钱" hitting net profit, then the substring
+        "多少钱" hitting stock price)"""
         found = []
         seen = set()
-        occupied = []  # 已占用字符区间 [(start, end), ...]
+        occupied = []  # occupied character spans [(start, end), ...]
         text_l = text.lower()
         for alias, (field, prefix) in sorted(
             self.kb.METRIC_ALIASES.items(), key=lambda x: -len(x[0])
@@ -231,17 +234,13 @@ class RuleEngine:
                 continue
             span = (idx, idx + len(alias))
             if any(s < span[1] and span[0] < e for s, e in occupied):
-                continue  # 与已命中区间重叠
+                continue  # overlaps an already-matched span
             found.append((field, prefix))
             seen.add((field, prefix))
             occupied.append(span)
             if len(found) >= 3:
                 break
         return found
-
-    def _extract_industry(self, text: str) -> Optional[Tuple[str, str, str]]:
-        """提取行业 (index_code, 行业名, level)"""
-        return self.kb.match_industry(text)
 
 
 _engine: Optional[RuleEngine] = None

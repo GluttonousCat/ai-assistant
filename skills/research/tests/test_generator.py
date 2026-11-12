@@ -1,13 +1,13 @@
 # -*- encoding: utf-8 -*-
-"""T06 草稿生成器测试 — 全部离线: 注入 FakeLLM, 不连真实模型/DB。
+"""T06 draft-generator tests — fully offline: FakeLLM injected, no real model/DB.
 
-分组:
-  test_template      T05 提示词库契约 (10 章/假设章常量/文风内嵌)
-  test_select        wants 证据路由与未命中回退
-  test_digest        摘要化: 条数上限/期间排序/字符截断
-  test_resolve       股票名/代码 → 目录解析
-  test_parse_hyp     假设 JSON 宽容解析 (围栏/裸数组)
-  test_generate      端到端: 十章生成/失败跳过/重试/years 过滤/flags 落盘
+Groups:
+  test_template      T05 prompt-library contract (10 chapters / hypotheses-chapter constant / embedded style)
+  test_select        wants evidence routing and unmatched-category fallback
+  test_digest        digesting: item cap / period ordering / character truncation
+  test_resolve       stock name/code -> directory resolution
+  test_parse_hyp     lenient hypotheses-JSON parsing (fences / bare arrays)
+  test_generate      end to end: ten-chapter generation / failed-chapter skipping / retry / years filtering / flags persisted
 """
 import json
 import re
@@ -40,7 +40,7 @@ TUSHARE_FACTS = [
          source="fin.income.revenue", period="2025A", value=1741.0, unit="亿元"),
     Fact(eid="T:tushare.roe.2022A", content="2022年ROE为31.7%",
          source="fin.indicator.roe", period="2022A", value=31.7, unit="%"),
-    Fact(eid="T:tushare.roe.2019A", content="2019年ROE为33.1%",        # 回看窗口外, 应被过滤
+    Fact(eid="T:tushare.roe.2019A", content="2019年ROE为33.1%",        # outside the look-back window, must be filtered
          source="fin.indicator.roe", period="2019A", value=33.1, unit="%"),
 ]
 ANNUAL_FACTS = [
@@ -63,7 +63,7 @@ CH10_JSON = [{
 
 
 def _make_pack(d: Path, ts_code: str = "600519.SH", name: str = "贵州茅台") -> Path:
-    """写三源分片到 d (模拟 Stage 1 产物)。"""
+    """Write the three source shards into d (simulating Stage 1 output)."""
     save_shard(EvidenceShard(kind="tushare", ts_code=ts_code,
                              facts=PROFILE_FACTS + TUSHARE_FACTS,
                              meta={"name": name}), d / "facts_tushare.json")
@@ -75,7 +75,8 @@ def _make_pack(d: Path, ts_code: str = "600519.SH", name: str = "贵州茅台") 
 
 
 class FakeLLM:
-    """按章返回预置正文; 可注入失败章/前 N 次调用失败, 并记录 prompt 供断言。"""
+    """Returns preset bodies per chapter; can inject failing chapters / first-N-calls
+    failures, and records prompts for assertions."""
 
     def __init__(self, fail_nos=(), fail_first=0, hyp_with_json=True):
         self.fail_nos = set(fail_nos)
@@ -88,8 +89,8 @@ class FakeLLM:
         body = (f"### 第{no}章小节\n"
                 "2025年营业收入1741亿元[E:T:tushare.revenue.2025A]。"
                 "中金(2026-03-01)认为高端白酒需求稳健[V:R:101.1]。"
-                "净利润达862亿元。"                     # 无引用数字 → 应出 unverified-number
-                "本报告覆盖2021-2025年经营历史。")       # 纯年份 → 不应告警
+                "净利润达862亿元。"                     # uncited number -> should raise unverified-number
+                "本报告覆盖2021-2025年经营历史。")       # pure years -> must not warn
         if no == HYPOTHESES_CHAPTER_NO and self.hyp_with_json:
             body += "\n```json\n" + json.dumps(CH10_JSON, ensure_ascii=False) + "\n```"
         return body
@@ -106,7 +107,7 @@ class FakeLLM:
         return self._body(no)
 
 
-# ---------- 提示词库 (T05 真模块, generator 直接 import) ----------
+# ---------- prompt library (the real T05 module, imported directly by generator) ----------
 
 def test_chapters_template_contract():
     from skills.research.prompts_chapters import CHAPTERS, chapter_prompt
@@ -119,17 +120,17 @@ def test_chapters_template_contract():
     assert "三层分离" in STYLE_PROMPT and "[E:eid]" in STYLE_PROMPT and "待验证" in STYLE_PROMPT
     out = chapter_prompt(CHAPTERS[0], "事实摘要X", "观点摘要Y")
     assert "事实摘要X" in out and "观点摘要Y" in out and CHAPTERS[0]["question"] in out
-    assert STYLE_PROMPT.strip()[:60] in out                     # 文风已内嵌, generator 不再外拼
+    assert STYLE_PROMPT.strip()[:60] in out                     # style embedded; generator must not re-concatenate
     assert "研究假设" in chapter_prompt(CHAPTERS[HYPOTHESES_CHAPTER_NO - 1], "F", "V")
 
 
-# ---------- 证据路由 ----------
+# ---------- evidence routing ----------
 
 def test_select_for_want_categories():
     assert [f.eid for f in gen._select_for_want("profile", ALL_FACTS, VIEWS)[0]] == \
         ["T:profile.mainbiz.2025A", "T:profile.industry.2025A"]
     assert [f.eid for f in gen._select_for_want("mainbiz", ALL_FACTS, VIEWS)[0]] == \
-        ["T:profile.mainbiz.2025A"]                       # 指标 token 命中
+        ["T:profile.mainbiz.2025A"]                       # hit via the metric token
     assert [f.eid for f in gen._select_for_want("annual", ALL_FACTS, VIEWS)[0]] == \
         ["A:2025.mdna.1"]
     assert [f.eid for f in gen._select_for_want("tushare", ALL_FACTS, VIEWS)[0]] == \
@@ -149,20 +150,20 @@ def test_select_chapter_evidence_dedup_and_fallback():
     assert flags2 and flags2[0].startswith("evidence-route-fallback")
 
 
-# ---------- 摘要化 ----------
+# ---------- digesting ----------
 
 def test_build_digest_caps_and_order():
     facts = [Fact(eid=f"T:tushare.roe.{y}A", content=f"{y}年ROE为30%",
                   source="s", period=f"{y}A") for y in (2021, 2025, 2023)]
     ftext, vtext, flags = gen.build_digest(4, facts, VIEWS)
-    assert ftext.split("\n")[0].startswith("- [E:T:tushare.roe.2025A]")   # 新期间在前
+    assert ftext.split("\n")[0].startswith("- [E:T:tushare.roe.2025A]")   # newest period first
     assert "R:101.1" in vtext and flags == []
     many = facts + [Fact(eid=f"T:tushare.x.{i}", content=f"指标{i}为1亿元",
                          source="s", period="2025A") for i in range(100)]
     ftext, vtext, flags = gen.build_digest(4, many, VIEWS)
-    assert len(ftext.split("\n")) == gen.FACT_ITEM_CAP                       # 事实让位至 60
+    assert len(ftext.split("\n")) == gen.FACT_ITEM_CAP                       # facts yield down to 60
     assert any(f.startswith("digest-truncated") and "截断至 60" in f for f in flags)
-    assert len(vtext.split("\n")) == len(VIEWS)                              # 观点保底不被挤出
+    assert len(vtext.split("\n")) == len(VIEWS)                              # views keep their floor, never squeezed out
 
 
 def test_build_digest_char_cap():
@@ -172,7 +173,7 @@ def test_build_digest_char_cap():
     assert any(f.startswith("digest-too-long") for f in flags)
 
 
-# ---------- 股票/目录解析 ----------
+# ---------- stock / directory resolution ----------
 
 def test_resolve_stock(tmp_path):
     root = tmp_path / "out"
@@ -183,7 +184,7 @@ def test_resolve_stock(tmp_path):
     assert (ts2, rd2) == ("600519.SH", rd)
     _make_pack(root / "research" / "000858.SZ", ts_code="000858.SZ", name="五粮液")
     with pytest.raises(ValueError):
-        gen.resolve_stock("洋河股份", root)                  # 多目录且名称未命中
+        gen.resolve_stock("洋河股份", root)                  # multiple dirs and no name hit
     ts3, _, _ = gen.resolve_stock("五粮液", root)
     assert ts3 == "000858.SZ"
 
@@ -194,7 +195,7 @@ def test_resolve_stock_explicit_dir(tmp_path):
     assert (ts, name, rd) == ("600519.SH", "贵州茅台", d)
 
 
-# ---------- 假设解析 ----------
+# ---------- hypotheses parsing ----------
 
 def test_parse_hypotheses_fenced_and_bare():
     body, items = gen._parse_hypotheses(
@@ -210,7 +211,7 @@ def test_parse_hypotheses_none():
     assert items == [] and body == "只有正文, 没有假设。"
 
 
-# ---------- 端到端 (FakeLLM) ----------
+# ---------- end to end (FakeLLM) ----------
 
 def test_generate_draft_offline(tmp_path):
     d = _make_pack(tmp_path / "research" / "600519.SH")
@@ -222,19 +223,19 @@ def test_generate_draft_offline(tmp_path):
     assert "T:tushare.revenue.2025A" in ch1.used_eids and "R:101.1" in ch1.used_eids
     assert "本报告覆盖2021-2025年经营历史" in ch1.body_md
     assert len(llm.prompts) == 10 and "三层分离" in llm.prompts[0]
-    assert llm.prompts[0].count("三层分离") == 1    # T05 chapter_prompt 已内嵌文风, 不得重复拼接
-    assert "研究假设" in llm.prompts[HYPOTHESES_CHAPTER_NO - 1]   # 假设章 JSON 要求已随模板注入
-    assert all("T:tushare.roe.2019A" not in p for p in llm.prompts)   # 窗口外证据已过滤
-    # 假设回填: body 不再含 JSON 围栏
+    assert llm.prompts[0].count("三层分离") == 1    # T05 chapter_prompt already embeds the style; must not be concatenated twice
+    assert "研究假设" in llm.prompts[HYPOTHESES_CHAPTER_NO - 1]   # hypotheses-chapter JSON request injected with the template
+    assert all("T:tushare.roe.2019A" not in p for p in llm.prompts)   # out-of-window evidence filtered
+    # hypotheses backfill: body no longer contains the JSON fence
     assert len(draft.hypotheses) == 1
     h = draft.hypotheses[0]
     assert h.hid == "H1" and h.indicators and h.related_eids == ["T:tushare.revenue.2025A"]
-    assert "```" not in draft.chapters[HYPOTHESES_CHAPTER_NO - 1].body_md  # 假设章正文已剥离 JSON 围栏
-    # flags 机制: 无引用数字被点名, 合法引用不产生硬伤
+    assert "```" not in draft.chapters[HYPOTHESES_CHAPTER_NO - 1].body_md  # JSON fence stripped from the hypotheses chapter body
+    # flags mechanism: uncited numbers called out; legal citations produce no hard defects
     assert any(f.startswith("unverified-number") and "862" in f for f in draft.flags)
     assert not [f for f in draft.flags if f.startswith(("ghost-citation", "contract-invalid"))]
-    assert not [f for f in draft.flags if "2021-2025" in f]   # 纯年份句不误报
-    # 落盘可回读
+    assert not [f for f in draft.flags if "2021-2025" in f]   # pure-year sentence not falsely flagged
+    # persisted and re-readable
     loaded = load_draft(d / "draft.json")
     assert loaded.ts_code == "600519.SH" and loaded.name == "贵州茅台"
     assert len(loaded.chapters) == 10
@@ -259,9 +260,9 @@ def test_generate_draft_all_failed(tmp_path):
 
 def test_generate_draft_retry_recovers(tmp_path):
     d = _make_pack(tmp_path / "research" / "600519.SH")
-    llm = FakeLLM(fail_first=1)                              # 仅第 1 次调用失败
+    llm = FakeLLM(fail_first=1)                              # only the 1st call fails
     draft = gen.generate_draft("600519.SH", research_dir=d, llm=llm)
-    assert len(draft.chapters) == 10 and llm.calls == 11      # 第 1 章重试 1 次成功
+    assert len(draft.chapters) == 10 and llm.calls == 11      # chapter 1 succeeds on 1 retry
     assert not [f for f in draft.flags if f.startswith("chapter-failed")]
 
 

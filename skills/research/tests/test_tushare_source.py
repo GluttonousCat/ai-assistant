@@ -1,10 +1,11 @@
 # -*- encoding: utf-8 -*-
 """
-T02 离线测试: tushare_source 纯转换层 + 可注入取数 (不连 DB/LLM)
+T02 offline tests: tushare_source pure-conversion layer + injectable fetching (no DB/LLM)
 
-通过注入假画像 dict + FakeRegistry (仅响应 query_financials) 覆盖:
-分片结构 / eid 唯一 / source+period 非空 / 金额÷1e8 换算标注 /
-年报行优先 / 主营产品维度优先 / 观点板块排除 / 落盘 round-trip。
+Covers, by injecting a fake profile dict + FakeRegistry (answering only query_financials):
+shard structure / eid uniqueness / source+period non-empty / yuan-div-1e8 conversion
+annotation / annual-row preference / mainbiz product-dimension preference / view-section
+exclusion / on-disk round-trip.
 """
 from __future__ import annotations
 
@@ -21,7 +22,7 @@ from skills.research.sources.tushare_source import (
 
 YEARS = ["2021", "2022", "2023", "2024", "2025"]
 
-# 假财务时序 (数值编造, 只为验证转换逻辑; 元为原值单位)
+# fake financial time series (values made up, just to exercise the conversion logic; yuan is the raw unit)
 _FIN_BASE = {
     "2021": {"revenue": 109464000000.0, "n_income_attr_p": 52460000000.0,
              "grossprofit_margin": 91.54},
@@ -39,11 +40,12 @@ _FIN_BASE = {
 def _base_rows():
     rows = [{"stock_name": "贵州茅台", "end_date": f"{y}-12-31", **_FIN_BASE[y]}
             for y in YEARS]
-    # 深历史行 (断言时序截断到最近 years 个年报年度)
+    # deep-history row (asserts the series is clipped to the most recent `years` annual years)
     rows.append({"stock_name": "贵州茅台", "end_date": "2014-12-31",
                  "revenue": 32217000000.0, "n_income_attr_p": 15350000000.0,
                  "grossprofit_margin": 91.70})
-    # 同年多期: 2024 年插入一行中报 (断言年报行优先); 2026 年只有中报 (断言 H1 标签)
+    # same-year multi-period: a 2024 interim row (asserts annual-row preference);
+    # 2026 has only an interim row (asserts the H1 label)
     rows.append({"stock_name": "贵州茅台", "end_date": "2024-06-30",
                  "revenue": 81900000000.0, "n_income_attr_p": 41700000000.0,
                  "grossprofit_margin": 91.60})
@@ -54,7 +56,8 @@ def _base_rows():
 
 
 def _extra_rows():
-    """每补查批一行/年; 各指标 bare 列名编造数值 (金额类单位元)"""
+    """One row per year per fill-in batch; each metric's bare column gets made-up values
+    (amount-type columns in yuan)"""
     vals = {
         "roe": [27.68, 29.90, 32.09, 34.71, 36.42],
         "netprofit_margin": [47.92, 49.15, 49.64, 49.51, 49.60],
@@ -76,7 +79,7 @@ def _extra_rows():
         "inventories": [33300000000.0, 35600000000.0, 39500000000.0,
                         43200000000.0, 47000000000.0],
     }
-    # 组织成 {metrics元组: [行...]} — 行含该批全部 bare 列
+    # organized as {metrics tuple: [rows...]} — each row carries all bare columns of its batch
     table = {}
     for batch in _EXTRA_BATCHES:
         bares = [m["bare"] for m in batch]
@@ -87,7 +90,7 @@ def _extra_rows():
                 row[b] = vals[b][i]
             rows.append(row)
         table[tuple(m["query"] for m in batch)] = rows
-    # 行情快照 (总市值): 最新 2 个交易日, 最新在前
+    # quote snapshot (total market cap): latest 2 trading days, newest first
     table[("总市值",)] = [
         {"trade_date": "2026-09-24", "stock_name": "贵州茅台", "close": 1470.5,
          "pe_ttm": 18.99, "pb": 7.5, "total_mv": 18445100.0,
@@ -100,7 +103,7 @@ def _extra_rows():
 
 
 class FakeRegistry:
-    """仅响应 query_financials (按 metrics 元组查表), 记录调用供断言"""
+    """Answers only query_financials (looked up by the metrics tuple), records calls for assertions"""
 
     def __init__(self, table):
         self.table = table
@@ -165,7 +168,7 @@ def fake_profile():
                 {"stock_name": "泸州老窖", "value": 30.11},
                 {"stock_name": "五粮液", "value": 24.30},
                 {"stock_name": "山西汾酒", "value": 22.15}]},
-            # 观点/判断层板块 — 必须被排除
+            # view/judgment-layer sections — must be excluded
             "forecasts": {"divergence_stats": [{"org": "XX证券", "eps": 75.0}]},
             "verification": {"verified_groups": [], "hit_rate_10pct": 60},
             "risk": {"alerts": [{"rule": "r1", "level": "warn", "message": "m"}]},
@@ -183,13 +186,13 @@ def shard(tmp_path, fake_profile):
         profile=fake_profile, registry=reg)
 
 
-# ---------- 分片结构 ----------
+# ---------- shard structure ----------
 
 def test_shard_kind_and_volume(shard):
     assert shard.kind == "tushare"
     assert shard.ts_code == "600519.SH"
     assert len(shard.facts) >= 60
-    assert shard.views == []          # 纯事实层, 无观点
+    assert shard.views == []          # pure fact layer, no views
     assert shard.meta["fact_count"] == len(shard.facts)
     assert shard.meta["view_count"] == 0
 
@@ -217,14 +220,14 @@ def test_meta_covers_caliber(shard):
     assert "excluded" in shard.meta
     assert shard.meta["snapshot_date"] == "2026-09-25"
     assert len(shard.meta["coverage"]["tushare_metrics"]) >= 12
-    # fake 数据指标全有值 → 无缺失记录
+    # fake data has values for every metric -> no missing records
     assert shard.meta["coverage"]["metrics_missing_data"] == []
 
 
 def test_missing_metric_recorded_not_fabricated(tmp_path, fake_profile):
-    """指标全期无值 → 跳过并在 meta 记录, 不造数"""
+    """A metric with no values across all periods -> skipped and recorded in meta, never fabricated"""
     table = _extra_rows()
-    for rows in table.values():                    # 抹掉 roe 列
+    for rows in table.values():                    # wipe the roe column
         for r in rows:
             r["roe"] = None
     reg = FakeRegistry(table)
@@ -234,7 +237,7 @@ def test_missing_metric_recorded_not_fabricated(tmp_path, fake_profile):
     assert "roe" in s.meta["coverage"]["metrics_missing_data"]
 
 
-# ---------- 换算与口径 ----------
+# ---------- conversion and caliber ----------
 
 def test_yuan_conversion_marked(shard):
     by_eid = {f.eid: f for f in shard.facts}
@@ -254,15 +257,16 @@ def test_yuan_conversion_marked(shard):
 
 def test_annual_row_preferred_and_h1_label(shard):
     by_eid = {f.eid: f for f in shard.facts}
-    # 2024 同年有中报行, 必须取年报行 (1741.43 亿而非 819 亿)
+    # 2024 has an interim row the same year; the annual row must win (1741.43 not 819)
     assert by_eid["T:tushare.revenue.2024A"].value == pytest.approx(1741.43, abs=0.01)
-    # 2026 只有中报行 → H1 标签 (累计口径, 不换算成年度)
+    # 2026 has only an interim row -> H1 label (cumulative caliber, not annualized)
     assert "T:tushare.revenue.2026H1" in by_eid
     assert "中报" in by_eid["T:tushare.revenue.2026H1"].content
 
 
 def test_timeseries_clipped_to_years(shard):
-    """深历史 (2014) 必须被截断; 保留最近 5 个年报年度 + 当年进行中期"""
+    """Deep history (2014) must be clipped; keep the latest 5 annual years + the current
+    in-progress interim period"""
     eids = {f.eid for f in shard.facts}
     assert not any("2014A" in e for e in eids)
     for y in YEARS:
@@ -280,7 +284,7 @@ def test_period_label_pure():
 
 def test_mainbiz_prefers_product_dim(shard):
     mb = [f for f in shard.facts if f.eid.startswith("T:profile.mainbiz.")]
-    assert len(mb) == 3                      # 只取产品维度 3 条, 地区维度剔除
+    assert len(mb) == 3                      # only the 3 product-dimension rows; region dimension dropped
     assert not any("国内" in f.content for f in mb)
     first = {f.eid: f for f in mb}["T:profile.mainbiz.2025A.1"]
     assert "茅台酒" in first.content
@@ -288,7 +292,7 @@ def test_mainbiz_prefers_product_dim(shard):
     assert "83.9" in first.content
 
 
-# ---------- 观点层排除 ----------
+# ---------- view-layer exclusion ----------
 
 def test_opinion_sections_excluded(shard):
     joined = " ".join(f.content for f in shard.facts)
@@ -296,7 +300,7 @@ def test_opinion_sections_excluded(shard):
         assert kw not in joined, f"事实层混入观点关键词「{kw}」"
 
 
-# ---------- 落盘 round-trip ----------
+# ---------- on-disk round trip ----------
 
 def test_save_and_load_roundtrip(shard, tmp_path):
     path = tmp_path / "facts_tushare.json"
@@ -309,7 +313,8 @@ def test_save_and_load_roundtrip(shard, tmp_path):
 
 
 def test_market_snapshot_facts(shard):
-    """市值快照: 万元÷1e4折亿 confidence=0.9, 收盘价直引 1.0, 取最新交易日"""
+    """Market-cap snapshot: 10k-yuan /1e4 into 100M yuan confidence=0.9; close quoted
+    verbatim 1.0; takes the latest trading day"""
     by = {f.eid: f for f in shard.facts}
     mv = by["T:tushare.val_mv.2026-09-24"]
     assert mv.value == pytest.approx(1844.51, abs=0.01)
@@ -319,7 +324,7 @@ def test_market_snapshot_facts(shard):
     close = by["T:tushare.val_close.2026-09-24"]
     assert close.value == pytest.approx(1470.5)
     assert close.confidence == 1.0 and close.unit == "元"
-    assert "T:tushare.val_mv.2026-09-23" not in by   # 非最新交易日不取
+    assert "T:tushare.val_mv.2026-09-23" not in by   # non-latest trading day not taken
 
 
 def test_fetch_batches_called(tmp_path, fake_profile):
@@ -331,5 +336,5 @@ def test_fetch_batches_called(tmp_path, fake_profile):
                    if c[1].get("metrics") != ["总市值"]]
     assert len(batch_calls) == len(_EXTRA_BATCHES)
     assert all("最近5年" in c[1]["time"] for c in batch_calls)
-    # 行情快照单独一次 (无 time 参数)
+    # the quote snapshot is a separate single call (no time argument)
     assert any(c[1].get("metrics") == ["总市值"] for c in fin_calls)

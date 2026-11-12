@@ -1,19 +1,26 @@
 # -*- encoding: utf-8 -*-
 """
-T03 · 年报细粒度证据抽取 (Stage 1 事实层)
+T03 · fine-grained annual-report evidence extraction (Stage 1, fact layer)
 
-输入: output/cninfo/md/<ts_code>/<年>_ndbg_items.json
-      (tools/cninfo/parse.py 的产物, 本模块只读不写; sections 每小节含 title/text/tables)
-输出: EvidenceShard(kind="annual") → output/research/<ts_code>/facts_annual_<年>.json
-      + 人工抽检复核清单 annual_review_<年>.md (随机 10% 抽取句↔原句对照)
+Input:  output/cninfo/md/<ts_code>/<year>_ndbg_items.json
+        (produced by tools/cninfo/parse.py; this module only reads it; each section in
+        `sections` carries title/text/tables)
+Output: EvidenceShard(kind="annual") -> output/research/<ts_code>/facts_annual_<year>.json
+        + manual spot-check review list annual_review_<year>.md (random 10% sample of
+        extracted sentence <-> original sentence pairs)
 
-分层 (2026-10 起): 抽取领域内核 — 系统提示词/小节序列化/原子清洗 — 在
-tools/cninfo/parse.py 证据抽取段 (自包含, LLM 客户端由本模块注入 get_extract_llm);
-本模块只做研究侧契约编排: eid 生成 (A:<年>.<节>.<小节序号>.<序号>, 绝不信任
-LLM 生成 ID) / EvidenceShard 装配 / 契约校验兜底 / 抽检清单 / research 目录落盘。
+Layering (since 2026-10): the extraction domain kernel — system prompt / subsection
+serialization / atom sanitization — lives in the evidence-extraction section of
+tools/cninfo/parse.py (self-contained; the LLM client is injected by this module as
+get_extract_llm); this module only does research-side contract orchestration: eid
+generation (A:<year>.<section>.<subsection no>.<seq>, never trusting LLM-generated IDs) /
+EvidenceShard assembly / contract-validation fallback / the review list / writing to the
+research directory.
 
-纪律 (对应任务书与 T00 铁律): 只抽原文明确陈述、禁止推断、数字原样照抄、
-每条带小节锚点回溯 (source=《年报》·节·小节标题)、原文直引 confidence=1.0、换算 0.9 且注明公式。
+Discipline (per the task spec and T00 iron rules): extract only what the original text
+explicitly states, inference forbidden, numbers copied verbatim, every entry carries a
+subsection anchor for traceability (source=《年报》·section·subsection title), verbatim
+quotes get confidence=1.0, converted values 0.9 with the formula noted.
 
 CLI: python -m skills.research.sources.annual_source 600519.SH 2025
 """
@@ -44,7 +51,7 @@ from tools.cninfo.parse import (CATEGORIES, CATEGORY_CN, MIN_BODY_CHARS,
 logger = get_logger(__name__)
 
 
-# ---------- 输入 ----------
+# ---------- input ----------
 
 def annual_items_path(ts_code: str, year: int) -> Path:
     """output/cninfo/md/<ts_code>/<年>_ndbg_items.json"""
@@ -61,11 +68,12 @@ def load_annual_items(items_path: Path) -> Dict[str, Any]:
     return data
 
 
-# ---------- 契约化 ----------
+# ---------- contract enforcement ----------
 
 def _enforce_contract(shard: EvidenceShard, dropped: List[Dict[str, Any]]) -> None:
-    """契约兜底: validate_shard 报错的 fact 逐条剔除 (sanitize 后仍违规的残余)"""
-    for _ in range(200):                          # 防御性上限
+    """Contract fallback: drop one by one every fact that validate_shard reports (residue
+    still violating the rules after sanitize)"""
+    for _ in range(200):                          # defensive upper bound
         errors = validate_shard(shard)
         if not errors:
             return
@@ -79,12 +87,13 @@ def _enforce_contract(shard: EvidenceShard, dropped: List[Dict[str, Any]]) -> No
     logger.warning("契约兜底剔除达上限仍有错误: %s", validate_shard(shard)[:3])
 
 
-# ---------- 复核清单 ----------
+# ---------- review list ----------
 
 def write_review_md(path: Path, shard: EvidenceShard, year: int, seed: str,
                     sample_size: int) -> List[str]:
-    """随机 10% 抽检清单: 抽取句 ↔ 原句 对照 (质量承诺的可审计形式)。
-    原句存于 shard.meta["quotes"] (Fact 契约无 quote 字段, 不入 Fact)。"""
+    """Random-10% spot-check list: extracted sentence <-> original sentence pairs (the
+    auditable form of the quality commitment). Original sentences live in
+    shard.meta["quotes"] (the Fact contract has no quote field, so not on Fact)."""
     facts = shard.facts
     rng = random.Random(seed)
     sample = rng.sample(facts, min(sample_size, len(facts)))
@@ -111,11 +120,11 @@ def write_review_md(path: Path, shard: EvidenceShard, year: int, seed: str,
     return [f.eid for f in sample]
 
 
-# ---------- 主流程 ----------
+# ---------- main flow ----------
 
 def collect_annual_facts(ts_code: str, year: int, out_dir: Path | None = None,
                          items_path: Path | None = None) -> EvidenceShard:
-    """年报 items → 原子级证据分片 (facts_annual_<年>.json + annual_review_<年>.md)"""
+    """Annual-report items -> atom-level evidence shard (facts_annual_<year>.json + annual_review_<year>.md)"""
     items_path = items_path or annual_items_path(ts_code, year)
     data = load_annual_items(items_path)
     sections: Dict[str, Any] = data["sections"]
@@ -126,7 +135,7 @@ def collect_annual_facts(ts_code: str, year: int, out_dir: Path | None = None,
     dropped: List[Dict[str, Any]] = []
     skipped: List[Dict[str, Any]] = []
     section_stats: Dict[str, Dict[str, int]] = {}
-    llm = None                                       # 惰性创建: 全部小节为空时不碰 LLM
+    llm = None                                       # lazy creation: skip the LLM entirely when all subsections are empty
 
     for sec_key in SECTION_ORDER:
         subs = (sections.get(sec_key) or {}).get("subsections") or []
@@ -140,10 +149,11 @@ def collect_annual_facts(ts_code: str, year: int, out_dir: Path | None = None,
                 continue
             try:
                 if llm is None:
-                    # 300s: 思考模式下大经营小节(正文+20余张表)单次超 120s 默认超时
+                    # 300s: with thinking enabled, a large operations subsection (body + 20-plus tables)
+                    # exceeds the default 120s timeout in a single call
                     llm = get_extract_llm(timeout=300.0)
                 raws = extract_subsection(llm, year, sec_key, title, body)
-            except Exception as e:                  # 单小节失败不中断整体
+            except Exception as e:                  # one subsection failing must not abort the whole run
                 stat["llm_failed"] += 1
                 skipped.append({"section": sec_key, "title": title,
                                 "reason": f"llm_error: {type(e).__name__}: {e}"})
@@ -151,13 +161,13 @@ def collect_annual_facts(ts_code: str, year: int, out_dir: Path | None = None,
                 continue
 
             seen_content = set()
-            sub_seq = 0                                # eid 末段: 小节内序号 (每小节重新计数)
+            sub_seq = 0                                # eid tail: in-subsection sequence (recounted per subsection)
             for raw in raws:
                 clean, reason = sanitize_fact(raw, year)
                 if clean is None:
                     dropped.append({"reason": reason, "sample": str(raw.get("content"))[:50]})
                     continue
-                if clean["content"] in seen_content:     # 同小节内容去重
+                if clean["content"] in seen_content:     # dedupe within the same subsection
                     continue
                 seen_content.add(clean["content"])
                 sub_seq += 1
@@ -178,7 +188,7 @@ def collect_annual_facts(ts_code: str, year: int, out_dir: Path | None = None,
                     ts_code, sec_key, len(subs), stat["facts"], stat["empty"], stat["llm_failed"])
 
     _enforce_contract(shard, dropped)
-    alive = {f.eid for f in shard.facts}             # 剔除后 meta 侧同步收敛
+    alive = {f.eid for f in shard.facts}             # after drops, converge the meta side too
     cat_of = {k: v for k, v in cat_of.items() if k in alive}
     quotes = {k: v for k, v in quotes.items() if k in alive}
 

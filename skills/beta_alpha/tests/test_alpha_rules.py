@@ -1,4 +1,4 @@
-"""alpha 四象限规则测试 (纯函数, 无 DB)"""
+"""alpha four-quadrant rule tests (pure functions, no DB)"""
 from __future__ import annotations
 
 from skills.beta_alpha.skills.alpha import classify_drift, edge_trend, to_yuan
@@ -9,10 +9,10 @@ def test_to_yuan_unit_factors():
     assert to_yuan(2, "万元") == 2e4
     assert to_yuan(3, "百万元") == 3e6
     assert to_yuan(0.4, "万亿元") == 4e11
-    # 增速/倍数不换算
+    # growth rates / multiples are not converted
     assert to_yuan(25.0, "%") == 25.0
     assert to_yuan(1.2, "倍") == 1.2
-    # 未知/空单位保守原值
+    # unknown/empty unit passes through unchanged (conservative)
     assert to_yuan(7, None) == 7.0
     assert to_yuan(7, "火星币") == 7.0
 
@@ -26,9 +26,9 @@ def test_classify_drift_direction():
     assert classify_drift(100, 88) == "下修"      # -12%
     assert classify_drift(100, 101.5) == "持平"   # +1.5% < 3
     assert classify_drift(100, 98.5) == "持平"
-    # 负基数 (亏损收窄/扩大) 以绝对值为分母
-    assert classify_drift(-100, -80) == "上修"    # 亏损收窄 20%
-    assert classify_drift(-100, -120) == "下修"   # 亏损扩大
+    # negative base (loss narrowing/widening) uses the absolute value as denominator
+    assert classify_drift(-100, -80) == "上修"    # loss narrowed 20%
+    assert classify_drift(-100, -120) == "下修"   # loss widened
 
 
 def test_classify_drift_insufficient_data():
@@ -38,7 +38,8 @@ def test_classify_drift_insufficient_data():
 
 
 def test_edge_trend_high_level_context():
-    # 高增速下的边际回落 -> "高位降速" 而非裸"降速" (避免误读)
+    # marginal slowdown at a high growth level -> "高位降速" instead of a bare
+    # "降速" (avoids misreading)
     assert edge_trend(182.49, 192.12) == "高位降速"
     assert edge_trend(262.28, 241.70) == "高位提速"
     assert edge_trend(60.0, 60.0) == "高位平稳"

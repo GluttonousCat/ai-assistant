@@ -1,13 +1,13 @@
 # -*- encoding: utf-8 -*-
 """
-内容管线 CLI
+Content pipeline CLI
 
-    python -m skills.content profile 中际旭创                     # 画像 (纯数据)
-    python -m skills.content article --stock 中际旭创             # 公众号文章 (画像模式)
-    python -m skills.content article --topic 光模块               # 公众号文章 (研报综述模式)
-    python -m skills.content interpret 中芯国际                   # 投研解读 (年报语料增强)
-    python -m skills.content interpret 中芯国际 --ppt             # 解读 + PPT 一条龙
-    python -m skills.content ppt 中际旭创                         # 画像 -> pptgen 出片
+    python -m skills.content profile 中际旭创                     # profile (pure data)
+    python -m skills.content article --stock 中际旭创             # WeChat article (profile mode)
+    python -m skills.content article --topic 光模块               # WeChat article (report-summary mode)
+    python -m skills.content interpret 中芯国际                   # investment interpretation (annual-corpus enhanced)
+    python -m skills.content interpret 中芯国际 --ppt             # interpretation + PPT in one go
+    python -m skills.content ppt 中际旭创                         # profile -> pptgen slides
 """
 from __future__ import annotations
 

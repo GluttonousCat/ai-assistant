@@ -1,4 +1,4 @@
-"""映射分档规则测试 (纯函数, 无 DB)"""
+"""Mapping tier rule tests (pure function, no DB)"""
 from __future__ import annotations
 
 from skills.beta_alpha.analysis.chain_analysis import (
@@ -17,7 +17,7 @@ def test_strong_by_mainbz_share():
 def test_medium_by_share_or_industry_plus_reports():
     assert assign_tier(share=MEDIUM_SHARE, sw_hit=False, hits=0) == "中"
     assert assign_tier(share=29.9, sw_hit=False, hits=0) == "中"
-    # 无主营证据: 行业命中且研报>=2 才是中
+    # no main-business evidence: industry hit plus >=2 reports is the only way to medium
     assert assign_tier(share=None, sw_hit=True, hits=2) == "中"
     assert assign_tier(share=None, sw_hit=True, hits=1) == "弱"
 
@@ -25,7 +25,7 @@ def test_medium_by_share_or_industry_plus_reports():
 def test_weak_when_no_hard_evidence():
     assert assign_tier(share=None, sw_hit=False, hits=5) == "弱"
     assert assign_tier(share=None, sw_hit=False, hits=0) == "弱"
-    # 低于中档线的主营占比
+    # main-business share below the medium threshold
     assert assign_tier(share=9.9, sw_hit=False, hits=0) == "弱"
 
 

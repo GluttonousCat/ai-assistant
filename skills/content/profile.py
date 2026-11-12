@@ -1,16 +1,18 @@
 # -*- encoding: utf-8 -*-
 """
-上市公司画像: 八大板块结构化数据组装 (纯数据, 组装层不走 LLM)
+Listed-company profile: structured data assembly over eight sections (pure
+data; no LLM in the assembly layer)
 
-内部全部通过 REGISTRY.call 复用 MCP 工具层 (resolve_stock / query_financials /
-query_main_business / valuation_percentile / get_forecasts / verify_forecasts /
-detect_financial_risk / search_reports / run_quant_scan) — 能力零重复实现,
-单板块失败不拖垮整个画像 (failed_sections 记录)。
+Everything goes through REGISTRY.call to reuse the MCP tool layer (resolve_stock /
+query_financials / query_main_business / valuation_percentile / get_forecasts /
+verify_forecasts / detect_financial_risk / search_reports / run_quant_scan) —
+zero duplicated capability implementations; a single failed section does not
+take down the whole profile (recorded in failed_sections).
 
-产出供三层消费:
-- 对话: build_company_profile 工具直接返回
-- 公众号文章: content/article.py (画像 -> LLM 成文)
-- PPT: content/ppt.py (画像 -> pptgen 任务书 -> 出片)
+The output feeds three consumers:
+- Chat: returned directly by the build_company_profile tool
+- WeChat article: content/article.py (profile -> LLM writes the article)
+- PPT: content/ppt.py (profile -> pptgen task book -> slides)
 """
 from __future__ import annotations
 
@@ -21,7 +23,7 @@ from core.logger import get_logger
 
 logger = get_logger(__name__)
 
-# (板块名, 工具, 参数) — 顺序即叙事顺序
+# (section name, tool, args) — order is the narrative order
 _SECTIONS: List[tuple] = [
     ("basic", "resolve_stock", {"text": "{stock}"}),
     ("main_business", "query_main_business", {"stock": "{stock}", "top_n": 5}),
@@ -51,7 +53,8 @@ def _fmt_args(args: Dict[str, Any], stock: str, years: int) -> Dict[str, Any]:
 
 
 def build_company_profile(stock: str, years: int = 5) -> Dict[str, Any]:
-    """组装上市公司画像。返回 {stock, generated_at, sections, ok_sections, failed_sections}"""
+    """Assemble a listed-company profile. Returns {stock, generated_at,
+    sections, ok_sections, failed_sections}"""
     from harness.mcp import get_registry
     registry = get_registry()
     stock = stock.strip()
@@ -64,7 +67,8 @@ def build_company_profile(stock: str, years: int = 5) -> Dict[str, Any]:
             sections[name] = env["data"]
             ok.append(name)
         else:
-            # 单板块失败降级 (如 verify 无历史预测), 画像继续
+            # degrade on a single failed section (e.g. verify with no
+            # historical forecasts); the profile continues
             sections[name] = {"error": env.get("error", "")}
             failed.append(name)
             logger.warning(f"画像板块 {name} 失败: {env.get('error', '')[:80]}")
@@ -72,7 +76,8 @@ def build_company_profile(stock: str, years: int = 5) -> Dict[str, Any]:
     basic = (sections.get("basic") or {}).get("stocks") or [{}]
     ts_code = basic[0].get("ts_code")
 
-    # 行业坐标 (依赖 basic 的行业名, 故循环后追加): 申万二级 ROE 同业对比
+    # Industry position (needs the industry name from basic, hence appended
+    # after the loop): Shenwan L2 ROE peer comparison
     ind_name = basic[0].get("industry_l2") or basic[0].get("industry_l1")
     if ind_name:
         env = registry.call("query_financials", {
@@ -82,7 +87,7 @@ def build_company_profile(stock: str, years: int = 5) -> Dict[str, Any]:
             sections["industry"] = env["data"]
             ok.append("industry")
 
-    # 十大股东 (最新期 + 持股变动信号)
+    # Top-10 holders (latest period + holding-change signals)
     if ts_code:
         holders = _load_holders(ts_code)
         if holders:
@@ -102,7 +107,8 @@ def build_company_profile(stock: str, years: int = 5) -> Dict[str, Any]:
 
 
 def _load_holders(ts_code: str) -> Dict[str, Any]:
-    """最新报告期十大股东 + 变动信号 (持股比例/变动, 来源 stock.top10_holders)"""
+    """Top-10 holders of the latest report period + change signals (holding
+    ratio/change; source stock.top10_holders)"""
     from storage.pg import PgClient
     try:
         with PgClient() as pg:
@@ -119,13 +125,13 @@ def _load_holders(ts_code: str) -> Dict[str, Any]:
                 (ts_code, latest["d"]))
             return {"end_date": str(latest["d"]),
                     "holders": [dict(r) for r in rows]}
-    except Exception as e:  # noqa: BLE001 表可能未同步
+    except Exception as e:  # noqa: BLE001 the table may not be synced yet
         logger.debug(f"十大股东读取跳过: {e}")
         return {}
 
 
 def _yi(v) -> str:
-    """元 -> 亿元字符串 (None 保留 —)"""
+    """Yuan -> hundred-million (亿) string (None stays —)"""
     if v is None:
         return "—"
     try:
@@ -135,7 +141,7 @@ def _yi(v) -> str:
 
 
 def profile_digest(profile: Dict[str, Any], max_chars: int = 6000) -> str:
-    """画像 -> 成文用摘要 (控token: 保关键数字, 砍宽表)"""
+    """Profile -> digest for article writing (token control: keep key numbers, drop wide tables)"""
     import json
     s = profile.get("sections", {})
     parts = [f"公司: {profile.get('name')} ({profile.get('ts_code')})",
@@ -150,7 +156,8 @@ def profile_digest(profile: Dict[str, Any], max_chars: int = 6000) -> str:
 
     mb = s.get("main_business") or {}
     if mb.get("data"):
-        # 优先产品维度(P), 避免混入地区/行业维度的重复口径
+        # prefer the product dimension (P) to avoid duplicate calibers from
+        # the region/industry dimensions
         prod = [r for r in mb["data"] if r.get("bz_code") == "P"] or mb["data"]
         items = [f"{r.get('bz_item')} 占比{r.get('sales_share_pct')}%"
                  f"(毛利率{r.get('gross_margin_pct')}%)"
@@ -159,7 +166,8 @@ def profile_digest(profile: Dict[str, Any], max_chars: int = 6000) -> str:
 
     fin = s.get("financials") or {}
     if fin.get("data"):
-        # 列名为 SQL 字段原名; 按年聚合: 优先年报行(12-31), 缺则取当年最新期
+        # column names are the original SQL fields; aggregate by year: prefer
+        # the annual row (12-31), else the latest period of that year
         by_year: Dict[str, Dict] = {}
         for r in fin["data"]:
             y = str(r.get("end_date", ""))[:4]
@@ -228,7 +236,8 @@ def profile_digest(profile: Dict[str, Any], max_chars: int = 6000) -> str:
                          f"{h.get('hold_ratio')}%{mark}")
         parts.append(f"[十大股东·{hd.get('end_date', '')}] " + "; ".join(items))
 
-    # 注: 量化形态(regime)板块刻意不进成文摘要 — 文章不含量化内容
+    # Note: the quant regime section is deliberately excluded from the article
+    # digest — articles contain no quant content
 
     text = "\n".join(parts)
     return text[:max_chars] + ("\n…(截断)" if len(text) > max_chars else "")

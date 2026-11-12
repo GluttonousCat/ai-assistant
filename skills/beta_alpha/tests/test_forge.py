@@ -1,4 +1,4 @@
-"""forge 结构校验纯函数测试 (无 DB / 无 LLM)"""
+"""forge structural-validation pure-function tests (no DB / no LLM)"""
 from __future__ import annotations
 
 from skills.beta_alpha.forge import validate_chain_dict
@@ -41,7 +41,7 @@ def test_edge_to_undefined_node():
 
 def test_duplicate_node_and_too_few_nodes():
     c = _ok_chain()
-    c["nodes"][1]["id"] = "node_a"   # 与节点0重复
+    c["nodes"][1]["id"] = "node_a"   # duplicates node 0
     ok, errors = validate_chain_dict(c)
     assert not ok and any("重复" in e for e in errors)
     ok2, _ = validate_chain_dict({"chain_id": "x_y", "name": "n",
@@ -54,7 +54,7 @@ def test_generic_bare_keyword_rejected():
     c["nodes"][0]["keywords"] = ["整机"]
     ok, errors = validate_chain_dict(c)
     assert not ok and any("泛词" in e for e in errors)
-    # 带限定的可以通过
+    # a keyword with a qualifier passes
     c["nodes"][0]["keywords"] = ["半导体设备"]
     assert validate_chain_dict(c)[0]
 

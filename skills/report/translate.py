@@ -1,12 +1,16 @@
 # -*- encoding: utf-8 -*-
 """
-研报正文中文翻译 (英文原版 → report_meta.content_text_cn)
+Report body Chinese translation (English original → report_meta.content_text_cn)
 
-- 入库链路: 深度提取完成后 spawn_translate() 起后台线程 (与链抽取同模式, 失败不影响主链路);
-- 翻译范围: 正文前 _MAX_SRC_CHARS 字符, 与深度提取窗口对齐 (前端详情页只展示前 8000 字,
-  超长原文的尾部译文对阅读无增益, 控制成本);
-- 中文主导正文不翻译 (content_text_cn 留空, 读取侧回退原文);
-- 存量补译: python -m skills.report.translate [--limit N] [--workers 3]
+- Ingestion path: after deep extraction, spawn_translate() starts a background
+  thread (same pattern as chain extraction; failure does not affect the main flow);
+- Translation scope: the first _MAX_SRC_CHARS characters of the body, aligned with
+  the deep-extraction window (the frontend detail page only shows the first 8000
+  chars; translating the tail of an overlong original adds no reading value and
+  controls cost);
+- Chinese-dominant bodies are not translated (content_text_cn stays empty, the
+  read side falls back to the original);
+- Backfill for existing rows: python -m skills.report.translate [--limit N] [--workers 3]
 """
 from __future__ import annotations
 
@@ -21,19 +25,21 @@ from skills.report.prompts import TRANSLATE_PROMPT
 
 logger = get_logger(__name__)
 
-# 与 skill._MAX_TEXT_CHARS 对齐的翻译窗口 (源文字符)
+# Translation window aligned with skill._MAX_TEXT_CHARS (source characters)
 _MAX_SRC_CHARS = 12000
-# 单片送译上限 (英文 chars → 中文输出 token 约 1:1.2, 需给思考留预算)
+# Per-chunk limit sent for translation (English chars → Chinese output tokens is
+# roughly 1:1.2; leave budget for thinking)
 _CHUNK_CHARS = 6000
 
-# 翻译并发限流: LLM 网关同时最多 3 路
+# Translation concurrency throttle: at most 3 parallel calls to the LLM gateway
 _TRANSLATE_SEMAPHORE = threading.BoundedSemaphore(3)
 
 _CJK = re.compile(r"[\u4e00-\u9fff]")
 
 
 def is_en_text(s: Optional[str], min_len: int = 20) -> bool:
-    """CJK 字符占比 < 0.3 视为英文主导 (与元数据修复口径一致)"""
+    """Treated as English-dominant when the CJK character ratio < 0.3 (same
+    criterion as the metadata repair)"""
     s = str(s or "").strip()
     if len(s) < min_len:
         return False
@@ -41,7 +47,8 @@ def is_en_text(s: Optional[str], min_len: int = 20) -> bool:
 
 
 def _split_chunks(text: str, size: int = _CHUNK_CHARS) -> List[str]:
-    """按段落边界切分, 每片 ≤ size 字符; 单行超长 (表格线性化) 硬切"""
+    """Split on paragraph boundaries, each chunk ≤ size chars; a single
+    overlong line (linearized table) is hard-cut"""
     chunks: List[str] = []
     buf: List[str] = []
     n = 0
@@ -60,12 +67,14 @@ def _split_chunks(text: str, size: int = _CHUNK_CHARS) -> List[str]:
 
 
 def translate_body(text: str) -> str:
-    """整段正文 (调用方保证已截窗) 分片串行翻译, 拼接返回; 单片超时递增重试"""
+    """Translate the (already windowed by the caller) body chunk by chunk in
+    sequence, join and return; escalating-timeout retry per chunk"""
     from harness.llm import get_extract_llm
     out: List[str] = []
     for chunk in _split_chunks(text):
         resp = ""
-        # 思考模式下长片可能超 180s: 递增超时重试, 3 次皆败才向上抛
+        # long chunks may exceed 180s in thinking mode: retry with escalating
+        # timeouts; only re-raise after all 3 attempts fail
         for attempt, timeout in enumerate((180.0, 240.0, 300.0), 1):
             try:
                 resp = (get_extract_llm(timeout=timeout).invoke(
@@ -75,7 +84,7 @@ def translate_body(text: str) -> str:
                 if attempt == 3:
                     raise
                 logger.warning(f"翻译单片超时/失败, 重试 ({attempt}/3): {str(e)[:80]}")
-        if resp.startswith("```"):  # 宽容剥壳
+        if resp.startswith("```"):  # leniently strip the code fence
             resp = resp.strip("`").strip()
             if resp.startswith("text"):
                 resp = resp[4:]
@@ -84,7 +93,8 @@ def translate_body(text: str) -> str:
 
 
 def translate_report(report_id: int) -> bool:
-    """单篇补译: 英文主导且无译文的正文 → content_text_cn; 返回是否写入"""
+    """Translate one report: English-dominant body without a translation ->
+    content_text_cn; returns whether a row was written"""
     with PgClient() as pg:
         row = pg.fetch_one(
             "SELECT report_id, content_text, content_text_cn FROM fin.report_meta "
@@ -93,11 +103,13 @@ def translate_report(report_id: int) -> bool:
         return False
     text = (row.get("content_text") or "")[:_MAX_SRC_CHARS]
     if len(text.strip()) < 200 or not is_en_text(text):
-        return False  # 中文正文/过短/已译: 幂等跳过
+        return False  # Chinese body / too short / already translated: idempotent skip
     with _TRANSLATE_SEMAPHORE:
         cn = translate_body(text)
-    # 译文校验 (防 LLM 原样吐回英文): 中文占比>0.1 直接收;
-    # 表格型原文 (报价/数据表为主, 译文中文占比天然低) 放宽为"中文份额比原文提升 30%+"
+    # translation quality check (guards against the LLM echoing English back):
+    # accept directly when the Chinese ratio > 0.1; for table-heavy originals
+    # (mostly quote/data tables, whose translation naturally has a low Chinese
+    # ratio) relax to "Chinese share improved 30%+ over the original"
     cn_ratio = len(_CJK.findall(cn)) / len(cn)
     src_ratio = len(_CJK.findall(text)) / len(text)
     if len(cn.strip()) > 100 and (cn_ratio > 0.1 or cn_ratio >= src_ratio * 1.3):
@@ -111,7 +123,7 @@ def translate_report(report_id: int) -> bool:
 
 
 def spawn_translate(report_id: int) -> None:
-    """入库链路后台翻译 (fire-and-forget, 失败只记日志)"""
+    """Background translation on the ingestion path (fire-and-forget, failures only logged)"""
     def _job():
         try:
             if translate_report(report_id):
@@ -124,7 +136,7 @@ def spawn_translate(report_id: int) -> None:
 
 
 def backfill(limit: int = 0, workers: int = 3) -> None:
-    """存量补译: 英文主导且无译文的全部正文"""
+    """Backfill translation for existing rows: all English-dominant bodies without a translation"""
     from storage.pg_schema import ensure_report_analysis_columns
     ensure_report_analysis_columns()
     with PgClient() as pg:
@@ -137,7 +149,8 @@ def backfill(limit: int = 0, workers: int = 3) -> None:
     logger.info(f"正文待补译 {len(todo)} 篇 (workers={workers})")
 
     def _safe(rid: int) -> bool:
-        # 单篇失败 (超时上限/网关抖动) 只记日志, 不打断整批
+        # a single failure (timeout ceiling/gateway jitter) is only logged, the
+        # whole batch continues
         try:
             return translate_report(rid)
         except Exception as e:
@@ -154,7 +167,7 @@ def backfill(limit: int = 0, workers: int = 3) -> None:
 if __name__ == "__main__":
     import argparse
     from core.config import get_config
-    get_config()  # .env 灌入进程环境 (storage/LLM 独立使用前置)
+    get_config()  # load .env into the process environment (prerequisite for storage/LLM standalone use)
     ap = argparse.ArgumentParser(description="研报正文存量补译 (英文→content_text_cn)")
     ap.add_argument("--limit", type=int, default=0, help="最多处理篇数 (0=全部)")
     ap.add_argument("--workers", type=int, default=3, help="并发翻译线程数")

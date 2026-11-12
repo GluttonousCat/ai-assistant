@@ -1,16 +1,17 @@
 # -*- encoding: utf-8 -*-
 """
-文章配图生成 (matplotlib 静态 PNG, 公众号直用)
+Article chart generation (static matplotlib PNGs, ready for WeChat use)
 
-5 张图 (全部真实数据, 图注带口径与来源):
-  1. mainbiz_chart      主营构成水平条形图 (占比+毛利率双标注)
-  2. growth_chart       营收/归母净利双轴柱状图 (年度)
-  3. margin_chart       毛利率/净利率/ROE 折线 (年度)
-  4. valuation_chart    PE/PB 三年分位标尺 (横轴刻度条)
-  5. industry_chart     行业内对比条形图 (本股高亮)
+5 charts (all real data; captions carry caliber and source):
+  1. mainbiz_chart      main-business composition horizontal bars (share + gross margin dual annotation)
+  2. growth_chart       revenue / net-profit-attributable dual-axis bars (annual)
+  3. margin_chart       gross margin / net margin / ROE lines (annual)
+  4. valuation_chart    PE/PB 3-year percentile ruler (horizontal scale bar)
+  5. industry_chart     industry peer comparison bars (this stock highlighted)
 
-风格: 深色底 + 品牌暖色 (与平台深黑暗棕主题一致); 中文字体微软雅黑;
-统一 1200px 宽 (公众号两倍清晰度), 输出 output/articles/assets/。
+Style: dark background + brand warm palette (matching the platform's
+dark-black-brown theme); Chinese font Microsoft YaHei; uniform 1200px width
+(2x clarity for WeChat); output to output/articles/assets/.
 """
 from __future__ import annotations
 
@@ -23,15 +24,15 @@ logger = get_logger(__name__)
 
 ASSET_ROOT = Path("output/articles/assets")
 
-# 品牌配色 (深色底)
-_BG = "#241f1c"        # 深黑暗棕底
-_FG = "#e8e0d8"        # 主文字 (暖白)
-_DIM = "#9a8f85"       # 次要文字
-_GRID = "#3a332e"      # 网格
-_ACCENT = "#d99178"    # 主色 (品牌棕红)
-_ACCENT2 = "#e0b64f"   # 辅色 (金)
-_POS = "#f43f5e"       # 强调 (红)
-_NEG = "#10b981"       # 次强调 (绿)
+# Brand palette (dark background)
+_BG = "#241f1c"        # dark black-brown base
+_FG = "#e8e0d8"        # primary text (warm white)
+_DIM = "#9a8f85"       # secondary text
+_GRID = "#3a332e"      # grid
+_ACCENT = "#d99178"    # primary accent (brand brown-red)
+_ACCENT2 = "#e0b64f"   # secondary accent (gold)
+_POS = "#f43f5e"       # emphasis (red)
+_NEG = "#10b981"       # secondary emphasis (green)
 _FAMILY = ["Microsoft YaHei"]
 
 _FONT_SET = False
@@ -77,11 +78,11 @@ def _slug(ts_code: str) -> str:
 
 
 # ============================================================
-# 1. 主营构成
+# 1. Main-business composition
 # ============================================================
 
 def mainbiz_chart(mainbiz: Dict[str, Any], ts_code: str) -> Optional[Path]:
-    """主营构成水平条形图: 占比条 + 毛利率右标注"""
+    """Main-business composition horizontal bars: share bars + gross margin annotated at right"""
     rows = [r for r in (mainbiz.get("data") or [])
             if r.get("bz_code") == "P" and r.get("bz_item")][:5]
     if not rows:
@@ -115,7 +116,7 @@ def mainbiz_chart(mainbiz: Dict[str, Any], ts_code: str) -> Optional[Path]:
 
 
 # ============================================================
-# 2. 成长性 (营收/净利双轴柱状)
+# 2. Growth (revenue / net profit dual-axis bars)
 # ============================================================
 
 def growth_chart(financials: Dict[str, Any], ts_code: str,
@@ -158,7 +159,7 @@ def growth_chart(financials: Dict[str, Any], ts_code: str,
 
 
 # ============================================================
-# 3. 盈利质量折线 (毛利率/净利率/ROE)
+# 3. Profitability quality lines (gross margin / net margin / ROE)
 # ============================================================
 
 def margin_chart(financials: Dict[str, Any], ts_code: str,
@@ -195,7 +196,7 @@ def margin_chart(financials: Dict[str, Any], ts_code: str,
 
 
 # ============================================================
-# 4. 估值分位标尺 (PE/PB 当前值在三年区间的位置)
+# 4. Valuation percentile ruler (where the current PE/PB sits in the 3-year range)
 # ============================================================
 
 def valuation_chart(valuation: Dict[str, Any], ts_code: str) -> Optional[Path]:
@@ -208,7 +209,7 @@ def valuation_chart(valuation: Dict[str, Any], ts_code: str) -> Optional[Path]:
     for i, (label, v) in enumerate(items):
         y = len(items) - 1 - i
         ax.hlines(y, v["min"], v["max"], color=_GRID, linewidth=10)
-        # 0/50/100 分位刻度点
+        # 0/50/100 percentile tick points
         for p in (v["min"], (v["min"] + v["max"]) / 2, v["max"]):
             ax.plot(p, y, "o", color=_DIM, markersize=5)
         ax.plot(v["latest"], y, "D", color=_POS, markersize=11, zorder=5)
@@ -231,12 +232,12 @@ def valuation_chart(valuation: Dict[str, Any], ts_code: str) -> Optional[Path]:
 
 
 # ============================================================
-# 5. 行业坐标 (申万同业对比, 本股高亮)
+# 5. Industry position (Shenwan peer comparison, this stock highlighted)
 # ============================================================
 
 def industry_chart(industry_rows: Dict[str, Any], ts_code: str,
                    name: str, metric_label: str = "ROE") -> Optional[Path]:
-    """query_financials(industry) 结果 -> 本股高亮条形图"""
+    """query_financials(industry) result -> bar chart with this stock highlighted"""
     data = industry_rows.get("data") or []
     rows = [(r.get("stock_name"), r.get("value")) for r in data
             if r.get("stock_name") is not None and r.get("value") is not None]

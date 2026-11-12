@@ -1,12 +1,12 @@
 # -*- encoding: utf-8 -*-
-"""T08 渲染层测试 — 纯离线 (不连 LLM/DB)。
+"""T08 rendering-layer tests — fully offline (no LLM/DB).
 
-分组:
-  test_title/test_footnotes/test_sources  标题区统计 / 脚注编号复用 / 来源区一一对应
-  test_ghost/test_flags                   幽灵引用原样保留 / 数据核查提示块
-  test_figs                               章末配图插入·相对路径·散图附图区
-  test_appendix                           假设表 / 方法论 / 免责声明
-  test_cli_*                              总装 CLI --only render 离线链路 (分片+草稿 fixture)
+Groups:
+  test_title/test_footnotes/test_sources  title-block stats / footnote numbering and reuse / source area one-to-one mapping
+  test_ghost/test_flags                   ghost citations kept verbatim / data-check notice block
+  test_figs                               chapter-end figure insertion · relative paths · loose-figure appendix zone
+  test_appendix                           hypotheses table / methodology / disclaimer
+  test_cli_*                              assembly CLI --only render offline path (shard + draft fixtures)
 """
 import re
 from datetime import date
@@ -23,7 +23,7 @@ _SUP = re.compile(r"<sup>\[(\d+)\]</sup>")
 _SRC_LINE = re.compile(r"^- \*\*\[(\d+)\]\*\* (.+)$", re.M)
 
 
-# ---------- fixture 构造 ----------
+# ---------- fixture builders ----------
 
 def _fact(**kw) -> Fact:
     base = dict(eid="T:tushare.revenue.2025A",
@@ -107,7 +107,7 @@ def _section(md, prefix):
     return ""
 
 
-# ---------- 标题区 ----------
+# ---------- title block ----------
 
 def test_title_block_stats(tmp_path):
     md = _render(tmp_path)
@@ -117,57 +117,57 @@ def test_title_block_stats(tmp_path):
     assert "2 条观点, 来自 2 家机构" in md
 
 
-# ---------- 脚注编号 ----------
+# ---------- footnote numbering ----------
 
 def test_footnote_numbering_by_first_appearance_and_reuse(tmp_path):
     md = _render(tmp_path)
     ch1, ch2 = _section(md, "一、"), _section(md, "二、")
-    # 首次出现序: ch1 → T:revenue=1, R:1001.1=2; ch2 → A:mdna=3, R:1002.1=4
+    # first-appearance order: ch1 -> T:revenue=1, R:1001.1=2; ch2 -> A:mdna=3, R:1002.1=4
     assert "<sup>[1]</sup>" in ch1 and "<sup>[2]</sup>" in ch1
     assert "<sup>[3]</sup>" not in ch1 and "<sup>[4]</sup>" not in ch1
     assert all(f"<sup>[{n}]</sup>" in ch2 for n in (1, 3, 4))
-    # 同一引用全文复用同号, 编号集合恰为 1..4
+    # the same reference reuses its number document-wide; the numbering set is exactly 1..4
     assert md.count("<sup>[1]</sup>") == 2
     assert sorted(_SUP.findall(md), key=int) == ["1", "1", "2", "3", "4"]
 
 
 def test_ghost_ref_kept_literal(tmp_path):
     md = _render(tmp_path)
-    assert "[E:T:ghost.2025A]" in _section(md, "二、")     # 不伪装成脚注
-    assert max(int(n) for n in _SUP.findall(md)) == 4      # 无幽灵编号
+    assert "[E:T:ghost.2025A]" in _section(md, "二、")     # not disguised as a footnote
+    assert max(int(n) for n in _SUP.findall(md)) == 4      # no ghost numbering
 
 
-# ---------- 来源区一一对应 (验收核心) ----------
+# ---------- source area one-to-one mapping (acceptance core) ----------
 
 def test_source_area_matches_footnotes(tmp_path):
     md = _render(tmp_path)
     src = _section(md, "证据与观点来源")
     nums = [m.group(1) for m in _SRC_LINE.finditer(src)]
-    assert nums == ["1", "2", "3", "4"]                     # 与正文脚注一一对应
-    assert not (set(_SUP.findall(md)) - set(nums))          # 无悬空脚注
+    assert nums == ["1", "2", "3", "4"]                     # one-to-one with body footnotes
+    assert not (set(_SUP.findall(md)) - set(nums))          # no dangling footnotes
     lines = {m.group(1): m.group(2) for m in _SRC_LINE.finditer(src)}
-    # fact 条目: 陈述 + 来源 + 期间; 推算值标注
+    # fact entries: statement + source + period; derived values annotated
     assert "营业收入 1741.44 亿元" in lines["1"] and "来源: fin.income.revenue" in lines["1"]
     assert "期间: 2025A" in lines["1"]
     assert "换算/推算值" in lines["3"] and "2025年报·mdna·三、经营情况" in lines["3"]
-    # view 条目: 机构(日期): 主张 + report_id
+    # view entries: org(date): claim + report_id
     assert "中信证券（2026-03-28）" in lines["2"]
     assert "预计 2026 年茅台酒销量同比增长 5%。" in lines["2"] and "研报 #1001" in lines["2"]
     assert "（评级）" in lines["4"] and "招商证券" in lines["4"] and "研报 #1002" in lines["4"]
 
 
-# ---------- 数据核查提示块 ----------
+# ---------- data-check notice block ----------
 
 def test_flags_block(tmp_path):
     md = _render(tmp_path)
     assert "数据核查提示" in md
     assert "unverified-number: 目标价或超一致预期" in md
-    assert md.index("数据核查提示") < md.index("## 一、")   # 位于文首
+    assert md.index("数据核查提示") < md.index("## 一、")   # placed at the top of the document
     md2 = _render(tmp_path, flags=[])
     assert "数据核查提示" not in md2
 
 
-# ---------- 配图 ----------
+# ---------- figures ----------
 
 def test_figs_inserted_at_chapter_end_with_relative_path(tmp_path):
     rdir = tmp_path / "r"
@@ -175,12 +175,12 @@ def test_figs_inserted_at_chapter_end_with_relative_path(tmp_path):
     figs_dir.mkdir(parents=True, exist_ok=True)
     f1 = figs_dir / "ch01_revenue.png"
     f2 = figs_dir / "ch02_output.png"
-    f1.write_bytes(b"\x89PNG\r\n\x1a\n")                   # 占位, 渲染只查存在性
+    f1.write_bytes(b"\x89PNG\r\n\x1a\n")                   # placeholder; rendering only checks existence
     f2.write_bytes(b"\x89PNG\r\n\x1a\n")
     md = _render(tmp_path, figs=[(f1, 1, "图1 营收五年走势"), (f2, 2)])
     ch1, ch2 = _section(md, "一、"), _section(md, "二、")
-    assert ch1.rstrip().endswith("*图1 营收五年走势*")       # 章末图 + 说明行
-    assert "![](figs/ch01_revenue.png)" in ch1              # 绝对路径 → 相对引用
+    assert ch1.rstrip().endswith("*图1 营收五年走势*")       # chapter-end figure + caption line
+    assert "![](figs/ch01_revenue.png)" in ch1              # absolute path -> relative reference
     assert "![](figs/ch02_output.png)" in ch2
     assert "![](figs/ch01_revenue.png)" not in ch2
 
@@ -188,28 +188,28 @@ def test_figs_inserted_at_chapter_end_with_relative_path(tmp_path):
 def test_unbound_fig_goes_to_appendix_section(tmp_path):
     rdir = tmp_path / "r"
     rdir.mkdir(parents=True, exist_ok=True)
-    loose = rdir / "misc_snapshot.png"                    # 无章号且文件名无 chNN
+    loose = rdir / "misc_snapshot.png"                    # no chapter no and no chNN in the filename
     loose.write_bytes(b"\x89PNG\r\n\x1a\n")
     md = _render(tmp_path, figs=[loose])
     assert "![](misc_snapshot.png)" in _section(md, "附图")
     assert "misc_snapshot" not in _section(md, "一、")
 
 
-# ---------- 附录 ----------
+# ---------- appendices ----------
 
 def test_appendix_hypotheses_methodology_disclaimer(tmp_path):
     md = _render(tmp_path)
     ap = _section(md, "附录 A")
     assert "2026 年茅台酒销量增速不低于 4%" in ap and "待验证" in ap
-    assert "获支持" in ap and "T:tushare.revenue.2025A" in ap   # related_eids 可溯
+    assert "获支持" in ap and "T:tushare.revenue.2025A" in ap   # related_eids traceable
     assert "i茅台酒平台销量披露" in ap
-    assert r"直销占比继续提升\|带动毛利率上行" in ap             # 竖线转义不破表
+    assert r"直销占比继续提升\|带动毛利率上行" in ap             # pipe escaped, table intact
     assert "三层分离" in _section(md, "附录 B")
     disc = _section(md, "免责声明")
     assert "不构成任何投资建议" in disc and "脚注" in disc
 
 
-# ---------- 总装 CLI (离线: 分片+草稿已落盘) ----------
+# ---------- assembly CLI (offline: shards + draft already on disk) ----------
 
 def _make_research_dir(root: Path) -> Path:
     rdir = root / "research" / "600519.SH"

@@ -1,13 +1,18 @@
 # -*- encoding: utf-8 -*-
 """
-Stage 3 呈现层 — draft + figures → 可发布研究报告 MD (T08)
+Stage 3 presentation layer — draft + figures -> publishable research report MD (T08)
 
-呈现层铁律: 只做排版与脚注化, 绝不改内容层正文 (禁"顺手润色")。
-  - 行内 [E:eid]/[V:vid] → <sup>[n]</sup>, 编号按全文首次出现序, 同一引用复用同号;
-  - 幽灵引用 (不在证据集) 原样保留为可见文本, 不伪装成脚注 (透明化, 配合 flags 区);
-  - 文末"证据与观点来源"区与正文脚注编号一一对应, 每条可回溯;
-  - flags 非空 → 文首"数据核查提示"块 (不隐藏问题);
-  - 附录: 假设表(判断层) + 方法论说明(三层分离) + 免责声明。
+Presentation-layer iron rules: layout and footnote conversion only, never touch the
+content layer's body text (no "convenient polishing").
+  - Inline [E:eid]/[V:vid] -> <sup>[n]</sup>; numbers assigned by first appearance across
+    the whole document, the same reference reuses its number;
+  - ghost citations (absent from the evidence pack) stay as visible text verbatim, not
+    disguised as footnotes (transparency, complementing the flags zone);
+  - the end-of-document "evidence and view sources" zone maps one-to-one to the body's
+    footnote numbers, every entry traceable;
+  - non-empty flags -> a "data-check notice" block at the top (problems are not hidden);
+  - appendices: hypothesis table (judgment layer) + methodology note (three-layer
+    separation) + disclaimer.
 """
 from __future__ import annotations
 
@@ -23,7 +28,7 @@ from skills.research.contracts import Draft, Fact, View, pack_stats
 
 logger = get_logger(__name__)
 
-# 与 contracts._CITE_RE 同式: 行内引用 [E:eid] / [V:vid]
+# Same pattern as contracts._CITE_RE: inline citation [E:eid] / [V:vid]
 _CITE_RE = re.compile(r"\[(E|V):([^\]\s]+)\]")
 _FIG_NAME_RE = re.compile(r"^ch(\d+)_")
 
@@ -51,30 +56,31 @@ _DISCLAIMER = (
 )
 
 
-# ---------- 内部工具 ----------
+# ---------- internal helpers ----------
 
 def _cn_no(no: int) -> str:
     return _CN_NUM.get(no, str(no))
 
 
 def _md_cell(s: str) -> str:
-    """表格单元格转义: 竖线与换行会破坏表格布局"""
+    """Escape a table cell: pipes and newlines would break the table layout"""
     return (s or "").replace("|", "\\|").replace("\r", " ").replace("\n", " ").strip()
 
 
 def _rel_fig(fig_path: Path, base: Path) -> str:
-    """图片路径相对化到报告所在目录 (MD 引用用相对路径, 统一正斜杠)"""
+    """Relativize the image path against the report's directory (MD references use relative paths, forward slashes normalized)"""
     try:
         if fig_path.is_absolute():
             return Path(os.path.relpath(fig_path, base)).as_posix()
-    except ValueError:                 # Windows 跨盘符无相对路径
+    except ValueError:                 # no relative path across Windows drive letters
         return fig_path.as_posix()
     return Path(fig_path).as_posix()
 
 
 def _norm_figs(figs: Sequence) -> List[Tuple[Path, Optional[int], Optional[str]]]:
-    """T07 返回清单宽容归一: (path, ch_no[, hint]) / (path, ch_no) / 裸 Path。
-    裸 Path 按文件名 chNN_ 约定绑章, 仍无法判定则挂文末附图区。"""
+    """Leniently normalize T07's returned list: (path, ch_no[, hint]) / (path, ch_no) /
+    a bare Path. A bare Path binds to a chapter via the chNN_ filename convention; if
+    still undecidable it lands in the end-of-document figure zone."""
     out: List[Tuple[Path, Optional[int], Optional[str]]] = []
     for item in figs or []:
         if isinstance(item, (str, os.PathLike)):
@@ -93,7 +99,7 @@ def _norm_figs(figs: Sequence) -> List[Tuple[Path, Optional[int], Optional[str]]
     return out
 
 
-# ---------- 各区块渲染 ----------
+# ---------- section renderers ----------
 
 def _title_block(draft: Draft, facts: List[Fact], views: List[View]) -> List[str]:
     stats = pack_stats(facts, views)
@@ -125,7 +131,8 @@ def _flags_block(flags: List[str]) -> List[str]:
 
 def _assign_footnotes(draft: Draft, facts: List[Fact],
                       views: List[View]) -> Tuple[Dict[str, int], List[str], List[str]]:
-    """按全文首次出现序为引用编号。返回 (ref→编号, 有序 ref 清单, 幽灵引用清单)。"""
+    """Number citations by first appearance across the whole document. Returns (ref->number,
+    ordered ref list, ghost-citation list)."""
     pool = {f.eid for f in facts} | {v.vid for v in views}
     order: List[str] = []
     ghosts: List[str] = []
@@ -144,7 +151,7 @@ def _assign_footnotes(draft: Draft, facts: List[Fact],
 def _render_body(body_md: str, num: Dict[str, int]) -> str:
     def _sub(m: re.Match) -> str:
         n = num.get(m.group(2))
-        return f"<sup>[{n}]</sup>" if n else m.group(0)   # 幽灵引用原样保留
+        return f"<sup>[{n}]</sup>" if n else m.group(0)   # ghost citations kept verbatim
     return _CITE_RE.sub(_sub, body_md)
 
 
@@ -200,14 +207,15 @@ def _hypotheses_table(draft: Draft) -> List[str]:
     return lines
 
 
-# ---------- 主入口 ----------
+# ---------- main entry ----------
 
 def render_report(draft: Draft, facts: List[Fact], views: List[View],
                   figs: Sequence, out_path: Path) -> Path:
-    """draft + 证据包 + 配图清单 → 研究报告 MD, 返回落盘路径。
+    """draft + evidence pack + figure list -> research report MD; returns the written path.
 
-    figs 宽容接收 T07 清单 ((path, ch_no[, hint]) 元组或裸 Path, 裸 Path 按
-    chNN_ 文件名约定绑章); out_path 为目标 md 路径, 图片引用相对其所在目录。
+    figs leniently accepts T07's list ((path, ch_no[, hint]) tuples or bare Paths; a bare
+    Path binds to a chapter via the chNN_ filename convention); out_path is the target md
+    path; image references are relative to its directory.
     """
     out_path = Path(out_path)
     base = out_path.parent

@@ -1,39 +1,49 @@
 # -*- encoding: utf-8 -*-
 """
-T09 · 质量评分卡 — 把"优质研究报告"变成可度量的分数 (任务书: docs/research/tasks/T09)
+T09 · quality scorecard — turns "a quality research report" into a measurable score
+(task spec: docs/research/tasks/T09)
 
     score(draft, facts, views, flags) -> {"score": 0-100, "pass": bool, "dimensions": {...}}
 
-六个维度 (达标线抄自任务书; 权重自定, 理由见下):
+Six dimensions (passing lines copied from the task spec; weights self-chosen, rationale below):
 
-  维度            度量                                        达标线        权重
-  evidence_coverage 证据覆盖率: 数字句中带 [E:]/[V:] 引用比例      ≥80%         30
-  citation_validity 引用有效性: 幽灵引用数 (自查 ∪ flags 报告)      =0           20
-  structure         结构完整度: 第1..10章覆盖 (flags 声明跳过除外)  10/10        15
-  evidence_richness 证据丰度: facts 总数 ≥100 且年报(A:)事实 ≥15   双达标        15
-  hypothesis        假设可验证率: hypotheses 含 ≥1 非空指标比例      =100%        10
-  layer_purity      三层纯净度: 含 [V: 却无机构标注的句子数          ≤2           10
+  dimension         measure                                              line     weight
+  evidence_coverage coverage: share of numeric sentences with [E:]/[V:]   >=80%     30
+  citation_validity citation validity: ghost citations (self-check ∪ flags) =0       20
+  structure         completeness: chapters 1..10 covered (flags-declared skips excepted) 10/10  15
+  evidence_richness richness: total facts >=100 and annual (A:) facts >=15  both met 15
+  hypothesis        verifiability: share of hypotheses with >=1 non-empty indicator  =100%    10
+  layer_purity      three-layer purity: sentences with [V: but no org attribution   <=2      10
 
-权重理由: 引用闭环 (覆盖率30 + 有效性20 = 50分) 是"证据可回溯"这条第一铁律的直接
-度量, 占一半 — 幽灵引用是硬伤故整维清零; 结构与证据供给 (15+15) 是报告的骨架与
-原料; 假设可验证 (10) 与三层纯净 (10) 对应方法论"观点不冒充事实/假设可证伪", 各一成。
+Weight rationale: the citation loop (coverage 30 + validity 20 = 50 pts) directly measures
+the first iron rule "evidence must be traceable" and takes half the total — ghost citations
+are hard defects, so that dimension zeroes out entirely; structure and evidence supply
+(15+15) are the report's skeleton and raw material; hypothesis verifiability (10) and
+three-layer purity (10) map to the methodology's "views never masquerade as facts /
+hypotheses are falsifiable", one-tenth each.
 
-口径约定 (与 T06/T08 的分工边界):
-  - 句子: 按 。！？!?；;\n 切分; markdown 标题行(#)、表格行(|)、代码围栏行(`) 不计
-    入句子 — 表格中的数字由 evidence_richness 与引用有效性间接约束 (已知局限,
-    见 docs/research/验收_贵州茅台.md "问题"一节)。
-  - 数字句: 剥除行内引用记号后仍含数字 (ASCII/全角) 才算 — [E:T:2025.x] 记号本身
-    的数字不计; "表2/图3/第4章" 属交叉引用非数据主张, 先剥除再判定。
-  - 三层纯净: 含 [V:vid] 的句子剥记号后, 须出现被引观点机构名 (剥"证券/公司/研究
-    所"等常见后缀的核心词, ≥2字) 或泛指归属词 (机构/券商/研报/分析师/卖方…)。
-    观点动词 (认为/预计…) 不构成归属 — 否则等于放任观点伪装成事实。
-  - 幽灵引用: 独立于 T06 复算 (used_eids + 正文行内引用, 不在证据集即幽灵, 前缀
-    非法同样计入), 再从 flags 文本中宽容提取引用记号取并集 — T06 消息格式未定,
-    提不出记号就只剩自查结果, 不影响正确性。
-  - flags 为 None 时取 draft.flags (T06 落在 Draft 上的告警)。
+Measurement conventions (boundary of the split with T06/T08):
+  - sentence: split on 。！？!?；;\n; markdown heading lines (#), table lines (|) and code
+    fence lines (`) are not counted — numbers inside tables are constrained indirectly by
+    evidence_richness and citation validity (known limitation, see the "问题" section of
+    docs/research/验收_贵州茅台.md).
+  - numeric sentence: counts only when digits (ASCII/full-width) remain after stripping
+    inline citation markers — digits inside the [E:T:2025.x] marker itself don't count;
+    "表2/图3/第4章" are cross-references rather than data claims and are stripped first.
+  - three-layer purity: a sentence containing [V:vid] must, after stripping markers,
+    contain the cited view's org name (core word with common suffixes like 证券/公司/研究所
+    stripped, >=2 chars) or a generic attribution word (机构/券商/研报/分析师/卖方…).
+    Opinion verbs (认为/预计…) do not constitute attribution — otherwise views would be
+    free to masquerade as facts.
+  - ghost citation: recomputed independently of T06 (used_eids + inline body citations;
+    anything absent from the matching evidence set is a ghost, illegal prefixes count too),
+    then citation markers are leniently extracted from flag texts and unioned in — the T06
+    message format is not fixed; when no markers can be extracted only the self-check
+    remains, which does not affect correctness.
+  - flags of None falls back to draft.flags (warnings T06 left on the Draft).
 
-CLI: python -m skills.research.quality_rubric <ts_code 或研究目录> [--json]
-     对 output/research/<ts_code>/ 的 draft.json + 证据分片跑分, 输出评分报告。
+CLI: python -m skills.research.quality_rubric <ts_code or research dir> [--json]
+     scores output/research/<ts_code>/'s draft.json + evidence shards, prints the score report.
 """
 from __future__ import annotations
 
@@ -48,37 +58,37 @@ from skills.research.contracts import Draft, Fact, View, load_draft, load_pack
 
 logger = get_logger(__name__)
 
-# ---------- 常量 (达标线) ----------
+# ---------- constants (passing lines) ----------
 
-COVERAGE_LINE = 0.80      # 证据覆盖率 ≥80%
-PURITY_LINE = 2           # 无机构标注的观点句 ≤2
-RICHNESS_FACT_LINE = 100  # facts 总数 ≥100
-RICHNESS_ANNUAL_LINE = 15  # 年报(A:前缀)事实 ≥15
-TOTAL_CHAPTERS = 10       # 十章模板
+COVERAGE_LINE = 0.80      # evidence coverage >=80%
+PURITY_LINE = 2           # view sentences without org attribution <=2
+RICHNESS_FACT_LINE = 100  # total facts >=100
+RICHNESS_ANNUAL_LINE = 15  # annual-report (A: prefix) facts >=15
+TOTAL_CHAPTERS = 10       # ten-chapter template
 
 EXPECTED_CHAPTERS = tuple(range(1, TOTAL_CHAPTERS + 1))
 
-# 与 contracts._CITE_RE 同构 (T01 独占契约, 此处只镜像不改)
+# Same shape as contracts._CITE_RE (T01 owns the contract; mirrored here, never modified)
 _CITE_RE = re.compile(r"\[(E|V):([^\]\s]+)\]")
 _V_CITE_RE = re.compile(r"\[V:([^\]\s]+)\]")
 _SENT_SPLIT_RE = re.compile(r"[。！？!?\n；;]")
 _DIGIT_RE = re.compile(r"[0-9０-９]")
-# 交叉引用噪声 (表2/图3/第4章/第4节…): 是行文指针不是数据主张
+# Cross-reference noise (表2/图3/第4章/第4节…): prose pointers, not data claims
 _XREF_RE = re.compile(r"[表图]\s*\d+|第\s*\d+\s*[章节部分]")
-# 机构名常见后缀 — 剥掉后取核心词做包含匹配 (中金公司→中金, 国泰君安证券→国泰君安)
+# Common org-name suffixes — strip them, then match on the core word (中金公司→中金, 国泰君安证券→国泰君安)
 _ORG_SUFFIXES = ("股份有限公司", "有限责任公司", "有限公司",
                  "证券", "公司", "研究所", "国际", "资本", "投资", "集团")
-# 泛指归属词: "多家券商认为…"式集体引用也算有归属
+# Generic attribution words: collective citations like "多家券商认为…" also count as attributed
 _ATTRIBUTION_RE = re.compile(r"机构|券商|研报|研究报告|分析师|卖方|研究部|策略团队|头部买方")
-# flags 中的跳章声明: 须同时命中章号与跳过关键词 (对 T06 消息格式宽容)
+# Skip-chapter declarations in flags: must hit both a chapter number and a skip keyword (lenient about the T06 message format)
 _CH_NO_RE = re.compile(r"第\s*(\d{1,2})\s*[章节]|ch(?:apter)?\s*[-_ ]?(\d{1,2})", re.I)
 _SKIP_KW_RE = re.compile(r"跳过|缺失|未生成|略去|省略|skip", re.I)
 
 
-# ---------- 句子枚举与判定 ----------
+# ---------- sentence enumeration and predicates ----------
 
 def _iter_sentences(body_md: str) -> Iterable[str]:
-    """产出正文章节句子: 跳过 markdown 标题/表格/代码围栏内行与空行, 按中英文句读切分。"""
+    """Yield body-chapter sentences: skip markdown heading/table/code-fence lines and blanks, split on Chinese/English sentence punctuation."""
     in_fence = False
     for raw in body_md.split("\n"):
         line = raw.strip()
@@ -94,7 +104,7 @@ def _iter_sentences(body_md: str) -> Iterable[str]:
 
 
 def _plain(sent: str) -> str:
-    """剥行内引用记号与交叉引用噪声后的纯文本"""
+    """Plain text after stripping inline citation markers and cross-reference noise"""
     return _XREF_RE.sub("", _CITE_RE.sub(" ", sent))
 
 
@@ -103,14 +113,14 @@ def _is_numeric_sentence(sent: str) -> bool:
 
 
 def _cited_marks(sent: str) -> List[Tuple[str, str]]:
-    """句中全部行内引用 -> [("E", ref), ("V", ref), ...]"""
+    """All inline citations in the sentence -> [("E", ref), ("V", ref), ...]"""
     return [(m.group(1), m.group(2)) for m in _CITE_RE.finditer(sent)]
 
 
-# ---------- 三层纯净度 ----------
+# ---------- three-layer purity ----------
 
 def _org_cores(org: str) -> Set[str]:
-    """机构名的候选核心词 (原名 + 剥常见后缀, 至少 2 字)"""
+    """Candidate core words of an org name (original + suffix-stripped forms, at least 2 chars)"""
     cores = {org}
     for suf in _ORG_SUFFIXES:
         if org.endswith(suf) and len(org) - len(suf) >= 2:
@@ -120,23 +130,24 @@ def _org_cores(org: str) -> Set[str]:
 
 def _view_attributed(sent: str, vids: List[str],
                      view_by_vid: Dict[str, View]) -> bool:
-    """观点句是否有归属: 被引机构名 (核心词) 出现, 或有泛指归属词。"""
+    """Whether a view sentence is attributed: the cited org name (core word) appears, or a generic attribution word is present."""
     plain = _plain(sent)
     for vid in vids:
         v = view_by_vid.get(vid)
         if v is None:
-            continue  # 幽灵引用由 citation_validity 维度处理, 此处不重复计罚
+            continue  # ghost citations are handled by the citation_validity dimension; no double penalty here
         if any(core in plain for core in _org_cores(v.org)):
             return True
     return bool(_ATTRIBUTION_RE.search(plain))
 
 
-# ---------- 幽灵引用与跳章 ----------
+# ---------- ghost citations and skipped chapters ----------
 
 def _collect_ghosts(draft: Draft, facts: List[Fact], views: List[View],
                     flags: List[str]) -> Set[str]:
-    """复算幽灵引用 (独立于 T06): 正文行内引用 + used_eids + flags 中报告的引用,
-    不在对应证据集即幽灵; 前缀非法 (非 T:/A:/R:) 同样计入。"""
+    """Recompute ghost citations (independent of T06): inline body citations + used_eids +
+    citations reported in flags; anything absent from the matching evidence set is a ghost;
+    illegal prefixes (not T:/A:/R:) count too."""
     eid_set = {f.eid for f in facts}
     vid_set = {v.vid for v in views}
     ghosts: Set[str] = set()
@@ -163,7 +174,7 @@ def _collect_ghosts(draft: Draft, facts: List[Fact], views: List[View],
 
 
 def _skipped_chapter_nos(flags: List[str]) -> Set[int]:
-    """flags 中声明跳过的章号 (第N章/章N + 跳过关键词 同时命中)"""
+    """Chapter numbers declared skipped in flags (chapter-number pattern + skip keyword both hit)"""
     out: Set[int] = set()
     for fl in flags:
         if not _SKIP_KW_RE.search(fl):
@@ -173,16 +184,17 @@ def _skipped_chapter_nos(flags: List[str]) -> Set[int]:
     return out
 
 
-# ---------- 评分主入口 ----------
+# ---------- scoring main entry ----------
 
 def score(draft: Draft, facts: List[Fact], views: List[View],
           flags: Optional[List[str]] = None) -> Dict[str, Any]:
-    """六维加权评分。返回 {"score": 0-100, "pass": bool, "dimensions": {...}};
-    pass = 六维达标线全部满足 (与总分独立, 总分用于横向比较颗粒度)。"""
+    """Six-dimension weighted score. Returns {"score": 0-100, "pass": bool, "dimensions": {...}};
+    pass = every dimension meets its passing line (independent of the total, which exists
+    for cross-sectional comparison granularity)."""
     if flags is None:
         flags = list(draft.flags)
 
-    # 1) 证据覆盖率 + 三层纯净度 (同一次句子扫描)
+    # 1) evidence coverage + three-layer purity (one sentence scan)
     view_by_vid = {v.vid: v for v in views}
     num_total = num_cited = 0
     impure: List[Dict[str, Any]] = []
@@ -202,29 +214,29 @@ def score(draft: Draft, facts: List[Fact], views: List[View],
             if known_vids and not _view_attributed(sent, known_vids, view_by_vid):
                 impure.append({"chapter": ch.no, "sentence": sent[:80]})
         per_chapter.append({"chapter": ch.no, "numeric": ch_num, "cited": ch_num_cited})
-    coverage = (num_cited / num_total) if num_total else 1.0  # 无数字句=空转通过
+    coverage = (num_cited / num_total) if num_total else 1.0  # no numeric sentences = vacuous pass
 
-    # 2) 引用有效性
+    # 2) citation validity
     ghosts = _collect_ghosts(draft, facts, views, flags)
 
-    # 3) 结构完整度
+    # 3) structural completeness
     produced = {ch.no for ch in draft.chapters}
     skipped = _skipped_chapter_nos(flags)
     expected = set(EXPECTED_CHAPTERS)
     covered = (produced | skipped) & expected
     missing = sorted(expected - covered)
 
-    # 4) 证据丰度
+    # 4) evidence richness
     fact_total = len(facts)
     annual_total = sum(1 for f in facts if f.eid.startswith("A:"))
 
-    # 5) 假设可验证率
+    # 5) hypothesis verifiability
     hyp_total = len(draft.hypotheses)
     hyp_ok = sum(1 for h in draft.hypotheses
                  if any(s and s.strip() for s in h.indicators))
-    hyp_ratio = (hyp_ok / hyp_total) if hyp_total else 0.0  # 无假设=判断层缺失
+    hyp_ratio = (hyp_ok / hyp_total) if hyp_total else 0.0  # no hypotheses = judgment layer missing
 
-    # 6) 三层纯净度计分: 每句无归属扣 20%, 5 句扣光 (达标线 ≤2 → 至少保 60%)
+    # 6) three-layer purity scoring: each unattributed sentence costs 20%, 5 sentences zero it out (line <=2 -> at least 60% retained)
     purity_ratio = max(0.0, 1.0 - len(impure) / 5.0)
 
     dims: Dict[str, Dict[str, Any]] = {
@@ -284,11 +296,11 @@ def _dim(label: str, line: str, weight: int, ratio: float, passed: bool,
             "pass": bool(passed), "detail": detail}
 
 
-# ---------- 目录级入口与报告 ----------
+# ---------- directory-level entry and report ----------
 
 def score_from_dir(research_dir: Path,
                    flags: Optional[List[str]] = None) -> Dict[str, Any]:
-    """对 output/research/<ts_code>/ (draft.json + 证据分片) 跑分"""
+    """Score output/research/<ts_code>/ (draft.json + evidence shards)"""
     draft_path = research_dir / "draft.json"
     if not draft_path.is_file():
         raise FileNotFoundError(f"未找到 {draft_path} — 先跑 Stage 2 生成草稿")
@@ -298,7 +310,7 @@ def score_from_dir(research_dir: Path,
 
 
 def format_report(result: Dict[str, Any]) -> str:
-    """评分结果 -> 中文 markdown 报告 (验收文档/CLI 共用)"""
+    """Score result -> Chinese markdown report (shared by acceptance docs / CLI)"""
     verdict = "✅ 通过" if result["pass"] else "❌ 未通过"
     lines = ["## 质量评分卡", "",
              f"**总分 {result['score']:.1f} / 100 · {verdict}**", "",

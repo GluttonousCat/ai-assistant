@@ -1,9 +1,11 @@
 # -*- encoding: utf-8 -*-
-"""T09 质量评分卡离线测试 — fixture 构造满分/踩线/单项失败样例, 不连 LLM/DB。
+"""T09 quality-scorecard offline tests — fixtures build full-score / on-the-line /
+single-dimension-failure samples; no LLM/DB.
 
-覆盖: score() 六维达标线边界、幽灵引用三来源 (正文/used_eids/flags)、跳章豁免、
-句子枚举口径 (表格/标题/代码行/交叉引用噪声)、机构核心词归属、score_from_dir
-落盘 roundtrip、与 T01 validate_draft 的交叉一致性。
+Coverage: score()'s six-dimension passing-line boundaries, ghost citations from three
+sources (body/used_eids/flags), skipped-chapter exemption, sentence-enumeration caliber
+(tables/headings/code lines/cross-reference noise), org-core attribution,
+score_from_dir persistence roundtrip, and cross-consistency with T01's validate_draft.
 """
 from pathlib import Path
 
@@ -22,7 +24,7 @@ from skills.research.contracts import (
 )
 
 
-# ---------- fixture 构造 ----------
+# ---------- fixture builders ----------
 
 def mk_facts(total: int = 105, annual: int = 16):
     facts = []
@@ -56,12 +58,13 @@ def mk_chapter(no: int, sents, used_eids=None):
 
 
 def full_chapter(no: int):
-    """标准好章: 2 个数字句全部带引用 (1 个 [E:] + 1 个有归属的 [V:]), 1 句定性"""
+    """A standard good chapter: 2 numeric sentences both cited (1 [E:] + 1 attributed
+    [V:]), 1 qualitative sentence"""
     return mk_chapter(no, [
         f"公司营业收入为{100 + no}亿元 [E:T:tushare.metric{no}.2021A]",
-        "## 一、经营概览",                      # 标题行不计句子
-        "| 年份 | 营收 |\n|---|---|\n| 2021 | 100 |",  # 表格行不计句子
-        "经营质量保持稳健",                       # 非数字句不进覆盖率分母
+        "## 一、经营概览",                      # heading line not counted as a sentence
+        "| 年份 | 营收 |\n|---|---|\n| 2021 | 100 |",  # table lines not counted
+        "经营质量保持稳健",                       # non-numeric sentence stays out of the coverage denominator
         "中金公司(2026-03-15)认为需求将增长15% [V:R:101.1]",
     ], used_eids=[f"T:tushare.metric{no}.2021A", "R:101.1"])
 
@@ -78,7 +81,7 @@ def full_draft():
         ])
 
 
-# ---------- 满分样例 ----------
+# ---------- full-score sample ----------
 
 def test_full_score():
     draft, facts = full_draft(), mk_facts()
@@ -86,7 +89,7 @@ def test_full_score():
     assert res["score"] == 100.0
     assert res["pass"] is True
     assert all(d["pass"] for d in res["dimensions"].values())
-    # 满分草稿对 T01 校验器也应零错误 (交叉一致性)
+    # the full-score draft must also be error-free for the T01 validator (cross-consistency)
     assert validate_draft(draft, facts, VIEWS) == []
 
 
@@ -95,18 +98,19 @@ def test_weights_sum_to_100():
         full_draft(), mk_facts(), VIEWS)["dimensions"].values()) == 100
 
 
-# ---------- 踩线样例 (每维恰好压达标线, 整体仍通过) ----------
+# ---------- on-the-line samples (each dimension exactly at its line; whole still passes) ----------
 
 def test_boundary_all_lines():
-    # 覆盖率恰好 80%: 全稿数字句 50 (被引 40 / 未引 10); 第1章的 2 句无归属观点句
-    # 也在"被引"内 (≤2 达标); 证据恰好 100 条 / 年报 15 条
+    # coverage exactly 80%: 50 numeric sentences overall (40 cited / 10 uncited);
+    # chapter 1's 2 unattributed view sentences count as "cited" too (<=2 line met);
+    # facts exactly 100 / annual 15
     chapters = []
     for no in range(1, 11):
         cited_e = [f"营收为{100 + i}亿元 [E:T:tushare.metric{i}.2021A]"
                    for i in range(4)]
         if no == 1:
             sents = cited_e[:2] + [
-                "需求将增长15% [V:R:101.1]",        # 无机构标注 ×2 (≤2 达标)
+                "需求将增长15% [V:R:101.1]",        # unattributed x2 (<=2 line met)
                 "出货量将提升20% [V:R:101.1]",
                 "总资产为2000亿元但未引用",
             ]
@@ -118,7 +122,7 @@ def test_boundary_all_lines():
     draft = Draft(ts_code="600519.SH", name="贵州茅台", chapters=chapters,
                   hypotheses=[Hypothesis(hid="H1", statement="s",
                                          indicators=["指标x"])])
-    facts = mk_facts(total=100, annual=15)   # 恰好压 ≥100 / ≥15
+    facts = mk_facts(total=100, annual=15)   # exactly at >=100 / >=15
     res = qr.score(draft, facts, VIEWS)
 
     assert res["pass"] is True
@@ -130,21 +134,21 @@ def test_boundary_all_lines():
     assert res["dimensions"]["evidence_richness"]["pass"] is True
     assert res["dimensions"]["evidence_richness"]["detail"]["fact_count"] == 100
     assert res["dimensions"]["evidence_richness"]["detail"]["annual_fact_count"] == 15
-    # 总分: 30*0.8 + 20 + 15 + 15 + 10 + 10*0.6 = 90
+    # total: 30*0.8 + 20 + 15 + 15 + 10 + 10*0.6 = 90
     assert res["score"] == pytest.approx(90.0)
 
 
-# ---------- 单维失败样例 ----------
+# ---------- single-dimension failure samples ----------
 
 def _base_res(**kw):
-    """满分基底上做单点破坏的便捷入口"""
+    """Convenience entry for single-point breakage on top of the full-score base"""
     return qr.score(kw.pop("draft", full_draft()),
                     kw.pop("facts", mk_facts()),
                     kw.pop("views", VIEWS), **kw)
 
 
 def test_fail_coverage():
-    # 每章 5 个数字句仅 1 个被引 → 全稿覆盖率 10/50 = 20%
+    # 5 numeric sentences per chapter, only 1 cited -> overall coverage 10/50 = 20%
     chapters = [mk_chapter(no, [
         "营收为100亿元 [E:T:tushare.metric0.2021A]",
         "净利为50亿元但未引用",
@@ -189,7 +193,7 @@ def test_fail_ghost_from_flags_union():
 
 def test_fail_structure_missing_chapters():
     draft = full_draft()
-    draft.chapters = draft.chapters[:8]   # 缺第 9、10 章
+    draft.chapters = draft.chapters[:8]   # chapters 9 and 10 missing
     res = qr.score(draft, mk_facts(), VIEWS)
     d = res["dimensions"]["structure"]
     assert d["pass"] is False
@@ -198,7 +202,7 @@ def test_fail_structure_missing_chapters():
 
 def test_structure_skip_flag_exempts():
     draft = full_draft()
-    draft.chapters = draft.chapters[:9]   # 缺第 10 章
+    draft.chapters = draft.chapters[:9]   # chapter 10 missing
     res = qr.score(draft, mk_facts(), VIEWS,
                    flags=["第10章 因证据不足跳过"])
     d = res["dimensions"]["structure"]
@@ -242,7 +246,7 @@ def test_fail_purity_over_line():
     chapters = []
     for no in range(1, 11):
         sents = [f"营收为{100 + no}亿元 [E:T:tushare.metric{no}.2021A]"]
-        if no <= 3:   # 3 句无归属观点句 > 达标线 2
+        if no <= 3:   # 3 unattributed view sentences > the line of 2
             sents.append(f"需求将增长{no}0% [V:R:101.1]")
         chapters.append(mk_chapter(no, sents,
                                    used_eids=[f"T:tushare.metric{no}.2021A", "R:101.1"]))
@@ -254,7 +258,7 @@ def test_fail_purity_over_line():
     assert d["detail"]["unattributed_view_sentences"] == 3
 
 
-# ---------- 口径细节 ----------
+# ---------- caliber details ----------
 
 def test_iter_sentences_excludes_non_prose():
     body = ("## 二、行业分析\n"
@@ -267,11 +271,11 @@ def test_iter_sentences_excludes_non_prose():
 
 
 def test_numeric_detection_strips_markers_and_xref():
-    assert not qr._is_numeric_sentence("[E:T:tushare.metric0.2021A] 持续增长")  # 记号内数字不计
-    assert not qr._is_numeric_sentence("经营情况见表2")           # 交叉引用非数据主张
+    assert not qr._is_numeric_sentence("[E:T:tushare.metric0.2021A] 持续增长")  # digits inside the marker don't count
+    assert not qr._is_numeric_sentence("经营情况见表2")           # cross-reference, not a data claim
     assert not qr._is_numeric_sentence("详见第3章")
     assert qr._is_numeric_sentence("营收增长15%")
-    assert qr._is_numeric_sentence("增长１５个百分点")            # 全角数字
+    assert qr._is_numeric_sentence("增长１５个百分点")            # full-width digits
 
 
 def test_coverage_vacuous_when_no_numeric_sentences():
@@ -293,14 +297,14 @@ def test_org_cores_strip_suffixes():
 def test_attribution_by_org_core_and_by_generic():
     sent1 = "国泰君安预计高端酒动销回暖 [V:R:102.1]"
     assert qr._view_attributed(sent1, ["R:102.1"], VIEW_BY_VID) is True
-    sent2 = "多家券商认为行业景气延续 [V:R:101.1]"     # 泛指归属词
+    sent2 = "多家券商认为行业景气延续 [V:R:101.1]"     # generic attribution word
     assert qr._view_attributed(sent2, ["R:101.1"], VIEW_BY_VID) is True
-    sent3 = "行业景气将延续 [V:R:101.1]"                # 机构与归属词皆无
+    sent3 = "行业景气将延续 [V:R:101.1]"                # neither org name nor attribution word
     assert qr._view_attributed(sent3, ["R:101.1"], VIEW_BY_VID) is False
 
 
 def test_ghost_vid_sentence_not_double_penalized_as_impure():
-    """幽灵 [V:] 引用只计入 citation_validity, 不再进纯净度分母"""
+    """A ghost [V:] citation counts only toward citation_validity, never into the purity denominator"""
     ch = mk_chapter(1, ["行业景气将延续 [V:R:bad.9]"], used_eids=["R:bad.9"])
     draft = full_draft()
     draft.chapters[0] = ch
@@ -309,7 +313,7 @@ def test_ghost_vid_sentence_not_double_penalized_as_impure():
     assert "R:bad.9" in res["dimensions"]["citation_validity"]["detail"]["ghosts"]
 
 
-# ---------- 目录级入口与报告 ----------
+# ---------- directory-level entry and report ----------
 
 def test_score_from_dir_roundtrip(tmp_path: Path):
     from skills.research.contracts import EvidenceShard

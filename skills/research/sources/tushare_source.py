@@ -1,22 +1,27 @@
 # -*- encoding: utf-8 -*-
 """
-T02 · Tushare/画像事实源 (研究生产线 Stage 1, 事实层)
+T02 · Tushare/profile fact source (research production line Stage 1, fact layer)
 
-把画像八板块 + 关键财务时序转换为 Fact 证据分片 facts_tushare.json。
-数据获取全部走现有能力 (禁直写 SQL):
-  - skills/content/profile.py build_company_profile() — 八板块画像 (只 import 不修改)
-  - harness.mcp 注册表 query_financials — 补齐财务三表时序
-    (single 模式单次最多 3 个指标, 且画像 financials 板块本身只带营收/净利/毛利率
-     3 列, 故按 3 指标一批补查 12 项)
+Converts the profile's eight sections + key financial time series into a Fact evidence
+shard facts_tushare.json. Data fetching uses existing capabilities only (direct SQL
+forbidden):
+  - skills/content/profile.py build_company_profile() — the eight-section profile
+    (import-only, never modified)
+  - harness.mcp registry query_financials — fills in the three-statement time series
+    (single mode allows at most 3 metrics per call, and the profile's financials section
+    itself carries only revenue/net-profit/gross-margin columns, hence 12 metrics filled
+    in batches of 3)
 
-三层分离: 本分片只产 fact 层。画像中的 forecasts/verification/reports/risk/regime
-板块属观点/判断层 (T04/T09 职责), 刻意不纳入。
+Three-layer separation: this shard produces fact layer only. The profile's
+forecasts/verification/reports/risk/regime sections belong to the view/judgment layers
+(T04/T09 responsibility) and are deliberately excluded.
 
-口径约定:
-  - 财务行取年报行 (12-31) 优先 → 年报=全年累计, 免环比换算; 某年只有季报行时
-    按实际期间标注 (YYYYQ1/Q3 累计口径), 不跨期换算。
-  - 金额字段 (元) ÷1e8 折算亿元表述, confidence=0.9 并在 source 注明公式;
-    比率/每股类直引原值, confidence=1.0。
+Caliber conventions:
+  - financial rows prefer annual rows (12-31) -> an annual report = full-year cumulative,
+    no QoQ conversion needed; when a year has only quarterly rows, label by the actual
+    period (YYYYQ1/Q3 cumulative caliber), never convert across periods.
+  - amount fields (yuan) /1e8 into 100M-yuan wording, confidence=0.9 with the formula
+    noted in source; ratios/per-share quoted verbatim, confidence=1.0.
 
 CLI: python -m skills.research.sources.tushare_source 贵州茅台 [--years 5] [--out DIR]
 """
@@ -37,25 +42,26 @@ from skills.research.contracts import (
 logger = get_logger(__name__)
 
 
-# ---------- 指标元数据 (slug 唯一; bare=SQL 裸列名; field=回溯用 表.字段) ----------
+# ---------- metric metadata (slug unique; bare = bare SQL column name; field = table.field for tracing) ----------
 
 def _m(slug: str, cn: str, unit: str, field: str, yuan: bool = False,
        query: str = "") -> Dict[str, Any]:
-    """cn=Fact 显示名; query=query_financials 别名表精确键 (缺省同 cn)"""
+    """cn = Fact display name; query = exact key in the query_financials alias table (defaults to cn)"""
     return {"slug": slug, "cn": cn, "unit": unit, "field": field,
             "bare": field.split(".", 2)[-1], "yuan": yuan,
             "query": query or cn}
 
 
-# 画像 financials 板块自带的 3 列 (build_company_profile 内部已查)
+# The 3 columns the profile's financials section carries for free (already queried inside build_company_profile)
 _BASE_METRICS = [
     _m("revenue", "营业收入", "亿元", "fin.income.revenue", yuan=True),
     _m("n_income", "归母净利润", "亿元", "fin.income.n_income_attr_p", yuan=True),
     _m("gross_margin", "销售毛利率", "%", "fin.fina_indicator.grossprofit_margin"),
 ]
 
-# 补查时序批次 (每批 ≤3 指标, 覆盖三表 + 盈利质量 + 成长性);
-# query 必须是 METRIC_ALIAS_FULL 的精确键, 否则整批被 _resolve_metric 拒绝
+# Fill-in time-series batches (<=3 metrics per batch, covering the three statements +
+# earnings quality + growth); query must be an exact key of METRIC_ALIAS_FULL, otherwise
+# the whole batch is rejected by _resolve_metric
 _EXTRA_BATCHES = [
     [_m("roe", "净资产收益率ROE", "%", "fin.fina_indicator.roe",
          query="净资产收益率"),
@@ -83,17 +89,17 @@ _EXTRA_BY_SLUG = {m["slug"]: m for batch in _EXTRA_BATCHES for m in batch}
 _BIZ_CN = {"P": "产品", "D": "地区", "I": "行业"}
 
 
-# ---------- 期间口径 ----------
+# ---------- period caliber ----------
 
 def _period_label(end_date: str) -> str:
-    """end_date(YYYY-MM-DD) → 期间标签: 12-31→YYYYA, 06-30→YYYYH1, 03-31→YYYYQ1, 09-30→YYYYQ3"""
+    """end_date(YYYY-MM-DD) -> period label: 12-31->YYYYA, 06-30->YYYYH1, 03-31->YYYYQ1, 09-30->YYYYQ3"""
     y, md = end_date[:4], end_date[5:10]
     return {"12-31": f"{y}A", "06-30": f"{y}H1",
             "03-31": f"{y}Q1", "09-30": f"{y}Q3"}.get(md, end_date)
 
 
 def _period_cn(label: str) -> str:
-    """'2024A' → '2024年报' (Q1/Q3/H1 均为累计口径)"""
+    """'2024A' -> '2024年报' (Q1/Q3/H1 are all cumulative calibers)"""
     if len(label) >= 5 and label[:4].isdigit():
         suf = label[4:]
         cn = {"A": "年报", "H1": "中报", "Q1": "一季报", "Q3": "三季报"}.get(suf)
@@ -103,18 +109,19 @@ def _period_cn(label: str) -> str:
 
 
 def _fnum(v: Any) -> Optional[float]:
-    """宽容数值化 (None/NaN/空串 → None; Decimal→float)"""
+    """Lenient numeric conversion (None/NaN/empty string -> None; Decimal -> float)"""
     if v is None or v == "":
         return None
     try:
         f = float(v)
-        return None if f != f else f  # NaN 检查
+        return None if f != f else f  # NaN check
     except (TypeError, ValueError):
         return None
 
 
 def _annual_rows(rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-    """同年多期行 → 年报行(12-31)优先 (财报累计口径, 年报=全年免环比换算)"""
+    """Multiple periods of the same year -> annual row (12-31) wins (report cumulative
+    caliber: annual = full year, no QoQ conversion needed)"""
     by_year: Dict[str, Dict[str, Any]] = {}
     for r in rows:
         end_date = str(r.get("end_date") or "")
@@ -128,9 +135,11 @@ def _annual_rows(rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
 
 def _clip_years(by_year: Dict[str, Dict[str, Any]],
                 years: int) -> Dict[str, Dict[str, Any]]:
-    """截断到最近 years 个年报年度 + 晚于最大年报年的进行中期 (如当年中报)。
+    """Truncate to the most recent `years` annual years + in-progress interim periods
+    later than the max annual year (e.g. the current year's interim report).
 
-    query_financials 时序返回可达 12 年 (LIMIT 48), 年限约束由本层保证。
+    query_financials time series can span up to 12 years (LIMIT 48); the year-window
+    constraint is enforced by this layer.
     """
     annual = {y for y, r in by_year.items()
               if str(r.get("end_date") or "").endswith("12-31")}
@@ -140,7 +149,7 @@ def _clip_years(by_year: Dict[str, Dict[str, Any]],
             if y in keep_annual or (y > max_annual and y not in annual)}
 
 
-# ---------- 各板块 → Fact 列表 (纯转换, 可离线测试) ----------
+# ---------- profile sections -> Fact lists (pure conversion, offline testable) ----------
 
 def _facts_basic(sections: Dict[str, Any], name: str, ts_code: str,
                  snap: str) -> List[Fact]:
@@ -176,7 +185,8 @@ def _facts_mainbiz(sections: Dict[str, Any]) -> List[Fact]:
     if not rows or not end_date:
         return []
     label = _period_label(end_date)
-    # 同画像摘要口径: 优先产品维度(P), 避免与地区/行业维度重复计口径
+    # Same caliber as the profile summary: product dimension (P) preferred, avoiding
+    # double-counting calibers against the region/industry dimensions
     prod = [r for r in rows if r.get("bz_code") == "P"] or rows
     out = []
     for i, r in enumerate(prod[:5], 1):
@@ -207,7 +217,7 @@ def _facts_mainbiz(sections: Dict[str, Any]) -> List[Fact]:
 
 def _metric_fact(name: str, m: Dict[str, Any], row: Dict[str, Any],
                  via: str) -> Optional[Fact]:
-    """单指标单期一行 → Fact; 值缺失返回 None"""
+    """One metric, one period, one row -> Fact; None when the value is missing"""
     end_date = str(row.get("end_date") or "")
     raw = _fnum(row.get(m["bare"]))
     if raw is None or not end_date:
@@ -319,11 +329,12 @@ def _facts_industry(sections: Dict[str, Any], name: str, ts_code: str,
         period=label, value=roe, unit="%", confidence=0.9)]
 
 
-# ---------- 取数 (走现有能力) ----------
+# ---------- data fetching (via existing capabilities) ----------
 
 def _fetch_extra_series(registry: Any, stock: str,
                         years: int) -> Dict[str, Dict[str, Dict[str, Any]]]:
-    """补查财务时序 → {slug: {year: row}}; 单批失败降级继续 (不拖垮分片)"""
+    """Fill-in financial time series -> {slug: {year: row}}; a failed batch degrades and
+    continues (must not sink the shard)"""
     series: Dict[str, Dict[str, Dict[str, Any]]] = {}
     for batch in _EXTRA_BATCHES:
         env = registry.call("query_financials", {
@@ -341,8 +352,10 @@ def _fetch_extra_series(registry: Any, stock: str,
     return series
 
 
-# 行情快照指标 (query_financials 行情分支仅返回最近30天宽列, 不支持年度取点;
-# 禁直写 SQL 约束下多年估值/市值时序不可达, 以最新交易日的现值口径补充)
+# Quote-snapshot metrics (the query_financials quotes branch returns only a recent
+# 30-day wide table, no annual sampling; under the no-direct-SQL constraint a
+# multi-year valuation/market-cap series is unreachable, so we supplement with the
+# latest trading day's current values)
 _MARK_SNAP = [
     {"slug": "val_mv", "cn": "总市值", "unit": "亿元", "bare": "total_mv",
      "wan": True, "src": "stock.daily_basic.total_mv"},
@@ -354,7 +367,8 @@ _MARK_SNAP = [
 
 
 def _facts_market_snapshot(registry: Any, stock: str) -> List[Fact]:
-    """最新交易日的市值/收盘价现值 (估值水位由画像 valuation 板块覆盖)"""
+    """Latest trading day's market cap / close price current values (valuation level is
+    covered by the profile's valuation section)"""
     env = registry.call("query_financials", {
         "mode": "single", "stocks": [stock], "metrics": ["总市值"]})
     if not env.get("ok"):
@@ -372,7 +386,7 @@ def _facts_market_snapshot(registry: Any, stock: str) -> List[Fact]:
         if raw is None:
             continue
         if m["wan"]:
-            val, conf = round(raw / 1e4, 4), 0.9   # daily_basic 万元 → 亿元
+            val, conf = round(raw / 1e4, 4), 0.9   # daily_basic in 10k yuan -> 100M yuan
             note = "|原值单位万元,÷1e4折亿元"
         else:
             val, conf = round(raw, 4), 1.0
@@ -386,16 +400,18 @@ def _facts_market_snapshot(registry: Any, stock: str) -> List[Fact]:
     return out
 
 
-# ---------- 主入口 ----------
+# ---------- main entry ----------
 
 def collect_tushare_facts(stock: str, years: int = 5,
                           out_dir: Optional[Path] = None,
                           profile: Optional[Dict[str, Any]] = None,
                           registry: Any = None) -> EvidenceShard:
-    """股票名/代码 → 画像八板块 + 财务时序 → EvidenceShard(kind="tushare")。
+    """Stock name/code -> profile's eight sections + financial time series ->
+    EvidenceShard(kind="tushare").
 
-    profile/registry 可注入 (离线测试用); 默认走 build_company_profile 与
-    harness.mcp 注册表。out_dir 缺省 output/research/<ts_code>/。
+    profile/registry are injectable (for offline tests); defaults go through
+    build_company_profile and the harness.mcp registry. out_dir defaults to
+    output/research/<ts_code>/.
     """
     if profile is None:
         from skills.content.profile import build_company_profile

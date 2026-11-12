@@ -1,11 +1,11 @@
 # -*- encoding: utf-8 -*-
-"""T07 图表工场离线测试 — Agg 后端, 不连 LLM/DB。
+"""T07 figure-factory offline tests — Agg backend, no LLM/DB.
 
-分组:
-  test_route   分类规则与 eid 指标键解析 (含优先级/词边界防误吞)
-  test_build   茅台形态 fixture → ≥5 图/章绑定/命名规范/文件非空
-  test_filter  draft 章节过滤 (只出能落进现有章的图, 不写孤儿文件)
-  test_minimal 最小 fixture → ≥3 类图; 空证据不炸
+Groups:
+  test_route   classification rules and eid metric-key parsing (incl. priority/word boundaries against mis-swallowing)
+  test_build   Moutai-shaped fixture -> >=5 figures / chapter binding / naming rules / non-empty files
+  test_filter  draft chapter filtering (only figures fitting existing chapters; no orphan files)
+  test_minimal minimal fixture -> >=3 figure kinds; empty evidence doesn't crash
 """
 import re
 from pathlib import Path
@@ -37,7 +37,7 @@ def _f(eid, content, source, period, value, unit):
 
 
 def maotai_facts():
-    """茅台形态 fixture (数值为量级合理的示例, 仅供离线绘图测试)"""
+    """Moutai-shaped fixture (values are plausible-magnitude samples, offline plotting tests only)"""
     facts = []
     rev = [1094.64, 1275.54, 1505.60, 1741.44, 1871.90]
     prof = [524.60, 627.16, 747.34, 862.28, 941.60]
@@ -70,11 +70,11 @@ def maotai_facts():
             _f(f"T:tushare.rd_expense.{p}", f"{y}年研发费用{rd[i]}亿元",
                "fin.income.rd_exp (Tushare)", p, rd[i], "亿元"),
         ]
-    # 主营构成 (最新期间, 三项)
+    # main-business mix (latest period, three items)
     for item, share in (("茅台酒", 83.9), ("系列酒", 14.5), ("其他业务", 1.6)):
         facts.append(_f(f"T:mainbiz.{item}.2025A", f"2025年{item}收入占比{share}%",
                         "主营业务构成 (Tushare)", "2025A", share, "%"))
-    # 估值月度样本 (12 点 PE + 12 点 PB)
+    # monthly valuation samples (12 PE + 12 PB points)
     for m in range(1, 13):
         d = f"2025-{m:02d}-15"
         facts.append(_f(f"T:valuation.pe_ttm.{d}", f"{d}市盈率PE(TTM)",
@@ -86,7 +86,7 @@ def maotai_facts():
     return facts
 
 
-# ---------- test_route: 分类与指标键 ----------
+# ---------- test_route: classification and metric keys ----------
 
 def test_series_key_strips_period():
     assert _series_key(_f("T:tushare.revenue.2024A", "x", "s", "2024A", 1, "")) \
@@ -96,13 +96,14 @@ def test_series_key_strips_period():
 
 
 def test_classify_priority_and_boundary():
-    assert _classify("tushare.netprofit_margin") == "netmargin"   # 不被 profit 吞
+    assert _classify("tushare.netprofit_margin") == "netmargin"   # not swallowed by profit
     assert _classify("tushare.n_income_attr_p") == "profit"
-    assert _classify("tushare.capex") is None                     # capex 不误判为 pe
+    assert _classify("tushare.capex") is None                     # capex must not be mis-read as pe
     assert _classify("valuation.pe_ttm") == "pe"
     assert _classify("mdna.基酒产量", "2024年茅台酒基酒产量5.72万吨") == "volume"
     assert _classify("mainbiz.茅台酒") == "mainbiz"
-    # 真实 T02 命名: 增长率事实必须被 yoy 陷阱拦截, 不得混入水平值类别
+    # real T02 naming: growth-rate facts must be intercepted by the yoy trap, never
+    # mixed into level-value categories
     assert _classify("tushare.or_yoy") == "yoy"
     assert _classify("tushare.np_yoy") == "yoy"
     assert _classify("tushare.gross_margin") == "gross"
@@ -110,24 +111,24 @@ def test_classify_priority_and_boundary():
     assert _classify("tushare.ocf") == "ocf"
 
 
-# ---------- test_build: 茅台形态全量 ----------
+# ---------- test_build: full Moutai-shaped fixture ----------
 
 def test_maotai_full_fixture_five_figs(tmp_path):
     from PIL import Image
     figs = build_figures(Draft(ts_code=_TS, name="贵州茅台"),
                          maotai_facts(), tmp_path)
-    # ≥5 张图, 覆盖 ch02/ch04/ch05/ch10 (guide 章节输出要求)
+    # >=5 figures covering ch02/ch04/ch05/ch10 (guide chapter output requirements)
     assert len(figs) >= 5, [f.path.name for f in figs]
     chs = {f.chapter_no for f in figs}
     assert {2, 4, 5, 10} <= chs
     for f in figs:
         assert _NAME_RE.match(f.path.name), f.path.name
-        assert int(f.path.name[2:4]) == f.chapter_no     # 文件名前缀=章号
+        assert int(f.path.name[2:4]) == f.chapter_no     # filename prefix = chapter no
         assert f.path.exists() and f.path.stat().st_size > 5000
-        assert f.hint.startswith("章末插入")              # T08 组装提示
-        with Image.open(f.path) as img:                  # 公众号规范宽度统一 1080px
+        assert f.hint.startswith("章末插入")              # T08 assembly hint
+        with Image.open(f.path) as img:                  # official-account width normalized to 1080px
             assert img.size[0] == 1080, (f.path.name, img.size)
-    # 四类图各就各位
+    # the four figure kinds each in place
     names = {f.path.name for f in figs}
     assert {"ch02_mainbiz.png", "ch04_growth.png", "ch04_margins.png",
             "ch04_np_ocf.png", "ch05_volume.png", "ch10_valuation.png"} <= names
@@ -138,7 +139,7 @@ def test_figureout_unpacks_triple():
     assert (no, hint) == (4, "章末插入 · x") and p.name == "a.png"
 
 
-# ---------- test_filter: draft 章节过滤 ----------
+# ---------- test_filter: draft chapter filtering ----------
 
 def test_draft_chapter_filter(tmp_path):
     draft = Draft(ts_code=_TS, name="贵州茅台",
@@ -146,7 +147,7 @@ def test_draft_chapter_filter(tmp_path):
                             for i in (1, 2, 3, 4)])
     figs = build_figures(draft, maotai_facts(), tmp_path)
     assert figs and {f.chapter_no for f in figs} <= {1, 2, 3, 4}
-    # 被过滤的章不落孤儿文件
+    # filtered-out chapters leave no orphan files
     assert not (tmp_path / "figs" / "ch10_valuation.png").exists()
     assert not (tmp_path / "figs" / "ch05_volume.png").exists()
 
@@ -178,7 +179,7 @@ def test_minimal_three_types(tmp_path):
 
 def test_empty_and_unrecognized_facts(tmp_path):
     assert build_figures(Draft(ts_code="X", name="X"), [], tmp_path) == []
-    # 无可归类时序 → 不出图不炸 (只有单点/非数值)
+    # no classifiable series -> no figures, no crash (only single-point / non-numeric)
     odd = [
         _f("T:other.solo.2025A", "2025年某单点指标", "s", "2025A", 3.3, "x"),
         _f("T:tushare.revenue.2025A", "无 value", "s", "2025A", None, ""),
@@ -186,7 +187,7 @@ def test_empty_and_unrecognized_facts(tmp_path):
     assert build_figures(Draft(ts_code="X", name="X"), odd, tmp_path) == []
 
 
-# ---------- test_real_shape: 对齐 T02 真实分片命名 (600519.SH 实跑形态) ----------
+# ---------- test_real_shape: aligned with real T02 shard naming (shape seen in 600519.SH runs) ----------
 
 def _real_mainbiz(seq, item, amount, share, gm):
     return _f(f"T:profile.mainbiz.2026H1.{seq}",
@@ -196,7 +197,8 @@ def _real_mainbiz(seq, item, amount, share, gm):
 
 
 def test_real_yoy_not_mistaken_for_levels():
-    """or_yoy/np_yoy (%) 与 n_income (亿元) 同点数时, profit 序列必须取水平值"""
+    """When or_yoy/np_yoy (%) and n_income (100M yuan) have equal point counts, the profit
+    series must pick the level values"""
     facts = [_f("T:tushare.revenue.2024A", "2024年营业收入1708.99亿元", "s", "2024A", 1708.99, "亿元"),
              _f("T:tushare.revenue.2025A", "2025年营业收入1688.38亿元", "s", "2025A", 1688.38, "亿元"),
              _f("T:tushare.n_income.2024A", "2024年归母净利润862.28亿元", "s", "2024A", 862.28, "亿元"),
@@ -213,7 +215,8 @@ def test_real_yoy_not_mistaken_for_levels():
 
 
 def test_real_mainbiz_amount_and_share(tmp_path):
-    """真实形态: eid 用序号、品名/占比/毛利率在 content, value 是金额 (亿元)"""
+    """Real shape: eid uses a sequence number, item name/share/gross margin live in
+    content, value is the amount (100M yuan)"""
     facts = [
         _real_mainbiz(1, "茅台酒", 777.2444, 73.87, 92.28),
         _real_mainbiz(2, "其他酒系列", 129.3419, 12.29, 73.59),
@@ -221,15 +224,15 @@ def test_real_mainbiz_amount_and_share(tmp_path):
     ]
     items = _mainbiz_items(facts)
     by_name = {n: (s, gm) for n, s, gm, _ in items}
-    assert by_name["茅台酒"][0] == pytest.approx(73.87, abs=0.01)  # 占比直取
-    assert by_name["茅台酒"][1] == pytest.approx(92.28, abs=0.01)  # 毛利率提取
-    assert items[0][0] == "茅台酒"                                  # 品名从 content 提取
+    assert by_name["茅台酒"][0] == pytest.approx(73.87, abs=0.01)  # share taken directly
+    assert by_name["茅台酒"][1] == pytest.approx(92.28, abs=0.01)  # gross margin extracted
+    assert items[0][0] == "茅台酒"                                  # item name from content
     figs = build_figures(Draft(ts_code=_TS, name="贵州茅台"), facts, tmp_path)
     assert [f.path.name for f in figs] == ["ch02_mainbiz.png"]
 
 
 def test_real_mainbiz_amount_only_normalization(tmp_path):
-    """content 无占比字样 → 金额按组合计归一为占比"""
+    """Content without share wording -> amounts normalized against the group total into shares"""
     facts = [
         _f("T:mainbiz.茅台酒.2025A", "2025年茅台酒收入777.24亿元", "s", "2025A", 777.24, "亿元"),
         _f("T:mainbiz.系列酒.2025A", "2025年系列酒收入129.34亿元", "s", "2025A", 129.34, "亿元"),
@@ -241,7 +244,8 @@ def test_real_mainbiz_amount_only_normalization(tmp_path):
 
 
 def test_real_valuation_single_fact_parsed(tmp_path):
-    """真实形态: 估值每指标 1 条事实, 区间/分位嵌在 content → 解析模式出区间带"""
+    """Real shape: one valuation fact per metric, range/percentile embedded in content
+    -> parse mode produces the range band"""
     facts = [
         _f("T:profile.valuation.pe_ttm.2026-09-25",
            "市盈率PE(TTM) 为 18.99 倍, 处于近 3 年 4.1% 分位 (区间 17.66~33.11, 样本 699 个交易日)",

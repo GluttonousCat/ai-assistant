@@ -1,9 +1,11 @@
 # -*- encoding: utf-8 -*-
 """
-公众号文章生成: 股票画像模式 / 研报主题模式
+WeChat official-account article generation: stock-profile mode / report-topic mode
 
-产出 output/articles/YYYYMMDD_<slug>.md (公众号编辑器可直接粘贴 markdown)。
-发布本身人工操作 (微信草稿箱 API 属后续可选接入, 涉及凭据与外发确认)。
+Writes output/articles/YYYYMMDD_<slug>.md (markdown that can be pasted straight
+into the WeChat editor).
+Publishing itself is manual (the WeChat draft-box API is an optional future
+integration, involving credentials and outbound confirmation).
 """
 from __future__ import annotations
 
@@ -23,7 +25,7 @@ ARTICLE_ROOT = Path("output/articles")
 
 
 def _slug(text: str) -> str:
-    """文件名安全片段: 保留中英数, 其余转 -"""
+    """Filename-safe slug: keep Chinese/alphanumerics, replace the rest with -"""
     s = re.sub(r"[^\w\u4e00-\u9fff]+", "-", text).strip("-")
     return s[:24] or "article"
 
@@ -36,7 +38,8 @@ def _save(markdown: str, kind: str, key: str) -> Path:
 
 
 def _render_charts(profile: Dict) -> Dict[str, str]:
-    """画像板块 -> 配图 (相对路径占位符; 失败的图返回占位说明文本)"""
+    """Profile sections -> article images (relative-path placeholders; failed
+    charts return placeholder explanation text)"""
     from skills.content import charts
     s = profile.get("sections", {})
     ts_code = profile.get("ts_code") or ""
@@ -57,7 +60,7 @@ def _render_charts(profile: Dict) -> Dict[str, str]:
             charts.valuation_chart(s.get("valuation") or {}, ts_code))
         out["img_industry"] = _placeholder("industry",
             charts.industry_chart(s.get("industry") or {}, ts_code, name))
-    except Exception as e:  # noqa: BLE001 单图失败不挡成文
+    except Exception as e:  # noqa: BLE001 a failed chart must not block the article
         logger.warning(f"配图生成部分失败: {e}")
         for k in ("img_mainbiz", "img_growth", "img_margin",
                   "img_valuation", "img_industry"):
@@ -68,10 +71,12 @@ def _render_charts(profile: Dict) -> Dict[str, str]:
 def write_stock_article(stock: str, years: int = 5,
                         annual_year: Optional[int] = None,
                         use_annual: bool = True) -> Dict[str, Any]:
-    """画像 + 年报语料 -> 配图 -> 公众号文章 (六模块, 图文混排)。
+    """Profile + annual-report corpus -> charts -> WeChat article (six modules,
+    text interleaved with images).
 
-    年报语料 (cninfo.parse.annual_corpus 提炼) 全程降级:
-    无 PDF/无文本层/提炼失败均不阻塞成文。
+    The annual-report corpus (distilled by cninfo.parse.annual_corpus) degrades
+    gracefully throughout: missing PDF / missing text layer / distillation
+    failure never blocks article generation.
     """
     from harness.llm import get_agent_llm
     profile = build_company_profile(stock, years)
@@ -87,13 +92,14 @@ def write_stock_article(stock: str, years: int = 5,
             annual_block = (annual_corpus(profile.get("ts_code", ""),
                                           year=annual_year)
                             or annual_block)
-        except Exception as e:  # noqa: BLE001 语料单源失败不挡主链路
+        except Exception as e:  # noqa: BLE001 a single failed corpus source must not block the main pipeline
             logger.warning(f"年报语料获取失败, 降级: {e}")
 
     prompt = GZH_STOCK_ARTICLE_PROMPT.format(
         digest=digest, annual_report=annual_block, disclaimer=DISCLAIMER,
         **imgs)
-    # 思考模式 + 画像摘要 + 年报语料的六模块长文单次成文, 常态 2~4 分钟
+    # thinking mode + profile digest + annual corpus as one six-module long-form
+    # generation; typically takes 2~4 minutes
     article = get_agent_llm(timeout=300.0).invoke(prompt)
     path = _save(article, "gzh", profile.get("name", stock))
     n_imgs = sum(1 for v in imgs.values() if v.startswith("![]"))
@@ -107,7 +113,8 @@ def write_stock_article(stock: str, years: int = 5,
 
 
 def write_topic_article(topic: str, days: int = 90, limit: int = 8) -> Dict[str, Any]:
-    """研报主题综述: 检索 -> 取观点 -> 成文。合规: 观点转述+标注机构, 不搬运原文"""
+    """Report-topic summary: retrieve -> take views -> write. Compliance: views
+    paraphrased with the institution credited; never copy original text"""
     import json
     from harness.llm import get_agent_llm
     from harness.mcp import get_registry

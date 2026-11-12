@@ -1,23 +1,29 @@
 # -*- encoding: utf-8 -*-
-"""T06 草稿生成器 — Stage 2 核心: 证据包 → 十章草稿 + 假设清单 + 引用校验 flags。
+"""T06 draft generator — Stage 2 core: evidence pack -> ten-chapter draft + hypotheses
+list + citation-check flags.
 
-流程 (docs/research/tasks/T06_草稿生成器与引用校验.md):
-    load_pack 载入证据分片 → 按 T05 CHAPTERS 逐章:
-      wants 路由筛选证据子集 → 摘要化 (每条一行, ≤80 条, >30k 字符截断并 flag)
-      → get_agent_llm().invoke 非流式生成 (失败重试 1 次, 仍败跳过并 flag)
-      → 正文行内引用提取回填 used_eids
-    假设 JSON 由 T05 模板在假设章 (HYPOTHESES_CHAPTER_NO=8, 情景分析; 任务书"第10章"
-    系章序笔误, 以 T05 落库常量为准) 的 prompt 中追加要求; 生成器对每章输出宽容解析,
-    命中"statement 数组"即剥离正文回填 Draft.hypotheses
-    → citation_check 全稿校验 + T01 validate_draft 契约校验 → save_draft。
+Flow (docs/research/tasks/T06_草稿生成器与引用校验.md):
+    load_pack reads the evidence shards -> per chapter over T05 CHAPTERS:
+      route/filter the evidence subset by wants -> digest (one line per item, <=80 items,
+      truncated past 30k chars with a flag)
+      -> get_agent_llm().invoke non-streaming generation (1 retry on failure; skip with
+      a flag if it still fails)
+      -> extract inline body citations back into used_eids
+    The hypotheses JSON is requested by the T05 template appended to the hypotheses
+    chapter's prompt (HYPOTHESES_CHAPTER_NO=8, scenario analysis; the task doc's "第10章"
+    is a chapter-number typo — the T05 committed constant wins); the generator leniently
+    parses every chapter's output, and on hitting a "statement array" strips it from the
+    body and backfills Draft.hypotheses
+    -> citation_check whole-draft validation + T01 validate_draft contract validation
+    -> save_draft.
 
 CLI:
     python -m skills.research.compose.generator 贵州茅台
     python -m skills.research.compose.generator 600519.SH --years 5
 
-提示词库直接 import T05 (prompts_chapters.CHAPTERS/chapter_prompt/HYPOTHESES_CHAPTER_NO,
-chapter_prompt 已内嵌 STYLE_PROMPT)。
-测试与离线场景通过 llm= 参数注入桩, 不触真实模型。
+The prompt library is imported directly from T05 (prompts_chapters.CHAPTERS/
+chapter_prompt/HYPOTHESES_CHAPTER_NO; chapter_prompt already embeds STYLE_PROMPT).
+Tests and offline scenarios inject a stub via the llm= parameter, never a real model.
 """
 from __future__ import annotations
 
@@ -51,20 +57,21 @@ from skills.research.prompts_chapters import (
 
 logger = get_logger(__name__)
 
-# ---------- 摘要预算 (任务书: 每条一行 ≤80 条; 超 30k 字符截断) ----------
-TOTAL_ITEM_CAP = 80        # 单章证据行总数上限
-FACT_ITEM_CAP = 60         # 事实/观点并存时的事实份额 (观点保底 20 条, 防被挤出)
+# ---------- digest budget (task spec: one line per item, <=80 items; truncate past 30k chars) ----------
+TOTAL_ITEM_CAP = 80        # per-chapter cap on total evidence lines
+FACT_ITEM_CAP = 60         # facts' share when facts/views coexist (views keep a floor of 20, never squeezed out)
 VIEW_ITEM_CAP = 20
 DIGEST_CHAR_CAP = 30000
 
-RETRY_TIMES = 2                     # 失败章重试 1 次 (共 2 次尝试)
+RETRY_TIMES = 2                     # 1 retry for a failed chapter (2 attempts total)
 
 _TS_CODE_RE = re.compile(r"^\d{6}\.(SH|SZ|BJ)$", re.I)
 _JSON_ARRAY_FENCE_RE = re.compile(r"```(?:json)?\s*(\[.*?\])\s*```", re.S)
 _FENCE_WRAP_RE = re.compile(r"^```[a-zA-Z]*[ \t]*\n(.*?)\n?```\s*$", re.S)
 
-# 假设章兜底指令 — 仅当模板 prompt 自身未含假设 JSON 要求时追加
-# (注意: 本模块不用 .format 拼此串, JSON 花括号无需转义)
+# Fallback instruction for the hypotheses chapter — appended only when the template
+# prompt itself lacks the hypotheses-JSON request
+# (note: this module does not assemble this string with .format; JSON braces need no escaping)
 _HYPOTHESES_INSTRUCTION = """
 ## 附加要求: 假设清单 (本章独有)
 正文完成后, 另起一段用 ```json 围栏输出 3~6 条研究假设, 严格按下述结构 (数组):
@@ -76,10 +83,10 @@ _HYPOTHESES_INSTRUCTION = """
 _RETRY_NUDGE = "\n\n(注意: 上次调用失败或输出为空, 请严格按输出约定重新生成本章正文。)"
 
 
-# ---------- 股票/目录解析 ----------
+# ---------- stock / directory resolution ----------
 
 def _shard_info(d: Path) -> Optional[Tuple[str, str]]:
-    """读证据目录首个合法分片 → (ts_code, 名称); 无分片返回 None。"""
+    """Read the first legal shard in the evidence directory -> (ts_code, name); None when no shard exists."""
     for p in sorted(d.glob("*.json")):
         try:
             shard = load_shard(p)
@@ -95,11 +102,12 @@ def _shard_info(d: Path) -> Optional[Tuple[str, str]]:
 
 def resolve_stock(stock: str, root: Path,
                   rdir: Optional[Path] = None) -> Tuple[str, str, Path]:
-    """把「股票名或代码」解析为 (ts_code, name, 证据目录)。
+    """Resolve "stock name or code" into (ts_code, name, evidence directory).
 
-    代码 (600519.SH) 直接定位; 名称则在已有证据目录的分片 meta 中匹配
-    (Stage 1 分片 meta 记录了股票名); 显式给了目录且目录非空则采信该目录,
-    最后退到「唯一证据目录」; 均失败时提示直接传代码。
+    A code (600519.SH) locates directly; a name is matched against existing evidence
+    directories' shard meta (Stage 1 shard meta records the stock name); an explicitly
+    given non-empty directory is trusted; finally falls back to "the sole evidence
+    directory"; on total failure, hints at passing the code directly.
     """
     stock = (stock or "").strip()
     if not stock:
@@ -129,26 +137,27 @@ def resolve_stock(stock: str, root: Path,
                      f"请直接传 6 位代码 (如 600519.SH) 或 --dir 指定证据目录")
 
 
-# ---------- 证据路由与摘要 ----------
+# ---------- evidence routing and digesting ----------
 
 _VIEW_WANTS = {"views", "view", "reports", "report"}
 
-# T05 EVIDENCE_CATEGORIES 闭集的匹配规则 — eid 前缀 (mainbiz ⊂ profile, 同时列出无害)
+# Matching rules for the T05 EVIDENCE_CATEGORIES closed set — eid prefixes (mainbiz ⊂ profile; listing both is harmless)
 _WANT_PREFIX_RULES = {
     "profile": ("T:profile.",),
     "mainbiz": ("T:profile.mainbiz.",),
     "financials": ("T:tushare.",),
-    "tushare": ("T:tushare.",),            # financials 的历史别名
+    "tushare": ("T:tushare.",),            # historical alias of financials
     "annual": ("A:",),
 }
 
 
 def _select_for_want(want: str, facts: List[Fact],
                      views: List[View]) -> Tuple[List[Fact], List[View]]:
-    """按证据类别路由 (T05 EVIDENCE_CATEGORIES 闭集 + 任务书别名)。
+    """Route by evidence category (T05 EVIDENCE_CATEGORIES closed set + task-spec aliases).
 
-    views/reports → 全部观点; 其余按 eid 前缀匹配 (profile/mainbiz/financials/annual,
-    规则取自 T05 落库模板的词汇表); 闭集外的 want 退化为 T: 域/指标 token 匹配。
+    views/reports -> all views; the rest match on eid prefixes (profile/mainbiz/
+    financials/annual, rules taken from the T05 committed template vocabulary); a want
+    outside the closed set degrades to T:-domain / metric-token matching.
     """
     w = want.strip().lower()
     if w in _VIEW_WANTS:
@@ -162,7 +171,8 @@ def _select_for_want(want: str, facts: List[Fact],
 
 def select_chapter_evidence(wants: List[str], facts: List[Fact],
                             views: List[View]) -> Tuple[List[Fact], List[View], List[str]]:
-    """汇总一章所需证据子集 (跨类别去重保序); 全部未命中时回退全量并记 flag。"""
+    """Aggregate the evidence subset needed by one chapter (dedup across categories,
+    order preserved); falls back to the full pack with a flag when nothing matches."""
     sel_f: List[Fact] = []
     sel_v: List[View] = []
     seen_e: set = set()
@@ -199,14 +209,15 @@ def _view_year(v: View) -> Optional[int]:
 
 def build_digest(ch_no: int, facts: List[Fact], views: List[View],
                  char_cap: int = DIGEST_CHAR_CAP) -> Tuple[str, str, List[str]]:
-    """证据子集 → (facts_digest, views_digest, flags), 逐行摘要, 新期间在前。
+    """Evidence subset -> (facts_digest, views_digest, flags): line-by-line digest, newest periods first.
 
-    行格式: 事实 `- [E:eid] content｜来源: source｜期间`; 观点 `- [V:vid] 机构(日期): statement`。
-    条数上限 80: 两类并存时 60 事实 + 20 观点 (观点不被挤出), 单类独享 80;
-    两摘要合计超 char_cap 时先裁事实摘要 (保观点完整), 记 flag。
+    Line format: fact `- [E:eid] content｜来源: source｜期间`; view `- [V:vid] org(date): statement`.
+    Item cap 80: 60 facts + 20 views when both kinds coexist (views never squeezed out),
+    80 for a lone kind; when the two digests together exceed char_cap, the fact digest is
+    trimmed first (keeping views intact), with a flag.
     """
     flags: List[str] = []
-    fs = sorted(facts, key=lambda f: -(_fact_year(f) or 0))       # 稳定排序: 同年保留证据包原序
+    fs = sorted(facts, key=lambda f: -(_fact_year(f) or 0))       # stable sort: same-year keeps pack order
     vs = sorted(views, key=lambda v: -(_view_year(v) or 0))
     fact_cap = FACT_ITEM_CAP if vs else TOTAL_ITEM_CAP
     view_cap = VIEW_ITEM_CAP if fs else TOTAL_ITEM_CAP
@@ -225,7 +236,7 @@ def build_digest(ch_no: int, facts: List[Fact], views: List[View],
         if keep_f >= 0:
             cut = ftext.rfind("\n", 0, keep_f)
             ftext = ftext[: cut if cut > 0 else keep_f]
-        else:                                  # 观点摘要自身超限, 罕见但兜底
+        else:                                  # the view digest alone exceeds the cap; rare but handled
             cut = vtext.rfind("\n", 0, char_cap)
             vtext = vtext[: cut if cut > 0 else char_cap]
             ftext = ""
@@ -233,14 +244,16 @@ def build_digest(ch_no: int, facts: List[Fact], views: List[View],
     return ftext, vtext, flags
 
 
-# ---------- 章节生成 ----------
+# ---------- chapter generation ----------
 
 def _generate_chapter_body(ch: Dict[str, Any], facts_digest: str,
                            views_digest: str, llm: Any) -> Tuple[str, str]:
-    """单章 LLM 调用 (非流式): 成功返回 (body, ""); 两次尝试均失败返回 ("", 原因)。
+    """One chapter's LLM call (non-streaming): success returns (body, ""); both attempts
+    failing returns ("", reason).
 
-    T05 的 chapter_prompt 已内嵌 STYLE_PROMPT 与假设章 JSON 指令;
-    若模板日后缺失假设 JSON 要求, 追加兜底指令 (正常不触发)。
+    T05's chapter_prompt already embeds STYLE_PROMPT and the hypotheses-chapter JSON
+    instruction; if the template someday lacks the hypotheses-JSON request, the fallback
+    instruction is appended (normally not triggered).
     """
     prompt = chapter_prompt(ch, facts_digest, views_digest)
     if int(ch["no"]) == HYPOTHESES_CHAPTER_NO and ("假设" not in prompt or "```json" not in prompt):
@@ -250,10 +263,10 @@ def _generate_chapter_body(ch: Dict[str, Any], facts_digest: str,
         try:
             resp = (llm.invoke(prompt + ("" if attempt == 1 else _RETRY_NUDGE)) or "").strip()
             if resp:
-                m = _FENCE_WRAP_RE.match(resp)          # 模型习惯性整段围栏, 剥掉
+                m = _FENCE_WRAP_RE.match(resp)          # models habitually fence the whole body; strip it
                 return (m.group(1).strip() if m else resp), ""
             last_err = "空响应"
-        except Exception as e:                           # 网络/限流/超时等, 记原因后重试
+        except Exception as e:                           # network/rate-limit/timeout etc.; record reason, then retry
             last_err = f"{type(e).__name__}: {e}"
         logger.warning("第%s章<%s> 第 %s/%s 次尝试失败: %s",
                        ch["no"], ch["title"], attempt, RETRY_TIMES, last_err)
@@ -261,7 +274,8 @@ def _generate_chapter_body(ch: Dict[str, Any], facts_digest: str,
 
 
 def _iter_json_array_candidates(text: str):
-    """按 '[' 出现序产出括号配平的候选 JSON 数组串 (外层在前, 嵌套数组不误截)。"""
+    """Yield bracket-balanced candidate JSON-array strings in '[' order of appearance
+    (outer arrays first; nested arrays not mis-cut)."""
     for start, ch in enumerate(text):
         if ch != "[":
             continue
@@ -277,11 +291,13 @@ def _iter_json_array_candidates(text: str):
 
 
 def _parse_hypotheses(text: str) -> Tuple[str, List[Dict[str, Any]]]:
-    """从假设章输出中剥离 ```json 围栏的假设数组 → (正文, 假设 dict 列表)。
+    """Strip the ```json-fenced hypotheses array from the hypotheses chapter's output
+    -> (body, hypotheses dict list).
 
-    宽容解析 (AGENTS 纪律: 剥围栏): 先取围栏块; 全失败再做裸数组括号配平
-    (候选须解析为含非空 statement 的 dict 数组才算命中)。正文 = 剔除命中的
-    JSON 块后的剩余文本。
+    Lenient parsing (AGENTS discipline: strip fences): fenced blocks first; if all fail,
+    do bare-array bracket balancing (a candidate counts as a hit only when it parses into
+    a dict array with non-empty statements). Body = the remaining text minus the matched
+    JSON block.
     """
     items: List[Dict[str, Any]] = []
     for block in _JSON_ARRAY_FENCE_RE.findall(text):
@@ -310,7 +326,7 @@ def _parse_hypotheses(text: str) -> Tuple[str, List[Dict[str, Any]]]:
 
 
 def _build_hypotheses(items: List[Dict[str, Any]], start_index: int = 0) -> List[Hypothesis]:
-    """dict → Hypothesis (hid 从 start_index+1 起顺编 H1..; 指标/引用洗成非空 str 列表)。"""
+    """dict -> Hypothesis (hid numbered H1.. from start_index+1; indicators/refs washed into non-empty str lists)."""
     out: List[Hypothesis] = []
     for i, d in enumerate(items, start_index + 1):
         out.append(Hypothesis(
@@ -327,16 +343,17 @@ def _dedup_flags(flags: List[str]) -> List[str]:
     return [f for f in flags if not (f in seen or seen.add(f))]
 
 
-# ---------- 主入口 ----------
+# ---------- main entry ----------
 
 def generate_draft(stock: str, years: int = 5,
                    research_dir: Optional[Path] = None,
                    llm: Any = None) -> Draft:
-    """逐章生成十章草稿并落盘 draft.json, 返回 Draft。
+    """Generate the ten-chapter draft chapter by chapter, persist draft.json, return Draft.
 
-    stock: 股票名或 ts_code; years: 证据回看年数 (窗口外证据剔除, 仅记日志);
-    research_dir: 证据目录 (默认 output/research/<ts_code>);
-    llm: LLM 客户端桩 (须有 .invoke(prompt)->str), 默认懒加载 get_agent_llm()。
+    stock: stock name or ts_code; years: evidence look-back years (out-of-window evidence
+    dropped, only logged); research_dir: evidence directory (default
+    output/research/<ts_code>); llm: LLM client stub (must have .invoke(prompt)->str),
+    defaulting to lazily-loaded get_agent_llm().
     """
     root = Path(PathManager().output_dir)
     ts_code, name, rdir = resolve_stock(stock, root, research_dir)
@@ -354,8 +371,8 @@ def generate_draft(stock: str, years: int = 5,
         raise ValueError(f"{rdir} 内无 {floor} 年后的证据, 拒绝生成空稿 (可调大 years)")
 
     if llm is None:
-        from harness.llm import get_agent_llm     # 懒加载: 离线测试不初始化 OpenAI 客户端
-        llm = get_agent_llm(timeout=300.0)        # 长文+思考生成, 默认 120s 偏紧
+        from harness.llm import get_agent_llm     # lazy import: offline tests don't init the OpenAI client
+        llm = get_agent_llm(timeout=300.0)        # long-form + thinking generation; the default 120s is tight
 
     flags: List[str] = []
     chapters: List[Chapter] = []
@@ -370,7 +387,8 @@ def generate_draft(stock: str, years: int = 5,
         if err:
             flags.append(f"chapter-failed: 第{no}章<{ch['title']}> 跳过 ({err})")
             continue
-        # 假设 JSON 解析对所有章兜底 (只有假设章 prompt 会要求, 其余章命中即属意外收获)
+        # hypotheses-JSON parsing is a fallback for every chapter (only the hypotheses
+        # chapter's prompt asks for it; a hit elsewhere is a bonus)
         body, hitems = _parse_hypotheses(body)
         if hitems:
             hypotheses += _build_hypotheses(hitems, start_index=len(hypotheses))

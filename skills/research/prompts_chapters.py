@@ -1,27 +1,32 @@
 # -*- encoding: utf-8 -*-
 """
-研究生产线 Stage 2 · 公司研究十章模板库 (T05)
+Research production line Stage 2 · ten-chapter company-research template library (T05)
 
-方法论源: docs/research/company_industry_guide.md 第2节 “公司研究的完整章节结构”
-(10 章定义逐章转录, 以指南原文为准)。本文件是模板数据 + 纯字符串组装函数,
-不调 LLM、不 import 重模块, 与具体公司无关 (禁止写死公司数据)。
+Methodology source: docs/research/company_industry_guide.md section 2 “公司研究的完整章节结构”
+(the 10 chapter definitions transcribed one by one; the guide's wording is authoritative).
+This file is template data + pure string-assembly functions: no LLM calls, no heavy
+imports, company-agnostic (hardcoding company data is forbidden).
 
-消费方 (T06, compose/generator.py):
+Consumer (T06, compose/generator.py):
   from skills.research.prompts_chapters import CHAPTERS, chapter_prompt
-  prompt = chapter_prompt(ch, facts_digest, views_digest)   # 逐章喂给 LLM
+  prompt = chapter_prompt(ch, facts_digest, views_digest)   # fed to the LLM chapter by chapter
 
-字段约定 (每章 dict, 六字段):
-  no           章序 1..10 (与 Draft.chapters[].no 对齐)
-  title        章标题 (指南原文)
-  question     本章研究问题 (指南原文 “回答”)
-  wants        需要的证据类别列表, 取值见 EVIDENCE_CATEGORIES (闭集), 顺序即优先级;
-               T06 按 EVIDENCE_CATEGORIES 的匹配规则取并集后摘要化注入
-  structure    结构骨架 (按序覆盖, 含指南“输出”物提示, 图表物由 T07 图表工场渲染)
-  length_hint  篇幅提示 (默认值, T06 可按证据量覆写)
+Field conventions (per chapter dict, six fields):
+  no           chapter order 1..10 (aligned with Draft.chapters[].no)
+  title        chapter title (verbatim from the guide)
+  question     the chapter's research question (the guide's “回答”)
+  wants        evidence categories needed; values from the closed set EVIDENCE_CATEGORIES,
+               order = priority; T06 takes the union via the EVIDENCE_CATEGORIES matching
+               rules, digests it, and injects it
+  structure    structural skeleton (covered in order; includes the guide's “输出” artifact
+               hints; figure artifacts are rendered by the T07 figure factory)
+  length_hint  length hint (default; T06 may override based on evidence volume)
 
-研究假设 JSON 的产出章节: HYPOTHESES_CHAPTER_NO = 8 (未来增长与情景分析)。
-注: T06 任务文档写作 “第10章(情景与风险)”, 系章序笔误 — 指南中情景分析是第8章、
-风险与反证是第9章; 假设(假设+验证指标)的原生出口是第8章, 以本常量为准。
+Chapter that produces the research-hypotheses JSON: HYPOTHESES_CHAPTER_NO = 8 (future
+growth and scenario analysis). Note: the T06 task doc says “第10章(情景与风险)” — a
+chapter-number typo: in the guide scenario analysis is chapter 8 and risk & counterevidence
+is chapter 9; the native home of hypotheses (hypothesis + verification indicators) is
+chapter 8; this constant is authoritative.
 """
 from __future__ import annotations
 
@@ -29,8 +34,8 @@ from typing import Dict, List, Union
 
 from skills.research.prompts_style import STYLE_PROMPT
 
-# ---------- 证据类别词汇表 (wants 闭集; 匹配规则供 T06 实现过滤) ----------
-# 语义为“并集”: 章节获得所有命中类别证据的合并; mainbiz ⊂ profile, 同时列出无害。
+# ---------- evidence-category vocabulary (closed set for wants; matching rules implemented by T06 filtering) ----------
+# Semantics are "union": a chapter receives the merge of every matching category's evidence; mainbiz ⊂ profile, listing both is harmless.
 EVIDENCE_CATEGORIES: Dict[str, str] = {
     "profile": "Tushare 画像板块: eid 前缀 “T:profile.” (公司基础/行业归属/股东/估值水位等静态属性)",
     "mainbiz": "主营构成明细: eid 前缀 “T:profile.mainbiz.” (分产品/分地区收入与构成)",
@@ -39,7 +44,7 @@ EVIDENCE_CATEGORIES: Dict[str, str] = {
     "views": "研报观点: vid 前缀 “R:” (viewpoint/forecast/rating/risk, 永不作事实句)",
 }
 
-# ---------- 十章模板 (公司研究, 以方法论指南原文为准) ----------
+# ---------- ten-chapter templates (company research; the methodology guide's wording is authoritative) ----------
 CHAPTERS: List[Dict] = [
     {
         "no": 1,
@@ -184,11 +189,11 @@ CHAPTERS: List[Dict] = [
 
 _CHAPTER_INDEX: Dict[int, Dict] = {c["no"]: c for c in CHAPTERS}
 
-# ---------- 研究假设 JSON 追加输出 (第8章; 见模块 docstring 的章序说明) ----------
+# ---------- appended research-hypotheses JSON output (chapter 8; see the chapter-number note in the module docstring) ----------
 HYPOTHESES_CHAPTER_NO = 8
 
-# 注意: 本段为普通字符串 (非 f-string / 非 .format 模板), JSON 花括号原样保留
-# (AGENTS.md 坑: .format 模板里的 JSON 花括号必须转义 {{}} — 此处刻意不用模板引擎)。
+# Note: this is a plain string (not an f-string / not a .format template); JSON braces are kept verbatim
+# (AGENTS.md pitfall: JSON braces inside .format templates must be escaped as {{}} — a template engine is deliberately not used here).
 _HYPOTHESES_REQUEST = """
 ## 追加输出 · 研究假设 JSON
 在正文之后追加一个 ```json 围栏代码块, 输出本章识别的研究假设数组 (供下游结构化回填):
@@ -202,11 +207,11 @@ def chapter_prompt(
     facts_digest: str = "",
     views_digest: str = "",
 ) -> str:
-    """组装单章生成 prompt (纯字符串拼装, 不调 LLM)。
+    """Assemble a single chapter's generation prompt (pure string assembly, no LLM call).
 
-    ch             CHAPTERS 中的章 dict (也接受章序号 int, 自动查表)
-    facts_digest   事实证据摘要文本 (T06 生成, 建议每条一行 “[eid] 内容”)
-    views_digest   研报观点摘要文本 (同上, 每条含 vid/机构/日期)
+    ch             chapter dict from CHAPTERS (also accepts a chapter number int, auto-looked-up)
+    facts_digest   fact-evidence digest text (built by T06; recommended one “[eid] 内容” line per item)
+    views_digest   research-report view digest text (same shape; each line carries vid/org/date)
     """
     if isinstance(ch, int):
         ch = _CHAPTER_INDEX[ch]

@@ -1,1 +1,1 @@
-"""内容管线单测包"""
+"""Content pipeline unit-test package"""

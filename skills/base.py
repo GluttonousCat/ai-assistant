@@ -1,10 +1,11 @@
 """
-Skill 基类 (领域方法论层)
+Skill base classes (domain-methodology layer).
 
-Skill 是 Agent 可调用的领域能力单元:
-- 每个 Skill 有名称、描述、意图关键词
-- Skill 内部编排 Tool + LLM, 完成一个完整的分析任务
-- 与 Tool 的区别: Tool 是原子能力, Skill 是组合多个 Tool 的领域方法论
+A Skill is a domain capability unit the Agent can invoke:
+- each Skill has a name, a description, and intent keywords
+- a Skill orchestrates Tools + LLM internally to complete a full analysis task
+- difference from a Tool: a Tool is an atomic capability, a Skill is a domain
+  methodology composed of multiple Tools
 """
 from __future__ import annotations
 
@@ -15,7 +16,7 @@ from typing import Any, Dict, List, Optional
 
 @dataclass
 class SkillContext:
-    """Skill 执行上下文"""
+    """Skill execution context."""
     user_input: str = ""
     params: Dict[str, Any] = field(default_factory=dict)
     result: Any = None
@@ -27,20 +28,20 @@ class SkillContext:
 
 
 class BaseSkill(ABC):
-    """Skill 基类"""
+    """Skill base class."""
 
     name: str = ""
     description: str = ""
     intent_keywords: List[str] = []
 
     def match_intent(self, user_input: str) -> bool:
-        """判断用户输入是否匹配本 Skill"""
+        """Return whether the user input matches this skill."""
         text = user_input.lower()
         return any(kw in text for kw in self.intent_keywords)
 
     @abstractmethod
     def run(self, context: SkillContext) -> SkillContext:
-        """执行 Skill 主逻辑"""
+        """Run the skill's main logic."""
         raise NotImplementedError
 
     def __call__(self, context: SkillContext) -> SkillContext:

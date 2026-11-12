@@ -1,10 +1,12 @@
 """
-产业链 Beta 挖掘 Skill (v1)
+Industry-chain Beta mining skill (v1)
 
-编排: 请求解析(链/环节, 规则优先+LLM兜底) -> chain_analysis 三源映射+环节指标 -> LLM 中文综述
-量化全部在 beta_alpha/analysis/chain_analysis (无 LLM 依赖), 本层只做编排与表达.
+Orchestration: request resolution (chain/node; rules first, LLM fallback) ->
+chain_analysis three-source mapping + segment metrics -> LLM Chinese summary.
+All quant work lives in beta_alpha/analysis/chain_analysis (no LLM dependency);
+this layer only orchestrates and phrases.
 
-用法(命令行验证):
+CLI verification:
     python -m agent.beta_alpha.skills.beta AI算力产业链
 """
 from __future__ import annotations
@@ -26,7 +28,7 @@ logger = get_logger(__name__)
 
 
 def _extract_json(text: str) -> Optional[Dict]:
-    """宽容 JSON 提取 (剥 ```json 块)"""
+    """Lenient JSON extraction (strips ```json fences)"""
     if not text:
         return None
     t = text.strip()
@@ -49,7 +51,7 @@ def _extract_json(text: str) -> Optional[Dict]:
 
 
 class BetaSkill(BaseSkill):
-    """产业链 Beta 挖掘: 趋势 -> 环节 -> 标的映射 + 环节行情验证"""
+    """Industry-chain Beta mining: trend -> segment -> constituent mapping + segment market validation"""
 
     name = "beta"
     description = ("产业链Beta挖掘: 解析用户趋势话术到种子链模板, 三源映射"
@@ -59,15 +61,15 @@ class BetaSkill(BaseSkill):
     def __init__(self, llm: Optional[Any] = None):
         self.llm = llm or get_agent_llm()
 
-    # ---------- 请求解析 ----------
+    # ---------- Request resolution ----------
 
     def resolve_request(self, text: str) -> Dict:
-        """用户话术 -> {chain, node} | {error}"""
+        """User phrasing -> {chain, node} | {error}"""
         chain = ca.match_chain(text)
         if chain:
             return {"chain": chain, "node": ca.find_node(chain, text)}
 
-        # LLM 兜底: 从模板清单选链
+        # LLM fallback: pick a chain from the template list
         chains_desc = "\n".join(
             f"- {c['chain_id']} | {c.get('name', '')} | "
             f"环节: {'、'.join(n.get('name', n['id']) for n in c.get('nodes', []))}"
@@ -91,14 +93,14 @@ class BetaSkill(BaseSkill):
         node = next((n for n in chain.get("nodes", []) if n["id"] == node_id), None)
         return {"chain": chain, "node": node}
 
-    # ---------- 分析 ----------
+    # ---------- Analysis ----------
 
     def analyze(self, chain: Dict, node: Optional[Dict]) -> Dict:
-        """三源映射 + 环节指标 (纯量化, 不含 LLM)"""
+        """Three-source mapping + segment metrics (pure quant, no LLM)"""
         return ca.map_chain_members(chain, node_filter=node)
 
     def build_summary_prompt(self, result: Dict) -> str:
-        """链分析结果 -> LLM 综述 prompt"""
+        """Chain analysis result -> LLM summary prompt"""
         chain = result["chain"]
         if result.get("node_filter"):
             node = next(n for n in result["nodes"])
@@ -133,7 +135,7 @@ class BetaSkill(BaseSkill):
             members=json.dumps(members, ensure_ascii=False),
         )
 
-    # ---------- Skill 入口 ----------
+    # ---------- Skill entry ----------
 
     def run(self, context: SkillContext) -> SkillContext:
         req = self.resolve_request(context.user_input)
@@ -148,7 +150,7 @@ class BetaSkill(BaseSkill):
             return context
 
         cols, rows = ca.nodes_to_table(result)
-        # SSE data 载荷瘦身: 成员截到前 6
+        # Slim down the SSE data payload: cap members at the top 6
         for n in result["nodes"]:
             n["members"] = n["members"][:6]
         context.result = {

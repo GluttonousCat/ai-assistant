@@ -1,8 +1,8 @@
 """
-财务查询 Skill 提示词
+Financial query skill prompts
 """
 
-# SQL 生成 prompt
+# SQL generation prompt
 SQL_GENERATION_PROMPT = """你是一个专业的金融数据 SQL 生成引擎。根据用户的中文查询生成 PostgreSQL SQL。
 
 ## 数据库 Schema
@@ -41,9 +41,10 @@ SQL_GENERATION_PROMPT = """你是一个专业的金融数据 SQL 生成引擎。
 {user_query}
 """
 
-# 结果解读 prompt
-# v2 (2026-09-02): 数值已由前端图表呈现, 解读不再复述数据概览,
-#     聚焦趋势/增长质量/行业背景/深层原因
+# Result interpretation prompt
+# v2 (2026-09-02): numbers are already charted by the frontend, so the
+#     interpretation no longer recaps the data; it focuses on trends / growth
+#     quality / industry context / deeper causes
 RESULT_INTERPRET_PROMPT = """你是一位资深行业分析师。查询结果的数值已通过图表展示给用户，你的任务是给出**有增量的解读**，而不是复述数据。
 
 ## 用户查询
@@ -67,7 +68,7 @@ RESULT_INTERPRET_PROMPT = """你是一位资深行业分析师。查询结果的
 7. 数据不足以下结论时明说，不编造；**不做投资建议**
 """
 
-# 意图识别 prompt
+# Intent classification prompt
 INTENT_ROUTER_PROMPT = """判断用户的查询属于以下哪个意图类别：
 
 1. **query** —— 查询财务/行情数据（有明确指标、条件、时间）

@@ -1,10 +1,13 @@
 """
-个股 Alpha 挖掘 Skill (v1) — 预期差四象限
+Single-stock Alpha mining skill (v1) — expectation-gap four quadrants
 
-框架: 市场预期端(券商盈利预测分歧/方向) x 基本面端(财务动量) x 定价端(估值分位) x 观点端(研报)
-纯存量数据 (report_forecast / fina_indicator / daily_basic / report_meta), 不依赖年报全文.
+Framework: market-expectation side (broker forecast divergence/direction) x
+fundamental side (financial momentum) x pricing side (valuation percentile) x
+opinion side (research reports).
+Pure stock data (report_forecast / fina_indicator / daily_basic / report_meta),
+no dependency on annual-report full text.
 
-用法(命令行验证):
+CLI verification:
     python -m agent.beta_alpha.skills.alpha 中际旭创
 """
 from __future__ import annotations
@@ -23,7 +26,8 @@ from skills.beta_alpha.prompts import ALPHA_SUMMARY_PROMPT
 
 logger = get_logger(__name__)
 
-# 盈利预测单位 -> 元 归一因子 (增速%/倍 不换算); 未知单位按原值 (保守)
+# Profit-forecast unit -> yuan normalization factors (growth %/multiples are not converted);
+# unknown units pass through unchanged (conservative)
 _UNIT_FACTOR = {
     "亿元": 1e8, "万亿元": 1e12, "万元": 1e4, "百万元": 1e6,
     "亿元/年": 1e8, "元": 1.0, "%": 1.0, "倍": 1.0, "倍数": 1.0,
@@ -31,13 +35,14 @@ _UNIT_FACTOR = {
 
 
 def to_yuan(value: float, unit: Optional[str]) -> float:
-    """盈利预测值按单位归一到元 (可测纯函数)"""
+    """Normalize a forecast value to yuan by its unit (testable pure function)"""
     return float(value) * _UNIT_FACTOR.get((unit or "").strip(), 1.0)
 
 
 def classify_drift(first: Optional[float], last: Optional[float],
                    tol: float = 3.0) -> Optional[str]:
-    """前后半段预测均值对比 -> 上修/下修/持平 (±tol% 内算持平; 数据不足 None)"""
+    """First-half vs second-half forecast means -> upward/downward/flat revision
+    (within +/-tol% counts as flat; None when data is insufficient)"""
     if first is None or last is None or first == 0:
         return None
     drift = (last - first) / abs(first) * 100
@@ -51,11 +56,14 @@ def classify_drift(first: Optional[float], last: Optional[float],
 def edge_trend(latest: Optional[float], prev: Optional[float],
                diff_pp: float = 5.0) -> Optional[str]:
     """
-    相邻报告期同比的边际方向 (纯函数, 供 tests 验证)。
-    信号带增速水平语境, 避免高增速被"降速"标签误导:
-    - 高位 (>=50%): 高位提速 / 高位降速 / 高位平稳
-    - 负增长 (<0%): 负增收窄 / 负增扩大 / 负增持平
-    - 其余: 提速 / 降速 / 平稳
+    Marginal direction of YoY between adjacent report periods (pure function,
+    verified by tests).
+    The signal carries growth-level context so high growth is not mislabeled
+    as "decelerating":
+    - high level (>=50%): high-level accelerating / high-level decelerating / high-level steady
+    - negative growth (<0%): negative narrowing / negative widening / negative flat
+    - otherwise: accelerating / decelerating / steady
+    (The returned labels themselves are Chinese terms like 高位提速/负增收窄/提速.)
     """
     if latest is None or prev is None:
         return None
@@ -71,7 +79,8 @@ def edge_trend(latest: Optional[float], prev: Optional[float],
 
 
 def _resolve_stock(text: str) -> Optional[Tuple[str, str]]:
-    """(名称, ts_code); 优先股票词典 (match_stock 返回 (ts_code, 别名)), 再尝试 6 位代码"""
+    """Returns (name, ts_code); prefers the stock dictionary (match_stock
+    returns (ts_code, alias)), then tries a 6-digit code"""
     code: Optional[str] = None
     try:
         from tools.finance.stock_kb import get_stock_kb
@@ -97,7 +106,8 @@ def _resolve_stock(text: str) -> Optional[Tuple[str, str]]:
 
 
 def _load_forecast_divergence(pg, ts_code: str) -> List[Dict]:
-    """象限1: 盈利预测分歧度与方向 (同指标同期间内按单位归一后统计)"""
+    """Quadrant 1: forecast divergence and direction (per metric per period,
+    normalized by unit before statistics)"""
     rows = pg.fetch_all(
         "SELECT rf.forecast_type, rf.forecast_period, rf.forecast_value, "
         "       rf.forecast_unit, rm.publish_date, rm.org_name "
@@ -119,7 +129,7 @@ def _load_forecast_divergence(pg, ts_code: str) -> List[Dict]:
         vals = g["value"]
         mean = float(vals.mean())
         cv = float(vals.std(ddof=1) / abs(mean)) if mean and len(vals) >= 2 else None
-        # 方向: 后半段均值 vs 前半段 (按发布时间)
+        # Direction: second-half mean vs first-half mean (by publish time)
         half = max(1, len(g) // 2)
         first, last = float(vals.iloc[:half].mean()), float(vals.iloc[-half:].mean())
         direction = classify_drift(first, last)
@@ -135,7 +145,7 @@ def _load_forecast_divergence(pg, ts_code: str) -> List[Dict]:
 
 
 def _load_momentum(pg, ts_code: str) -> List[Dict]:
-    """象限2: 财务动量 (近 8 报告期) + 边际方向标记"""
+    """Quadrant 2: financial momentum (last 8 report periods) + marginal-direction markers"""
     rows = pg.fetch_all(
         "SELECT end_date, or_yoy, netprofit_yoy, grossprofit_margin, q_sales_yoy "
         "FROM fin.fina_indicator "
@@ -170,7 +180,7 @@ def _load_momentum(pg, ts_code: str) -> List[Dict]:
 
 
 def _load_valuation(pg, ts_code: str) -> Dict:
-    """象限3: PE/PB 近 3 年分位 (0=最低 100=最高)"""
+    """Quadrant 3: PE/PB percentile over the last 3 years (0=lowest 100=highest)"""
     rows = pg.fetch_all(
         "SELECT pe_ttm, pb FROM stock.daily_basic "
         "WHERE ts_code = %s AND trade_date >= current_date - 1095 "
@@ -192,7 +202,7 @@ def _load_valuation(pg, ts_code: str) -> Dict:
 
 
 def _load_views(pg, ts_code: str, name: str) -> List[Dict]:
-    """象限4: 近期研报观点 (标的绑定/标题/tags_targets 三路命中)"""
+    """Quadrant 4: recent report views (three-way match on target binding/title/tags_targets)"""
     rows = pg.fetch_all(
         "SELECT title, org_name, publish_date, analysis_json "
         "FROM fin.report_meta "
@@ -218,7 +228,7 @@ def _load_views(pg, ts_code: str, name: str) -> List[Dict]:
 
 
 class AlphaSkill(BaseSkill):
-    """个股预期差挖掘: 预测分歧 x 财务动量 x 估值分位 x 研报观点"""
+    """Single-stock expectation-gap mining: forecast divergence x financial momentum x valuation percentile x report views"""
 
     name = "alpha"
     description = ("个股预期差分析: 券商盈利预测分歧度/调整方向、财务边际动量、"
@@ -251,7 +261,7 @@ class AlphaSkill(BaseSkill):
 
     @staticmethod
     def build_table(res: Dict) -> Tuple[List[str], List[Dict]]:
-        """四象限结果 -> 前端 data 事件平表 (run 与 SSE 共用)"""
+        """Four-quadrant result -> flat table for the frontend data event (shared by run and SSE)"""
         f = res["forecast"][0] if res["forecast"] else None
         m = res["momentum"][-1] if res["momentum"] else {}
         tr = m.get("trend") or {}

@@ -1,11 +1,11 @@
 # -*- encoding: utf-8 -*-
-"""T01 契约校验器测试 — 纯离线 (不连 LLM/DB), 覆盖每条校验规则。
+"""T01 contract validator tests — fully offline (no LLM/DB), covering every validation rule.
 
-分组:
-  test_valid_*    合法 fixture (tushare/annual/reports 三种分片 + 合法草稿)
-  test_invalid_*  非法 fixture (逐条规则触发, 断言错误定位到具体条目)
-  test_roundtrip  既有 API 兼容: save/load 分片与草稿、load_pack 汇总去重
-  test_stats      pack_stats 来源/期间分布统计
+Groups:
+  test_valid_*    legal fixtures (tushare/annual/reports shards + a legal draft)
+  test_invalid_*  illegal fixtures (one trigger per rule, asserting errors localize to the exact entry)
+  test_roundtrip  existing-API compatibility: save/load shards and drafts, load_pack merge dedup
+  test_stats      pack_stats source/period distribution stats
 """
 from pathlib import Path
 
@@ -30,7 +30,7 @@ from skills.research.contracts import (
 )
 
 
-# ---------- fixture 构造工具 ----------
+# ---------- fixture builders ----------
 
 def _fact(**kw) -> Fact:
     base = dict(
@@ -73,7 +73,7 @@ def _shard_tushare() -> EvidenceShard:
             _fact(eid="T:tushare.pe_band.2025H1",
                   content="2025 上半年市盈率处于历史中位", period="2025H1",
                   value=None, unit="倍"),
-            # 纯定性事实: content 无数字, 不强制 value/unit
+            # purely qualitative fact: content has no digits, value/unit not enforced
             _fact(eid="T:tushare.profile.2025", content="公司为国内白酒行业龙头",
                   period="2025", value=None, unit=""),
         ],
@@ -136,7 +136,7 @@ def _draft() -> Draft:
 
 
 def _errs_of(shard_or_draft, *args):
-    """运行校验并返回错误清单 (validate_shard 单参 / validate_draft 双参)"""
+    """Run validation and return the error list (validate_shard takes 1 arg / validate_draft 2)"""
     if args:
         return validate_draft(shard_or_draft, *args)
     return validate_shard(shard_or_draft)
@@ -146,7 +146,7 @@ def _has(errors, key: str) -> bool:
     return any(key in e for e in errors)
 
 
-# ---------- validate_shard: 合法 fixture ----------
+# ---------- validate_shard: legal fixtures ----------
 
 @pytest.mark.parametrize("shard", [_shard_tushare(), _shard_annual(), _shard_reports()],
                          ids=["tushare", "annual", "reports"])
@@ -159,7 +159,7 @@ def test_valid_period_formats():
         assert valid_period(p), p
 
 
-# ---------- validate_shard: 非法 fixture (每条规则一例) ----------
+# ---------- validate_shard: illegal fixtures (one case per rule) ----------
 
 def test_invalid_duplicate_eid():
     shard = _shard_tushare()
@@ -185,14 +185,14 @@ def test_invalid_eid_prefix():
 
 def test_invalid_vid_prefix():
     shard = _shard_reports()
-    shard.views[0].vid = "T:tushare.opinion.1"   # 事实前缀混入观点位
+    shard.views[0].vid = "T:tushare.opinion.1"   # fact prefix sneaking into the view slot
     errors = validate_shard(shard)
     assert _has(errors, "vid 前缀非法") and _has(errors, "T:tushare.opinion.1")
 
 
 def test_invalid_fact_layer():
     shard = _shard_tushare()
-    shard.facts[0].layer = "view"                # 观点混入事实层
+    shard.facts[0].layer = "view"                # view sneaking into the fact layer
     errors = validate_shard(shard)
     assert _has(errors, "layer 必须为 'fact'") and _has(errors, "facts[0]")
 
@@ -217,7 +217,7 @@ def test_invalid_period_format(period):
     shard = _shard_tushare()
     shard.facts[0].period = period
     errors = validate_shard(shard)
-    if period:   # 空串表示"无期间", 不校验格式
+    if period:   # empty string means "no period"; format not validated
         assert _has(errors, "period 格式非法"), period
 
 
@@ -237,7 +237,7 @@ def test_invalid_content_digit_without_value_unit():
 
 
 def test_content_without_digit_needs_no_value_unit():
-    # 纯定性陈述 (content 无数字) 不强制 value/unit
+    # purely qualitative statement (content without digits): value/unit not enforced
     shard = _shard_tushare()
     shard.facts[0].content = "公司为国内白酒行业龙头"
     shard.facts[0].value = None
@@ -309,7 +309,8 @@ def test_invalid_draft_hypothesis_blank_indicator():
 
 
 def test_valid_draft_mixed_refs_across_pools():
-    # R:/A: 引用可混排在任意章节, 分别对观点集/事实集校验 (存在即可)
+    # R:/A: references may mix in any chapter, each validated against the view/fact pool
+    # (existence is all that matters)
     facts, views = _facts_and_views()
     draft = _draft()
     draft.chapters[0].used_eids.append("R:1001.1")
@@ -317,7 +318,7 @@ def test_valid_draft_mixed_refs_across_pools():
     assert validate_draft(draft, facts, views) == []
 
 
-# ---------- 既有 API 兼容: 序列化往返 ----------
+# ---------- existing-API compatibility: serialization round trip ----------
 
 def test_shard_roundtrip(tmp_path: Path):
     shard = _shard_tushare()
@@ -336,18 +337,18 @@ def test_draft_roundtrip(tmp_path: Path):
 def test_load_pack_merges_and_dedupes(tmp_path: Path):
     save_shard(_shard_annual(), tmp_path / "facts_annual_2025.json")
     save_shard(_shard_reports(), tmp_path / "views_reports.json")
-    # tushare 分片里塞一条与 annual 重复的 eid: glob 排序 annual 文件先加载,
-    # 以先到者为准, tushare 的重复条被忽略
+    # inject into the tushare shard an eid duplicating one in annual: glob order loads
+    # the annual file first; first-wins keeps the annual copy, the tushare dup is ignored
     tushare = _shard_tushare()
     tushare.facts.append(_fact(eid="A:2025.mdna.sub3", content="撞车条目"))
     save_shard(tushare, tmp_path / "facts_tushare.json")
-    # 非分片 json 应被跳过
+    # non-shard json must be skipped
     (tmp_path / "notes.json").write_text('{"foo": 1}', encoding="utf-8")
-    # draft/report 文件名前缀应被跳过
+    # draft/report filename prefixes must be skipped
     save_draft(_draft(), tmp_path / "draft.json")
 
     facts, views = load_pack(tmp_path)
-    assert len(facts) == 5 + 2                 # tushare 5 + annual 2 (重复条被忽略)
+    assert len(facts) == 5 + 2                 # tushare 5 + annual 2 (the dup ignored)
     assert len(views) == 3
     assert not any("撞车" in f.content for f in facts)
     assert {f.eid for f in facts} == {
@@ -358,7 +359,7 @@ def test_load_pack_merges_and_dedupes(tmp_path: Path):
 
 
 def test_validate_shard_after_roundtrip(tmp_path: Path):
-    # 校验器对"落盘再加载"的分片同样适用 (dict 水合不丢字段)
+    # the validator also applies to shards saved-then-loaded (dict hydration loses no fields)
     save_shard(_shard_reports(), tmp_path / "views_reports.json")
     facts, views = load_pack(tmp_path)
     rebuilt = EvidenceShard(kind="reports", ts_code="600519.SH", views=views)
@@ -372,21 +373,21 @@ def test_pack_stats():
     stats = pack_stats(facts, views)
     assert stats["fact_count"] == 7
     assert stats["view_count"] == 3
-    assert stats["numeric_fact_count"] == 5        # 定性两条: pe_band / profile
+    assert stats["numeric_fact_count"] == 5        # two qualitative ones: pe_band / profile
     assert stats["facts_by_kind"] == {"tushare": 5, "annual": 2}
     assert stats["views_by_kind"] == {"reports": 3}
-    # 机构分布: 计数降序 (国泰君安 2 条在前)
+    # org distribution: count desc (国泰君安 with 2 first)
     assert stats["views_by_org"] == {"国泰君安": 2, "中信证券": 1}
-    # 期间分布: 2025A x3 (tushare 营收 + annual 两条), 其余各 1
+    # period distribution: 2025A x3 (tushare revenue + annual's two), others 1 each
     assert stats["facts_by_period"]["2025A"] == 3
     assert stats["facts_by_period"]["2025-12-31"] == 1
     assert stats["views_by_period"] == {"2026": 1, "2026A": 1, "unknown": 1}
-    # 期间键有序, 便于评分卡/调试直接对比
+    # period keys ordered, for direct comparison in the scorecard/debugging
     assert list(stats["facts_by_period"]) == sorted(stats["facts_by_period"])
 
 
 def test_pack_stats_views_by_org_ordering():
-    # 同数按机构名升序 (中 U+4E2D < 国 U+56FD); 空 org 归 unknown
+    # equal counts break ties by org name asc (中 U+4E2D < 国 U+56FD); empty org -> unknown
     views = [
         _view(vid="R:2001.1", org="国泰君安"),
         _view(vid="R:2002.1", org="中信证券"),

@@ -1,6 +1,7 @@
 # -*- encoding: utf-8 -*-
-"""T04 研报观点源测试 — 纯离线 (不连 LLM/DB): org 归一 / vid 生成 / 分类校验 /
-单篇 View 构建 / 问答兜底解析 / 编排层端到端 (FakeRegistry 替身)。"""
+"""T04 research-report view-source tests — fully offline (no LLM/DB): org normalization /
+vid generation / category validation / single-report View building / QA-fallback parsing /
+orchestration end to end (FakeRegistry stand-in)."""
 from pathlib import Path
 
 import pytest
@@ -32,7 +33,7 @@ def _detail(rid=101, org="Goldman Sachs", date="2026-09-02", **analysis):
             {"metric": "target_price", "period": "NA", "value": 1850.0,
              "unit": "元", "raw_text": "12个月目标价1850元"},
             {"metric": "revenue", "period": "", "value": None, "unit": "",
-             "raw_text": ""},  # 口径不全 -> 丢弃
+             "raw_text": ""},  # incomplete caliber -> dropped
         ],
         "risks": ["需求不及预期", "批价大幅波动", "第三条风险应被截断"],
     }
@@ -44,7 +45,7 @@ BRIEF_101 = {"report_id": 101, "org": "Goldman Sachs", "publish_date": "2026-09-
              "rating": "买入"}
 
 
-# ---------- org 归一 ----------
+# ---------- org normalization ----------
 
 class TestOrgNormalize:
     def test_english_bank_to_cn(self):
@@ -69,7 +70,7 @@ class TestOrgNormalize:
         assert views and views[0].org == "摩根大通"
 
 
-# ---------- vid 生成 ----------
+# ---------- vid generation ----------
 
 class TestVidGeneration:
     def test_format_and_uniqueness(self):
@@ -92,7 +93,7 @@ class TestVidGeneration:
         assert [v.vid for v in b] == [f"R:202.{i}" for i in range(1, len(b) + 1)]
 
 
-# ---------- 分类与口径校验 ----------
+# ---------- category and caliber validation ----------
 
 class TestCategoryValidation:
     def test_valid_fixture_passes(self):
@@ -109,7 +110,7 @@ class TestCategoryValidation:
     def test_forecast_requires_period(self):
         views = finalize_vids(build_views_from_report(_detail(), brief=BRIEF_101))
         fc = next(v for v in views if v.category == "forecast")
-        assert fc.period                      # forecast 必带期间
+        assert fc.period                      # a forecast must carry a period
         fc.period = ""
         assert any("缺 period" in p for p in validate_views(views))
 
@@ -129,13 +130,13 @@ class TestCategoryValidation:
         assert "862" in fc.statement and "亿元" in fc.statement
 
 
-# ---------- 单篇构建 ----------
+# ---------- single-report building ----------
 
 class TestBuildViewsFromReport:
     def test_caps_and_dropped_and_order(self):
         views = build_views_from_report(_detail(), brief=BRIEF_101)
         by_cat = [v.category for v in views]
-        # 顺序: core(1) -> key_points(截到4) -> 评级(1) -> 预测+目标价(2) -> 风险(截到2)
+        # order: core(1) -> key_points(capped at 4) -> rating(1) -> forecasts + target price(2) -> risks(capped at 2)
         assert by_cat == ["viewpoint"] + ["viewpoint"] * 4 + ["rating", "forecast",
                                                               "rating"] + ["risk"] * 2
         assert len(views) == 10
@@ -166,14 +167,14 @@ class TestBuildViewsFromReport:
         assert not any(v.period == "" and v.category == "forecast" for v in views)
 
 
-# ---------- 期间归一 ----------
+# ---------- period normalization ----------
 
 class TestNormPeriod:
     def test_na_and_empty(self):
         assert norm_period("NA") == "" and norm_period("") == "" and norm_period("na") == ""
 
     def test_estimate_degrades_to_year(self):
-        # 契约 valid_period 暂不支持 YYYYE -> 降级 YYYY (口径由 statement 保留)
+        # contract valid_period doesn't yet support YYYYE -> degrades to YYYY (caliber kept in statement)
         assert norm_period("2026E") in ("2026E", "2026")
         assert norm_period("2026e") in ("2026E", "2026")
 
@@ -185,7 +186,7 @@ class TestNormPeriod:
         assert norm_period("2026-09-02") == "2026-09-02"
 
 
-# ---------- 表行预测 ----------
+# ---------- table-row forecasts ----------
 
 class TestBuildForecastView:
     def _row(self, **kw):
@@ -218,7 +219,7 @@ class TestBuildForecastView:
         assert "900亿元" in v.statement
 
 
-# ---------- 问答兜底解析 ----------
+# ---------- QA-fallback parsing ----------
 
 class TestParseQaViews:
     def test_labeled_lines_with_bullets(self):
@@ -253,7 +254,7 @@ class TestParseQaViews:
         assert parse_qa_views("核心观点: x", 5, "野村", "") == []
 
 
-# ---------- 主标的判定 (非主标的报告加归属前缀) ----------
+# ---------- primary-subject detection (non-subject reports get an attribution prefix) ----------
 
 class TestSubjectPrefix:
     def test_subject_by_ts_codes(self):
@@ -293,10 +294,10 @@ class TestSubjectPrefix:
         assert rs._context_prefix(d, BRIEF_101, "600519.SH", "贵州茅台") == "【关联提及】"
 
 
-# ---------- 编排层端到端 (FakeRegistry) ----------
+# ---------- orchestration end to end (FakeRegistry) ----------
 
 class FakeRegistry:
-    """MCP 注册表替身: 返回固定信封, 记录调用参数"""
+    """MCP-registry stand-in: returns fixed envelopes, records call arguments"""
 
     def __init__(self):
         self.calls = []
@@ -338,17 +339,17 @@ class FakeRegistry:
             "divergence_stats": [{"forecast_type": "net_profit",
                                   "forecast_period": "2026E", "cv": 0.08}],
             "recent_forecasts": [
-                # 清单外旧报告的新预测 -> 应补入 (机构归一)
+                # new forecast from an old report outside the list -> should be filled in (org normalized)
                 {"forecast_type": "net_profit", "forecast_period": "2026E",
                  "forecast_value": 900.1, "forecast_unit": "亿元",
                  "org_name": "Morgan Stanley", "publish_date": "2026-08-20",
                  "report_id": 900, "title": "旧报告", "confidence": None},
-                # 与 101 篇内 analysis 预测同篇同期间同指标 -> 不重复补
+                # same report+period+metric as report 101's in-analysis forecast -> not filled twice
                 {"forecast_type": "net_profit", "forecast_period": "2026E",
                  "forecast_value": 862.0, "forecast_unit": "亿元",
                  "org_name": "Goldman Sachs", "publish_date": "2026-09-02",
                  "report_id": 101, "title": "重复", "confidence": None},
-                # 缺机构 -> 丢弃
+                # missing org -> dropped
                 {"forecast_type": "revenue", "forecast_period": "2027E",
                  "forecast_value": 2100.0, "forecast_unit": "亿元",
                  "org_name": None, "publish_date": "2026-08-01",
@@ -367,13 +368,14 @@ class TestCollectOffline:
 
     def test_end_to_end_shard_valid(self, monkeypatch, tmp_path):
         shard, fake = self._collect(monkeypatch, tmp_path)
-        # 101 篇 10 条 + 102 问答 5 条 + 表行补 1 条 = 16; 重复/无机构表行不补
+        # report 101 contributes 10 + report 102 QA contributes 5 + 1 table row = 16;
+        # duplicate / org-less table rows not filled
         assert len(shard.views) == 16
         assert shard.meta["orgs"] == ["中信证券", "摩根士丹利", "高盛"]
-        assert validate_shard(shard) == []          # T01 契约校验器
-        assert validate_views(shard.views) == []    # T04 语义自检
+        assert validate_shard(shard) == []          # T01 contract validator
+        assert validate_views(shard.views) == []    # T04 semantic self-check
         assert shard.meta["qa_fallback_used"] == 1
-        # 落盘可回读
+        # persisted and re-readable
         path = tmp_path / "views_reports.json"
         assert path.exists()
         loaded = load_shard(path)
@@ -383,7 +385,7 @@ class TestCollectOffline:
     def test_mcp_tool_routing(self, monkeypatch, tmp_path):
         shard, fake = self._collect(monkeypatch, tmp_path)
         names = [c[0] for c in fake.calls]
-        assert names[0] == "get_forecasts"          # 解析标的+预测时序
+        assert names[0] == "get_forecasts"          # resolves the subject + forecast series
         assert "search_reports" in names
         assert ("search_reports",
                 {"stock": "贵州茅台", "days": 365, "limit": 30}) in fake.calls
@@ -395,7 +397,7 @@ class TestCollectOffline:
         shard, _ = self._collect(monkeypatch, tmp_path, qa_fallback=0)
         assert shard.meta["qa_fallback_used"] == 0
         assert not any(v.report_id == 102 for v in shard.views)
-        assert len(shard.views) == 11               # 仅 101 篇 10 条 + 表行 1 条
+        assert len(shard.views) == 11               # only report 101's 10 + 1 table row
 
     def test_unresolvable_stock_raises(self, monkeypatch, tmp_path):
         class BadReg(FakeRegistry):

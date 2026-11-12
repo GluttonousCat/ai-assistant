@@ -1,9 +1,10 @@
 """
-beta_alpha 模块提示词 (beta 链综述/选链/研报环节抽取 + alpha 四象限综述)
-专业知识放 prompt 不放代码; JSON 花括号一律 {{}} 转义
+beta_alpha module prompts (beta chain summary / chain picking / report segment
+extraction + alpha four-quadrant summary)
+Domain knowledge lives in prompts, not code; JSON braces are always escaped as {{}}
 """
 
-# ---------- beta: 用户话术 -> 链/环节解析 (规则子串匹配失败时兜底) ----------
+# ---------- beta: user phrasing -> chain/node resolution (fallback when rule-based substring matching fails) ----------
 BETA_CHAIN_PICK_PROMPT = """你是产业链分析助手。根据用户的话术判断 TA 想分析哪条产业链、哪个环节。
 
 可选产业链 (chain_id | 名称 | 环节列表):
@@ -20,7 +21,7 @@ BETA_CHAIN_PICK_PROMPT = """你是产业链分析助手。根据用户的话术�
 {{"chain_id": "ai_compute 或 null", "node_id": "环节id 或 null", "reason": "一句话理由"}}"""
 
 
-# ---------- beta: 链综述 (全链模式) ----------
+# ---------- beta: chain summary (whole-chain mode) ----------
 BETA_SUMMARY_PROMPT = """你是产业链投研分析师。基于以下结构化数据写一段产业链 Beta 分析, 面向个人投资者。
 
 产业链: {chain_name} — {chain_desc}
@@ -45,7 +46,7 @@ BETA_SUMMARY_PROMPT = """你是产业链投研分析师。基于以下结构化�
 4. 不写投资建议, 保持客观描述"""
 
 
-# ---------- beta: 单环节下钻模式 ----------
+# ---------- beta: single-segment drill-down mode ----------
 BETA_NODE_PROMPT = """你是产业链投研分析师。用户想深入了解「{chain_name}」中的「{node_name}」环节。
 
 该环节关键词: {keywords}
@@ -63,7 +64,7 @@ BETA_NODE_PROMPT = """你是产业链投研分析师。用户想深入了解「{
 3. 数字必须来自数据, 禁止编造; 不写投资建议"""
 
 
-# ---------- beta: 研报 -> 产业链环节抽取 (每日链路动态增量) ----------
+# ---------- beta: research report -> industry-chain segment extraction (daily pipeline incremental) ----------
 CHAIN_EXTRACT_PROMPT = """你是产业链知识抽取器。从研报正文中抽取涉及的产业链环节/产品/材料及其关联公司。
 
 抽取规则:
@@ -80,7 +81,7 @@ CHAIN_EXTRACT_PROMPT = """你是产业链知识抽取器。从研报正文中抽
 {{"segments": [{{"segment": "光模块", "direction": "midstream", "companies": ["某公司"], "confidence": 0.9}}]}}"""
 
 
-# ---------- forge: 种子链生成 (LLM 草稿 + 命中率反馈修正) ----------
+# ---------- forge: seed-chain generation (LLM draft + hit-rate feedback refinement) ----------
 CHAIN_FORGE_PROMPT = """你是 A 股产业链架构师。根据主题设计一条产业链种子模板 (YAML)。
 
 下面是上市公司主营构成披露原文的随机抽样 (真实语料, keywords 要贴近这类措辞):
@@ -118,7 +119,7 @@ CHAIN_REFINE_PROMPT = """你设计的产业链种子模板经过「关键词 vs 
 按原格式输出修订后的完整 YAML (保持 chain_id 不变, 不要输出任何其他文字)。"""
 
 
-# ---------- alpha: 四象限综述 ----------
+# ---------- alpha: four-quadrant summary ----------
 ALPHA_SUMMARY_PROMPT = """你是个股投研分析师。基于以下「预期差四象限」结构化数据, 写一段对 {stock_name}({ts_code}) 的预期差分析。
 
 1) 券商盈利预测分歧 (fin.report_forecast, 已按单位归一到元):

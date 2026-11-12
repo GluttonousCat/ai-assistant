@@ -1,13 +1,15 @@
 # -*- encoding: utf-8 -*-
 """
-研究生产线总装 CLI (T08) — 顺序函数编排, 图思维不引框架
+Research production line assembly CLI (T08) — sequential function orchestration,
+graph thinking without importing a framework
 
-    python -m skills.research 贵州茅台                     # 全流程: 采集→草稿→图表→渲染
-    python -m skills.research 贵州茅台 --skip-evidence     # 复用已落盘分片, 跳过三源采集
-    python -m skills.research 600519.SH --only render      # 只渲染 (需已有 draft.json)
+    python -m skills.research 贵州茅台                     # full pipeline: collect -> draft -> figures -> render
+    python -m skills.research 贵州茅台 --skip-evidence     # reuse shards already on disk, skip three-source collection
+    python -m skills.research 600519.SH --only render      # render only (requires an existing draft.json)
 
-各 Stage 模块 (T02/T03/T04/T06/T07) 由并行任务维护, 此处一律 lazy import:
-未合并的 Stage 跳过并告警 (已落盘产物可继续用), 不阻塞可运行的后续阶段。
+Stage modules (T02/T03/T04/T06/T07) are maintained by parallel tasks; always lazy-import
+them here: unmerged stages are skipped with a warning (artifacts already on disk remain
+usable) and never block later runnable stages.
 """
 from __future__ import annotations
 
@@ -41,10 +43,11 @@ def _output_root(out_root: str) -> Path:
     return Path(out_root) if out_root else Path(PathManager().output_dir)
 
 
-# ---------- 股票定位 ----------
+# ---------- stock resolution ----------
 
 def _resolve_ts_code(stock: str, out_root: Path) -> Optional[str]:
-    """名/代码 → ts_code。代码格式直接用; 名称则反查已落盘 draft.json 的 name 字段。"""
+    """Name/code -> ts_code. Codes are used directly; names are resolved by
+    reverse-looking-up the name field of draft.json files already on disk."""
     s = stock.strip()
     if _TS_CODE_RE.match(s):
         return s.upper()
@@ -75,11 +78,12 @@ def _require_research_dir(stock: str, out_root: Path) -> Path:
     return rdir
 
 
-# ---------- Stage 1 · 三源采集 (T02/T03/T04) ----------
+# ---------- Stage 1 · three-source collection (T02/T03/T04) ----------
 
 def stage_collect(stock: str, years: int, annual_years: List[int],
                   days: int, out_root: Path) -> Tuple[str, Path]:
-    """三源采集 → 分片落盘。tushare 先行 (其内解析 名→代码); 各源独立容错。"""
+    """Three-source collection -> shards written to disk. Tushare goes first
+    (it resolves name -> code); each source fails independently."""
     ts_code = _resolve_ts_code(stock, out_root)
     rdir = research_dir(out_root, ts_code) if ts_code else None
 
@@ -93,7 +97,8 @@ def stage_collect(stock: str, years: int, annual_years: List[int],
     else:
         shard = collect_tushare_facts(stock, years=years, out_dir=rdir)
         if not ts_code and not (rdir / "facts_tushare.json").is_file():
-            # T02 以默认目录落盘 (如 --out-root 覆盖时), 转存一份到目标研究目录
+            # T02 writes to its default directory (e.g. when --out-root overrides it);
+            # copy the shard into the target research directory
             save_shard(shard, research_dir(out_root, shard.ts_code) / "facts_tushare.json")
         ts_code = ts_code or shard.ts_code
         rdir = rdir or research_dir(out_root, ts_code)
@@ -113,7 +118,7 @@ def stage_collect(stock: str, years: int, annual_years: List[int],
             for err in validate_shard(shard):
                 logger.warning("[annual %s] 分片校验: %s", year, err)
             logger.info("[annual %s] facts=%d", year, len(shard.facts))
-        except Exception as e:                      # 单年报失败不阻塞其他源
+        except Exception as e:                      # one annual-report failure must not block other sources
             logger.error("[annual %s] 采集失败: %s", year, e)
 
     try:
@@ -132,7 +137,7 @@ def stage_collect(stock: str, years: int, annual_years: List[int],
     return ts_code, rdir
 
 
-# ---------- Stage 2 · 草稿 (T06) ----------
+# ---------- Stage 2 · draft (T06) ----------
 
 def stage_generate(ts_code: str, rdir: Path, years: int,
                    stock: str = "") -> Draft:
@@ -146,17 +151,18 @@ def stage_generate(ts_code: str, rdir: Path, years: int,
         raise SystemExit(f"T06 生成器未合并且无已落盘 draft.json, 无法生成草稿: {e}; "
                          "可先用 --only render 渲染已有产物。")
     draft = generate_draft(stock or ts_code, years=years, research_dir=rdir)
-    if not (rdir / "draft.json").is_file():         # 兜底: 生成器漏存则代存
+    if not (rdir / "draft.json").is_file():         # fallback: save on the generator's behalf if it skipped persisting
         save_draft(draft, rdir / "draft.json")
     logger.info("[generate] 章节 %d 章, flags %d 条, 假设 %d 条",
                 len(draft.chapters), len(draft.flags), len(draft.hypotheses))
     return draft
 
 
-# ---------- Stage 3 · 图表 (T07) 与渲染 (T08) ----------
+# ---------- Stage 3 · figures (T07) and rendering (T08) ----------
 
 def stage_figures(rdir: Path) -> List:
-    """图表工场; 文件落 figs/, 渲染阶段按 chNN_ 文件名约定回收, 失败不阻塞渲染。"""
+    """Figure factory; files land in figs/, the render stage recycles them by the
+    chNN_ filename convention; failure never blocks rendering."""
     try:
         from skills.research.compose.figures import build_figures
     except ImportError as e:
@@ -185,7 +191,7 @@ def stage_render(rdir: Path) -> Tuple[Path, Draft, list, list, list]:
     return out, draft, facts, views, figs
 
 
-# ---------- 入口 ----------
+# ---------- entry point ----------
 
 def main(argv: Optional[List[str]] = None) -> int:
     p = argparse.ArgumentParser(

@@ -1,22 +1,25 @@
 # -*- encoding: utf-8 -*-
 """
-T07 · 图表工场 (Stage 3) — 从证据时序自动产出章节配图
+T07 · figure factory (Stage 3) — auto-produce chapter figures from evidence time series
 
 build_figures(draft, facts, research_dir) -> List[FigureOut(path, chapter_no, hint)]
-不改 draft.json; 返回 (路径, 章号, 插入位置提示) 清单, 由 T08 组装时插入对应章末。
+Never touches draft.json; returns a list of (path, chapter no, insertion-position hint)
+for T08 to insert at the end of the matching chapter during assembly.
 
-图类型路由 (铁律: 财报累计口径禁止折线连点, 同指标多年一律柱状):
-  收入构成          → 占比条形   ch02 商业模式与业务拆解   (T05 wants: mainbiz)
-  营收/净利多年     → 双轴分组柱 ch04 历史经营与财务质量   (wants: financials; 同比红涨绿跌)
-  毛利率/净利率/ROE → 分组柱     ch04
-  净利润与经营现金流→ 分组柱     ch04 (盈利质量: 现金流与利润匹配)
-  产量/销量         → 分组柱     ch05 经营驱动因子与盈利机制 (wants: annual/financials)
-  产能利用率        → 柱状       ch05
-  研发投入          → 柱状       ch06 技术、研发与竞争优势 (wants: financials)
-  估值水位          → 区间带     ch10 估值与持续跟踪       (wants: financials; 行情数据非累计口径)
+Figure-type routing (iron rule: cumulative-report figures must never be drawn as a line
+joining points; the same metric across years is always bars):
+  revenue mix              -> share bar-h       ch02 business model & segment breakdown (T05 wants: mainbiz)
+  multi-year rev/net profit-> dual-axis grouped bars ch04 history & financial quality (wants: financials; YoY red-up/green-down)
+  gross/net margin / ROE   -> grouped bars      ch04
+  net profit vs op. cash flow -> grouped bars   ch04 (earnings quality: cash flow matches profit)
+  production/sales volume  -> grouped bars      ch05 operating drivers & profit mechanism (wants: annual/financials)
+  capacity utilization     -> bars              ch05
+  R&D spend                -> bars              ch06 technology, R&D & competitive edge (wants: financials)
+  valuation level          -> range band        ch10 valuation & tracking (wants: financials; quotes are not cumulative)
 
-风格对齐 skills/content/charts.py (深黑暗棕/微软雅黑/1080px, 只 import 不修改);
-每张图只消费 fact 层证据 (三层分离), 图脚注带 eid 溯源; A股红涨绿跌 (同比标注)。
+Style aligned with skills/content/charts.py (dark theme / Microsoft YaHei / 1080px,
+import-only, never modified); each figure consumes fact-layer evidence only (three-layer
+separation) with an eid-tracing footnote; A-share red-up/green-down (YoY labels).
 """
 from __future__ import annotations
 
@@ -28,7 +31,7 @@ from typing import Dict, List, NamedTuple, Optional, Tuple
 
 import matplotlib
 
-matplotlib.use("Agg")  # 纯批量出图模块, 先于任何 pyplot 导入固定后端 (离线可跑)
+matplotlib.use("Agg")  # pure batch-rendering module; pin the backend before any pyplot import (runs offline)
 
 from core.logger import get_logger
 from skills.content.charts import (_ACCENT, _ACCENT2, _BG, _DIM, _FG, _GRID,
@@ -37,24 +40,25 @@ from skills.research.contracts import Draft, Fact
 
 logger = get_logger(__name__)
 
-FIG_WIDTH = 10.8  # 公众号宽度 1080px (dpi=100)
+FIG_WIDTH = 10.8  # official-account width 1080px (dpi=100)
 _FIGS_SUBDIR = "figs"
 
 
 class FigureOut(NamedTuple):
-    """T07→T08 交接物: 图片路径 + 归属章号 + 插入位置提示 (可按三元组解包)"""
+    """T07->T08 handoff artifact: image path + owning chapter no + insertion-position hint (unpackable as a 3-tuple)"""
     path: Path
     chapter_no: int
     hint: str
 
 
 # ============================================================
-# 证据时序整理: eid -> 指标序列
+# Evidence time-series organization: eid -> metric series
 # ============================================================
 
-# 分类规则: (类别, 指标键正则[小写匹配], 内容关键词) — 顺序即优先级, 特异在前
-# (yoy 陷阱最先: 增长率事实(%)绝不能当水平值(亿元)混进 profit/revenue 出图;
-#  netmargin 先于 profit, 防 netprofit_margin 被 "netprofit" 误吞; pe/pb 用词边界防 capex)
+# Classification rules: (category, metric-key regex [lowercase match], content keywords)
+# — order is priority, more specific first (the yoy trap comes first: growth-rate facts (%)
+# must never sneak into profit/revenue charts as levels (100M-yuan amounts); netmargin before
+# profit so netprofit_margin isn't swallowed by "netprofit"; pe/pb use word boundaries to exclude capex)
 _RULES: List[Tuple[str, List[str], List[str]]] = [
     ("yoy", [r"_?yoy$", r"_?yoy\.", r"同比"], ["同比增长", "同比"]),
     ("netmargin", [r"netprofit_?margin", r"net_?margin", r"净利率"], ["净利率"]),
@@ -79,7 +83,7 @@ _ANNUAL_SEG = re.compile(r"^\d{4}A?$")
 
 
 def _classify(key: str, content: str = "") -> Optional[str]:
-    """指标键 (+内容兜底) → 类别; 无法识别返回 None"""
+    """Metric key (+ content fallback) -> category; returns None when unrecognized"""
     kl = (key or "").lower()
     for cat, kregs, _kw in _RULES:
         if any(re.search(r_, kl) for r_ in kregs):
@@ -91,7 +95,7 @@ def _classify(key: str, content: str = "") -> Optional[str]:
 
 
 def _series_key(f: Fact) -> str:
-    """eid 去前缀/去年报首段年份/去期间 → 指标键:
+    """Strip prefix / annual leading-year segment / period from an eid -> metric key:
     T:tushare.revenue.2024A -> 'tushare.revenue';  A:2024.mdna.3.1 -> 'mdna.3.1'"""
     body = f.eid[2:] if f.eid.startswith(("T:", "A:")) else f.eid
     parts = body.split(".")
@@ -104,7 +108,7 @@ def _series_key(f: Fact) -> str:
 
 @dataclass
 class _Series:
-    """同一指标键的年度时序 (period 'YYYY'/'YYYYA' -> Fact)"""
+    """Annual time series of a single metric key (period 'YYYY'/'YYYYA' -> Fact)"""
     key: str
     cat: str
     unit: str = ""
@@ -115,8 +119,8 @@ class _Series:
 
 
 def _annual_entry(f: Fact) -> Optional[Tuple[str, str]]:
-    """年度数值事实 -> (指标键, 期间); 非年度/无数值返回 None。
-    A: 年报 eid 首段即年份 (A:2024.mdna.3.1), 无显式 period 时取首段。"""
+    """Annual numeric fact -> (metric key, period); returns None for non-annual / valueless facts.
+    For A: eids the first segment is the year (A:2024.mdna.3.1); used when period is absent."""
     if f.value is None or not f.eid.startswith(("T:", "A:")):
         return None
     period = f.period or ""
@@ -132,11 +136,11 @@ def _annual_entry(f: Fact) -> Optional[Tuple[str, str]]:
     return (key, period) if key else None
 
 
-_EXCLUDE_ANNUAL = ("mainbiz", "pe", "pb")  # 走专用通道 (构成/估值)
+_EXCLUDE_ANNUAL = ("mainbiz", "pe", "pb")  # handled by dedicated channels (mix / valuation)
 
 
 def _annual_series(facts: List[Fact]) -> "OrderedDict[str, _Series]":
-    """facts -> {指标键: 年度序列}; 同键同期以高置信优先"""
+    """facts -> {metric key: annual series}; same key+period resolved by higher confidence first"""
     out: "OrderedDict[str, _Series]" = OrderedDict()
     for f in sorted(facts, key=lambda x: (-x.confidence, x.eid)):
         entry = _annual_entry(f)
@@ -156,13 +160,13 @@ def _annual_series(facts: List[Fact]) -> "OrderedDict[str, _Series]":
 
 
 def _best(series: "OrderedDict[str, _Series]", cat: str) -> Optional[_Series]:
-    """同类别取点数最多的序列 (同指标可能有多个口径, 画点数最全的)"""
+    """Pick the series with the most points within a category (one metric may exist under several calibers; draw the most complete one)"""
     cands = [s for s in series.values() if s.cat == cat]
     return max(cands, key=lambda s: (len(s.points), s.key)) if cands else None
 
 
 # ============================================================
-# 绘图小工具 (风格全部对齐 skills/content/charts.py)
+# Drawing helpers (style fully aligned with skills/content/charts.py)
 # ============================================================
 
 def _fmt(v: float) -> str:
@@ -182,7 +186,7 @@ def _bar_label(ax, x: float, v: float, peak: float, text: str,
 
 
 def _note(used: List[Fact], extra: str = "") -> str:
-    """图脚注: 证据 eid 溯源 (三层分离 — 只列 fact 层)"""
+    """Figure footnote: evidence eid tracing (three-layer separation — fact layer only)"""
     uniq = list(dict.fromkeys(f.eid for f in used))
     head = "、".join(uniq[:3]) + (f" 等{len(uniq)}条" if len(uniq) > 3 else "")
     src = used[0].source or ""
@@ -201,8 +205,10 @@ _BG_RGB = tuple(int(_BG[i:i + 2], 16) for i in (1, 3, 5))   # "#241f1c" -> (36,3
 
 
 def _finish1080(fig, path: Path, title: str, note: str = "") -> Path:
-    """_finish(tight 裁剪) 后宽度不定 (可能不足也可能超宽) → 统一到公众号规范宽 1080px:
-    不足则背景色衬垫居中; 超宽 (标注画出画布) 则等比缩小。"""
+    """After _finish (tight crop) the width is undetermined (may be narrower or wider)
+    -> normalize to the official-account standard width of 1080px: pad with the
+    background color and center when narrower; scale down proportionally when wider
+    (labels drawn outside the canvas)."""
     p = _finish(fig, path, title, note=note)
     try:
         from PIL import Image
@@ -218,7 +224,7 @@ def _finish1080(fig, path: Path, title: str, note: str = "") -> Path:
                 out = Image.new("RGB", (_CANVAS_W, h), _BG_RGB)
                 out.paste(img, ((_CANVAS_W - w) // 2, 0))
         out.save(p)
-    except ImportError:                 # 无 Pillow 时保持 tight 原宽 (仅尺寸不齐, 不阻塞)
+    except ImportError:                 # without Pillow keep the tight-crop width (only a size mismatch, never blocking)
         logger.warning("Pillow 缺失, 跳过 1080px 宽度统一")
     return p
 
@@ -247,14 +253,15 @@ def _ylim_headroom(ax, vals: List[float], head: float = 1.30) -> None:
 
 
 # ============================================================
-# 图构建器 (每个返回 Optional[FigureOut]; 命名 figs/ch{no:02d}_{slug}.png)
+# Figure builders (each returns Optional[FigureOut]; named figs/ch{no:02d}_{slug}.png)
 # ============================================================
 
 def _annual_pair(out_dir: Path, fname: str, chapter_no: int, hint: str, title: str,
                  note: str, s_left: _Series, label_left: str,
                  s_right: Optional[_Series], label_right: str) -> FigureOut:
-    """双系列年度分组柱 (双轴, 风格同 charts.growth_chart); 左系列带同比标注(红涨绿跌)。
-    财报累计口径铁律: 只用 bar, 绝不折线连点。"""
+    """Two-series annual grouped bars (dual axis, style as charts.growth_chart); the left
+    series carries YoY labels (red-up/green-down). Iron rule for cumulative report
+    figures: bars only, never connect points with a line."""
     years = sorted(set(s_left.ymap()) | (set(s_right.ymap()) if s_right else set()))
     xs = [str(y) for y in years]
     idx = list(range(len(xs)))
@@ -271,7 +278,7 @@ def _annual_pair(out_dir: Path, fname: str, chapter_no: int, hint: str, title: s
         if v is None:
             continue
         _bar_label(ax, i - w / 2, v, peak, _fmt(v))
-        if i and v1[i - 1]:          # 同比标注: A股红涨绿跌
+        if i and v1[i - 1]:          # YoY label: A-share red-up/green-down
             g = (v - v1[i - 1]) / abs(v1[i - 1]) * 100
             ax.annotate(f"{g:+.1f}%",
                         (i - w / 2, v + peak * 0.085 if v >= 0 else v - peak * 0.085),
@@ -306,7 +313,7 @@ def _annual_pair(out_dir: Path, fname: str, chapter_no: int, hint: str, title: s
 
 def _annual_single(out_dir: Path, fname: str, chapter_no: int, hint: str, title: str,
                    note: str, s: _Series, label: str, yoy: bool = False) -> FigureOut:
-    """单指标年度柱状 + 数值标注 (可选同比红涨绿跌)"""
+    """Single-metric annual bars + value labels (optional YoY red-up/green-down)"""
     pairs = sorted(s.ymap().items())
     xs = [str(y) for y, _ in pairs]
     vs = [float(f.value) for _, f in pairs]
@@ -399,7 +406,7 @@ def _fig_np_ocf(series, name, out_dir, allowed):
     if not (prof and ocf and len(prof.points) >= 2 and len(ocf.points) >= 2):
         return None
     used = list(prof.points.values()) + list(ocf.points.values())
-    # 现金流/净利 匹配度 (最近共同年份) 写进脚注, 佐证盈利质量
+    # cash-flow/net-profit match (latest common year) goes into the footnote as earnings-quality evidence
     mp, mo = prof.ymap(), ocf.ymap()
     common = sorted(set(mp) & set(mo))
     extra = ""
@@ -461,7 +468,7 @@ def _fig_rd(series, name, out_dir, allowed):
         s, "研发投入", yoy=True)
 
 
-# ---------- 收入构成 (占比条形, ch02) ----------
+# ---------- revenue mix (share bar-h, ch02) ----------
 
 _MB_NAME_RE = re.compile(r"\)\s*([^()（）]+?)\s*[（(]主营构成")   # "2026中报(…) 茅台酒 (主营构成…"
 _MB_SHARE_RE = re.compile(r"占[^\d%]{0,8}([\d.]+)\s*%")          # "占营业收入 73.87%"
@@ -469,7 +476,7 @@ _MB_GM_RE = re.compile(r"毛利率\s*([\d.]+)\s*%")
 
 
 def _item_name(f: Fact) -> str:
-    """构成项名: content 里 '…) 品名 (主营构成' 模式优先, 兜底 eid mainbiz 段/content 掐头"""
+    """Segment-item name: prefer the '…) item-name (主营构成' pattern in content; fall back to the eid mainbiz segment / content head"""
     m = _MB_NAME_RE.search(f.content or "")
     if m and m.group(1).strip():
         return m.group(1).strip()[:12]
@@ -486,10 +493,10 @@ def _item_name(f: Fact) -> str:
 
 
 def _mainbiz_items(facts: List[Fact]) -> List[Tuple[str, float, Optional[float], Fact]]:
-    """mainbiz 类事实按期间分组, 取条目最多的期间
-    -> [(项名, 占比%, 毛利率%|None, Fact)] 按占比降序。
-    占比三级来源: content 直取「占营业收入 X%」→ 金额按组合计归一 (亿元金额事实)
-    → 小数占比 ×100。"""
+    """Group mainbiz facts by period and take the period with the most entries
+    -> [(item name, share %, gross margin %|None, Fact)] sorted by share desc.
+    Three-tier share source: take「占营业收入 X%」directly from content -> normalize
+    amounts against the group total (100M-yuan amount facts) -> decimal shares x100."""
     by_period: Dict[str, List[Fact]] = {}
     for f in facts:
         if f.value is None:
@@ -510,13 +517,13 @@ def _mainbiz_items(facts: List[Fact]) -> List[Tuple[str, float, Optional[float],
 
     shares = [share_of(f) for f in group]
     if all(s is not None for s in shares) and 80 <= sum(shares) <= 120:
-        pass                                   # 占比直取, 全齐且量纲合理
+        pass                                   # shares taken directly: all present and magnitudes sane
     elif group[0].unit and any(k in group[0].unit for k in ("亿", "万", "元")):
-        total = sum(abs(float(f.value)) for f in group)          # 金额 → 归一
+        total = sum(abs(float(f.value)) for f in group)          # amounts -> normalized
         shares = ([float(f.value) / total * 100 for f in group] if total > 0
                   else shares)
     shares = [s if s is not None else float(f.value) for s, f in zip(shares, group)]
-    if shares and max(shares) <= 1.5:           # 小数占比兜底
+    if shares and max(shares) <= 1.5:           # decimal-share fallback
         shares = [s * 100 for s in shares]
 
     items = []
@@ -535,7 +542,7 @@ def _fig_mainbiz(facts, name, out_dir, allowed):
     if len(items) < 2:
         return None
     items = items[:6]
-    rows = sorted(items, key=lambda t: t[1])           # barh: 最大在顶部
+    rows = sorted(items, key=lambda t: t[1])           # barh: largest on top
     names = [n for n, _, _, _ in rows]
     shares = [v for _, v, _, _ in rows]
     used = [f for _, _, _, f in rows]
@@ -560,7 +567,7 @@ def _fig_mainbiz(facts, name, out_dir, allowed):
     return FigureOut(path, 2, "章末插入 · 收入构成占比 (佐证业务拆解)")
 
 
-# ---------- 估值水位 (区间带, ch10) ----------
+# ---------- valuation level (range band, ch10) ----------
 
 @dataclass
 class _ValRow:
@@ -569,8 +576,8 @@ class _ValRow:
     high: float
     median: float
     latest: float
-    pct: float                 # 分位 %
-    span: str                  # 样本区间描述
+    pct: float                 # percentile %
+    span: str                  # sample-range description
     used: List[Fact]
 
 
@@ -580,9 +587,10 @@ _VAL_SPAN_RE = re.compile(r"(近\s*\d+\s*年)")
 
 
 def _valuation_rows(facts: List[Fact]) -> List[_ValRow]:
-    """每指标一行, 两种来源:
-    ① 分布模式: ≥3 个不同期间的估值事实 → min/median/max/最新分位全算;
-    ② 解析模式: 单条事实 content 自带「区间 X~Y … N% 分位」(T02 画像估值板块)。"""
+    """One row per metric, two possible sources:
+    1) distribution mode: valuation facts across >=3 distinct periods -> min/median/max
+       and latest percentile all computed;
+    2) parse mode: a single fact whose content embeds「区间 X~Y … N% 分位」(T02 profile valuation block)."""
     rows = []
     for cat, label in (("pe", "PE(TTM)"), ("pb", "PB")):
         group = [f for f in facts if f.value is not None
@@ -591,7 +599,7 @@ def _valuation_rows(facts: List[Fact]) -> List[_ValRow]:
         for f in sorted(group, key=lambda x: -x.confidence):
             if f.period:
                 pts.setdefault(f.period, f)
-        if len(pts) >= 3:                              # ① 分布模式
+        if len(pts) >= 3:                              # 1) distribution mode
             sample = [pts[k] for k in sorted(pts)]
             vals = sorted(float(f.value) for f in sample)
             latest = float(sample[-1].value)
@@ -601,7 +609,7 @@ def _valuation_rows(facts: List[Fact]) -> List[_ValRow]:
                 pct=sum(1 for v in vals if v <= latest) / len(vals) * 100,
                 span=f"{sample[0].period}~{sample[-1].period}", used=sample))
             continue
-        for f in sorted(group, key=lambda x: -x.confidence):    # ② 解析模式
+        for f in sorted(group, key=lambda x: -x.confidence):    # 2) parse mode
             mr, mp = _VAL_RANGE_RE.search(f.content or ""), _VAL_PCT_RE.search(f.content or "")
             if not (mr and mp):
                 continue
@@ -647,7 +655,7 @@ def _fig_valuation(facts, name, out_dir, allowed):
     ax.set_title(_title(name, "估值水位: 当前值处于样本区间的位置 (◆)"),
                  color=_FG, fontsize=14, pad=26, loc="left")
     span = rows[0].span
-    # 脚注放独立底边带, 与 x 轴刻度错层 (证据 eid 列表较长, 避免与刻度数字叠压)
+    # footnote on a dedicated bottom band, offset from the x-axis ticks (the eid list is long; avoid overlapping tick numbers)
     fig.subplots_adjust(bottom=0.30)
     fig.text(0.99, 0.04, _note(used, f"样本区间 {span}"),
              ha="right", va="bottom", fontsize=8.5, color=_DIM)
@@ -657,7 +665,7 @@ def _fig_valuation(facts, name, out_dir, allowed):
 
 
 # ============================================================
-# 总入口
+# main entry
 # ============================================================
 
 def _allow(no: int, allowed: Optional[set]) -> bool:
@@ -666,11 +674,12 @@ def _allow(no: int, allowed: Optional[set]) -> bool:
 
 def build_figures(draft: Draft, facts: List[Fact], research_dir: Path
                   ) -> List[FigureOut]:
-    """证据时序 → 章节配图清单 (figs/ch{no:02d}_{slug}.png)。
+    """Evidence time series -> chapter figure list (figs/ch{no:02d}_{slug}.png).
 
-    - 只消费 fact 层; 每张图可溯源到 facts (图脚注列 eid)
-    - draft.chapters 非空时只产出能落进现有章的图 (空 draft 全放行, 便于先行开发)
-    - 返回按 (章号, 文件名) 排序; 不改 draft.json, 插入由 T08 组装
+    - Consumes the fact layer only; every figure traces back to facts (footnote lists eids)
+    - With non-empty draft.chapters, only figures fitting existing chapters are produced
+      (an empty draft allows everything, so development can run ahead of the draft)
+    - Returns sorted by (chapter no, filename); draft.json is untouched — T08 does the insertion
     """
     allowed = {ch.no for ch in draft.chapters} if (draft and draft.chapters) else None
     name = (draft.name if draft else "") or ""

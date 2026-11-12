@@ -1,10 +1,10 @@
 """
-研报 -> 产业链环节抽取 (原子能力)
+Research report -> industry-chain segment extraction (atomic capability)
 
-- 输入: report_id + prompt (由 skill 层注入, 专业知识放 beta_alpha/prompts.py)
-- 输出: fin.chain_extract 每环节一行 (幂等: 先删后插)
-- 调用方: skills/report/skill.py 深度提取后后台线程 / scripts/backfill_chain_extract.py
-- 必须在业务事务外调用 (含 LLM 秒级调用, 禁止占事务)
+- Input: report_id + prompt (injected by the skill layer; domain knowledge lives in beta_alpha/prompts.py)
+- Output: one row per segment in fin.chain_extract (idempotent: delete then insert)
+- Callers: skills/report/skill.py in a background thread after deep extraction / scripts/backfill_chain_extract.py
+- Must be called outside business transactions (contains second-level LLM calls; never hold a transaction)
 """
 from __future__ import annotations
 
@@ -19,10 +19,10 @@ from skills.beta_alpha.schema import init_chain_extract_schema
 
 logger = get_logger(__name__)
 
-_MAX_TEXT_CHARS = 12000       # 与研报深度提取同窗口
+_MAX_TEXT_CHARS = 12000       # same window as report deep extraction
 _DIRECTIONS = {"upstream", "midstream", "downstream", "other"}
 
-# 在途去重 (同一报告不重复抽取)
+# In-flight dedup (do not extract the same report twice)
 _inflight: set = set()
 _inflight_lock = threading.Lock()
 
@@ -50,7 +50,8 @@ def _parse_json(text: str) -> Optional[Dict]:
 
 
 def extract_chain(report_id: int, prompt: str) -> int:
-    """单篇研报抽取环节并入库, 返回入库行数 (幂等, 事务外调用)"""
+    """Extract segments from a single report and persist; returns row count
+    (idempotent; call outside transactions)"""
     with _inflight_lock:
         if report_id in _inflight:
             return 0
@@ -112,7 +113,8 @@ def _extract_chain_inner(report_id: int, prompt: str) -> int:
 
 
 def spawn_chain_extract(report_id: int) -> None:
-    """后台线程执行链抽取 (fire-and-forget, 研报主链路挂点; 仅限常驻进程使用)"""
+    """Run chain extraction in a background thread (fire-and-forget hook on the
+    report main pipeline; for long-lived processes only)"""
     def _worker():
         try:
             from skills.beta_alpha.prompts import CHAIN_EXTRACT_PROMPT

@@ -1,19 +1,23 @@
 # -*- encoding: utf-8 -*-
 """
-【试验田】LangGraph 版 interpret→ppt 链路 — 与 cli.py 直连函数链的对照实验
+【Experimental sandbox】LangGraph version of the interpret->ppt pipeline — a
+controlled experiment against the direct function chain in cli.py
 
-目的: 验证"业务流程用 Graph 编排是否更整洁"。与 cli.py 的 interpret 子命令
-调用**完全相同**的底层函数 (write_stock_article / generate_profile_ppt),
-只比较编排层差异。节点边界 = 业务步骤; 步骤内部仍是普通函数/LLM 调用
-(agent-loop-as-node 的形态示范)。
+Purpose: verify whether "orchestrating business flows with a Graph" is cleaner.
+Calls the **exact same** underlying functions as cli.py's interpret subcommand
+(write_stock_article / generate_profile_ppt), comparing only the orchestration
+layer. Node boundaries = business steps; inside a step it is still plain
+function/LLM calls (a demonstration of the agent-loop-as-node shape).
 
-用法 (与 cli.py interpret 等价):
+Usage (equivalent to cli.py interpret):
     python -m skills.content.graph_spike 中际旭创 --ppt
     python -m skills.content.graph_spike 中际旭创
 
-实验结论 (2026-09-14, 见 graph 底部统计): 线性链路上图编排代码量约 3 倍、
-间接层 +1; 价值出现在分支/并行/检查点恢复/审批中断需求出现时。
-此文件保留作为"图+节点"模式参考, 无生产依赖。
+Experiment conclusion (2026-09-14, see the stats at the bottom of graph): on a
+linear pipeline the graph orchestration is ~3x the code with +1 indirection
+layer; the value shows up once branching/parallelism/checkpoint recovery/
+approval interrupts are needed.
+Kept as a "graph + node" pattern reference; no production dependency.
 """
 from __future__ import annotations
 
@@ -26,7 +30,7 @@ from langgraph.graph import END, START, StateGraph
 from typing_extensions import TypedDict
 
 
-# ---------- 图状态: 节点间传递的全部业务数据 ----------
+# ---------- Graph state: all business data passed between nodes ----------
 class InterpretState(TypedDict, total=False):
     stock: str
     years: int
@@ -38,7 +42,7 @@ class InterpretState(TypedDict, total=False):
     error: str
 
 
-# ---------- 节点: 每个节点 = 一个业务步骤, 返回增量状态 ----------
+# ---------- Nodes: each node = one business step, returns incremental state ----------
 def prepare(state: InterpretState) -> dict:
     if not (state.get("stock") or "").strip():
         return {"error": "stock 不能为空"}

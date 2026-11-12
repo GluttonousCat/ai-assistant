@@ -1,12 +1,14 @@
 """
-beta_alpha — 产业链Beta / 个股Alpha 独立模块
+beta_alpha — industry-chain Beta / single-stock Alpha standalone module
 
-自包含子系统 (对标 range_trading/): 种子链模板/分析能力/Skill编排/SSE流式/
-DDL/测试全部在本包内, 对外只暴露稳定入口:
+Self-contained subsystem (mirrors range_trading/): seed-chain templates, analysis
+capabilities, skill orchestration, SSE streaming, DDL and tests all live inside
+this package; only stable entry points are exposed:
 - beta_alpha.skills.beta.BetaSkill / beta_alpha.skills.alpha.AlphaSkill
-- beta_alpha.streaming.stream_chain / stream_alpha (SSE 生成器)
-- beta_alpha.analysis.chain_analysis (量化) / chain_extract (研报环节抽取)
+- beta_alpha.streaming.stream_chain / stream_alpha (SSE generators)
+- beta_alpha.analysis.chain_analysis (quant) / chain_extract (report segment extraction)
 - beta_alpha.schema.init_chain_extract_schema (DDL)
 
-验证: pytest beta_alpha/tests ; 改链模板后跑 python -m agent.beta_alpha.analysis.chain_analysis <chain_id>
+Verification: pytest beta_alpha/tests ; after editing a chain template run
+python -m agent.beta_alpha.analysis.chain_analysis <chain_id>
 """

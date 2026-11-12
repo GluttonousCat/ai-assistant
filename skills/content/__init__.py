@@ -1,12 +1,15 @@
 # -*- encoding: utf-8 -*-
 """
-content/ — 内容资产管线: 数据/研报 -> 画像 -> 公众号文章 / PPT
+content/ — content asset pipeline: data/reports -> profile -> WeChat article / PPT
 
-- profile.py   上市公司画像 (八大板块, 纯数据, 复用 MCP 工具层)
-- article.py   公众号文章 (股票画像模式 / 研报主题综述模式, 合规免责内置)
-- ppt.py       画像 -> pptgen 任务书 -> ../pptgen 出片 (LLM 配置环境变量注入)
-- prompts.py   提示词 (数据纪律: 禁编数; 版权纪律: 观点转述标注机构)
+- profile.py   listed-company profile (eight sections, pure data, reuses the MCP tool layer)
+- article.py   WeChat official-account article (stock-profile mode / report-topic
+               summary mode, built-in compliance disclaimer)
+- ppt.py       profile -> pptgen task book -> ../pptgen slide generation
+               (LLM config injected via environment variables)
+- prompts.py   prompts (data discipline: no fabricated numbers; copyright
+               discipline: views paraphrased with the institution credited)
 - cli.py       python -m agent.content profile|article|ppt
 
-产出目录: output/articles/ (公众号 md), output/ppt/ (任务书 + pptx)
+Output directories: output/articles/ (WeChat markdown), output/ppt/ (task book + pptx)
 """

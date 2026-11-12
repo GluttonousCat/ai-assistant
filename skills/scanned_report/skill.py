@@ -1,22 +1,28 @@
 # -*- encoding: utf-8 -*-
 """
-ScannedReportSkill - 扫描件研报分析 Agent
+ScannedReportSkill - scanned report analysis agent
 
-【方案】图片型 PDF (无文本层) 的最优处理路径:
-    ① PyMuPDF 渲染每页为 PNG (dpi 130, 兼顾清晰度与 token 成本)
-    ② 多模态模型 (qwen3.8-flash) 逐页 OCR — prompt 带金融研报版式知识 (表格/数字保真)
-    ③ OCR 全文回写 fin.report_meta.content_text (成为普通文本研报)
-    ④ 组合调用 ReportSkill 深度提取 (评级/盈利预测/tags) — 复用而非重写
-    ⑤ 可选: 综合解读 (SCANNED_ANALYSIS_PROMPT, 买方研究员视角)
+[Approach] optimal path for image-type PDFs (no text layer):
+    (1) PyMuPDF renders each page to PNG (dpi 130, balancing clarity and token cost)
+    (2) multimodal model (qwen3.8-flash) does page-by-page OCR — the prompt carries
+        financial report layout knowledge (table/number fidelity)
+    (3) the full OCR text is written back to fin.report_meta.content_text
+        (becomes an ordinary text report)
+    (4) composed call into ReportSkill deep extraction (rating/forecasts/tags) —
+        reuse instead of rewrite
+    (5) optional: synthesized interpretation (SCANNED_ANALYSIS_PROMPT, buy-side
+        researcher perspective)
 
-【解耦设计】
-    - 视觉能力在 tools/pdf (通用 PDF 工具层); 视觉模型客户端由本 skill 注入
-      (ocr_pdf/ocr_page_png 的 vision_llm 参数), tools 层不感知 harness.llm
-    - 本 skill 只做编排; 深度提取委托 ReportSkill (组合)
-    - 专业知识全部在 prompts.py — 调优 prompt 不动代码
-    - 常规链路 (ReportSkill) 发现无正文图片 PDF 时也调用同一工具自动回填
+[Decoupled design]
+    - vision capability lives in tools/pdf (generic PDF tool layer); the vision
+      model client is injected by this skill (ocr_pdf/ocr_page_png vision_llm
+      parameter), the tools layer knows nothing about harness.llm
+    - this skill only orchestrates; deep extraction is delegated to ReportSkill (composition)
+    - all domain knowledge lives in prompts.py — tune prompts without touching code
+    - the regular pipeline (ReportSkill), upon finding an image PDF with no body
+      text, calls the same tool to backfill automatically
 
-用法:
+Usage:
     skill(SkillContext(user_input="", params={"report_id": 289}))
     skill(SkillContext(user_input="分析扫描件研报 289"))
 """
@@ -41,7 +47,7 @@ class ScannedReportSkill(BaseSkill):
                    "再进行结构化提取与专业解读")
     intent_keywords = ["扫描件", "扫描研报", "图片PDF", "图片pdf", "扫描文档"]
 
-    # 视觉 OCR 每册页数上限 (成本护栏; 研报通常 5-30 页)
+    # Page cap for vision OCR per report (cost guardrail; reports are usually 5-30 pages)
     MAX_OCR_PAGES = 10
 
     def run(self, context: SkillContext) -> SkillContext:
@@ -60,7 +66,7 @@ class ScannedReportSkill(BaseSkill):
                 context.result = {"summary": f"研报 #{report_id} 不存在"}
                 return context
 
-            # 已有正文: 跳过 OCR, 直接走分析
+            # body text already present: skip OCR, go straight to analysis
             if (row.get("content_chars") or 0) > 200:
                 context.log(f"#{report_id} 已有正文 {row['content_chars']} 字, 跳过 OCR")
                 return self._analyze(context, int(report_id),
@@ -71,7 +77,8 @@ class ScannedReportSkill(BaseSkill):
                 context.result = {"summary": f"#{report_id} 非图片型 PDF 或文件缺失: {path}"}
                 return context
 
-            # ①② 视觉 OCR (专业版式 prompt; 视觉客户端由本层注入, tools/pdf 不感知 LLM)
+            # (1)(2) vision OCR (domain-layout prompt; the vision client is injected
+            # by this layer, tools/pdf knows nothing about the LLM)
             from harness.llm import get_vision_llm
             from skills.scanned_report.prompts import SCANNED_OCR_PROMPT
             context.log(f"#{report_id} 开始视觉识别 (最多 {self.MAX_OCR_PAGES} 页)…")
@@ -81,7 +88,7 @@ class ScannedReportSkill(BaseSkill):
                 context.error = f"#{report_id} 视觉识别失败 (全部页面无有效内容)"
                 return context
 
-            # ③ 回写正文 — 从此与普通文本研报同构
+            # (3) write the body back — from here on it is isomorphic to an ordinary text report
             with PgClient() as pg:
                 pg.execute(
                     "UPDATE fin.report_meta SET content_text=%s, content_chars=%s, "
@@ -89,7 +96,7 @@ class ScannedReportSkill(BaseSkill):
                     (text, len(text), report_id))
             context.log(f"#{report_id} OCR 完成 {len(text)} 字, 已回写正文")
 
-            # ④⑤ 深度提取 + 综合解读 (组合 ReportSkill)
+            # (4)(5) deep extraction + synthesized interpretation (composing ReportSkill)
             return self._analyze(context, report_id,
                                  params.get("with_summary", True))
         except Exception as e:
@@ -97,10 +104,10 @@ class ScannedReportSkill(BaseSkill):
             context.error = f"扫描件分析失败: {e}"
         return context
 
-    # ---------- 内部 ----------
+    # ---------- Internals ----------
     def _analyze(self, context: SkillContext, report_id: int,
                  with_summary: bool) -> SkillContext:
-        """④ 深度提取 (委托 ReportSkill, 幂等) ⑤ 可选综合解读"""
+        """(4) deep extraction (delegated to ReportSkill, idempotent) (5) optional synthesized interpretation"""
         report_skill = ReportSkill()
         extract_ctx = report_skill(SkillContext(
             user_input="", params={"mode": "extract", "report_id": report_id}))
@@ -114,7 +121,7 @@ class ScannedReportSkill(BaseSkill):
                               "report_id": report_id}
             return context
 
-        # 综合解读 (agent 模型)
+        # synthesized interpretation (agent model)
         from harness.llm import get_agent_llm
         from skills.scanned_report.prompts import SCANNED_ANALYSIS_PROMPT
         with PgClient() as pg:

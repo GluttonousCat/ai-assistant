@@ -1,13 +1,16 @@
 # -*- encoding: utf-8 -*-
 """
-画像 -> pptgen 桥
+Profile -> pptgen bridge
 
-流程: 画像摘要 -> LLM 生成《PPT 任务书》(逐页规划, 真实数据)
-      -> 调用 ../pptgen 的 auto 模式出 .pptx (独立 venv, LLM 配置经环境变量注入)
+Flow: profile digest -> LLM writes a "PPT task book" (per-slide planning, real
+data) -> invoke ../pptgen in auto mode to produce the .pptx (separate venv;
+LLM config injected via environment variables)
 
-pptgen 依赖: ../pptgen/.venv + LibreOffice; LLM 用本平台 .env 的
-OpenAI 兼容配置 (deepseek 纯文本, --no-vision 自查降级)。
-任务书始终落盘 (output/ppt/) — 即使出片失败, 人工两步流程也可用:
+pptgen prerequisites: ../pptgen/.venv + LibreOffice; the LLM uses this
+platform's .env OpenAI-compatible config (deepseek is text-only;
+--no-vision for self-check degradation).
+The task book is always written to disk (output/ppt/) — even if slide
+generation fails, the manual two-step flow still works:
     ../pptgen/.venv/Scripts/python.exe -m pptgen.agent build 任务书.md --out xx.pptx
 """
 from __future__ import annotations
@@ -24,13 +27,14 @@ from skills.content.prompts import PPT_TASK_PROMPT
 
 logger = get_logger(__name__)
 
-# pptgen 为仓库外兄弟项目 (PycharmProjects/pptgen); 本文件在 agent/content/ 下三级到根
+# pptgen is a sibling project outside the repo (PycharmProjects/pptgen);
+# this file sits under agent/content/, three levels up to the root
 PPTGEN_DIR = Path(__file__).resolve().parents[3] / "pptgen"
 PPT_ROOT = Path("output/ppt")
 
 
 def _pptgen_env() -> Dict[str, str]:
-    """本平台 LLM 配置 -> pptgen 环境变量"""
+    """This platform's LLM config -> pptgen environment variables"""
     from core.config import get_config
     cfg = get_config()
     env = os.environ.copy()
@@ -43,7 +47,8 @@ def _pptgen_env() -> Dict[str, str]:
 
 
 def make_task_book(stock: str, years: int = 5) -> Dict[str, Any]:
-    """画像 -> pptgen 任务书 markdown (落盘)。LLM 只做策划, 数据来自画像。"""
+    """Profile -> pptgen task book markdown (written to disk). The LLM only
+    plans; the data comes from the profile."""
     from harness.llm import get_agent_llm
     profile = build_company_profile(stock, years)
     digest = profile_digest(profile)
@@ -59,7 +64,8 @@ def make_task_book(stock: str, years: int = 5) -> Dict[str, Any]:
 
 def generate_profile_ppt(stock: str, out_path: str = "",
                          timeout_sec: int = 600) -> Dict[str, Any]:
-    """画像 -> 任务书 -> pptgen auto 出片。返回 {pptx, task_book, ok, error}"""
+    """Profile -> task book -> pptgen auto slide generation. Returns
+    {pptx, task_book, ok, error}"""
     book = make_task_book(stock)
     py = PPTGEN_DIR / ".venv" / "Scripts" / "python.exe"
     if not py.exists():
@@ -69,7 +75,8 @@ def generate_profile_ppt(stock: str, out_path: str = "",
     out = (Path(out_path) if out_path else
            PPT_ROOT / f"{date.today():%Y%m%d}_{book['name']}_画像.pptx")
     out.parent.mkdir(parents=True, exist_ok=True)
-    # pptgen 子进程 cwd 在其项目目录, --out 必须绝对路径 (相对路径会落到 pptgen 下)
+    # the pptgen subprocess cwd is its own project dir, so --out must be an
+    # absolute path (a relative one would land under pptgen/)
     out = out.resolve()
     cmd = [str(py), "-m", "pptgen.agent", "auto", book["task"], "--no-vision",
            "--max-steps", "300", "--out", str(out)]

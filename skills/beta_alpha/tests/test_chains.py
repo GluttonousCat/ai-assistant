@@ -1,4 +1,4 @@
-"""种子链模板结构测试 (无 DB 依赖)"""
+"""Seed-chain template structure tests (no DB dependency)"""
 from __future__ import annotations
 
 from skills.beta_alpha.analysis.chain_analysis import (
@@ -22,7 +22,7 @@ def test_chain_yaml_structure():
 
     for fp in sorted(CHAINS_DIR.glob("*.yaml")):
         if fp.stem.startswith("_"):
-            continue  # _template.yaml 等非链文件 (与 load_chains 同规则)
+            continue  # non-chain files such as _template.yaml (same rule as load_chains)
         with open(fp, encoding="utf-8") as f:
             data = yaml.safe_load(f)
         stem = fp.stem
@@ -58,4 +58,4 @@ def test_match_chain_and_node():
     node = find_node(by_name["ai_compute"], "覆铜板CCL环节")
     assert node and node["id"] == "ccl"
     assert match_chain("完全不相关的话术xyz") is None or match_chain(
-        "完全不相关的话术xyz") is not None  # 不崩溃即可
+        "完全不相关的话术xyz") is not None  # just must not crash

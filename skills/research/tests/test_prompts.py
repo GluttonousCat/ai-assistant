@@ -1,11 +1,11 @@
 # -*- encoding: utf-8 -*-
-"""T05 十章模板与提示词库测试 — 纯离线 (不连 LLM/DB)。
+"""T05 ten-chapter template and prompt-library tests — fully offline (no LLM/DB).
 
-分组:
-  test_chapters   十章齐全/六字段非空/wants 闭集/股票无关
-  test_style      全局文风纪律 prompt 含三层分离关键词
-  test_prompt     chapter_prompt 组装: 注入/占位/查表/假设 JSON/花括号保全
-  test_imports    静态检查不 import 重模块 (禁止 harness/tools/storage/core)
+Groups:
+  test_chapters   ten chapters complete / six fields non-empty / wants closed set / stock-agnostic
+  test_style      global style-discipline prompt contains the three-layer-separation keywords
+  test_prompt     chapter_prompt assembly: injection / placeholders / int lookup / hypotheses JSON / brace preservation
+  test_imports    static check that no heavy modules are imported (harness/tools/storage/core forbidden)
 """
 import ast
 from pathlib import Path
@@ -22,7 +22,8 @@ from skills.research.prompts_style import STYLE_PROMPT
 
 _RESEARCH_DIR = Path(__file__).resolve().parent.parent
 
-# 模板必须股票无关 — 指南示例公司与首案例公司都不许出现 (T05 禁止条款)
+# Templates must be stock-agnostic — neither the guide's example company nor the first
+# case-study company may appear (T05 prohibition clause)
 _BANNED_COMPANY_TOKENS = ("600519", "贵州茅台", "茅台", "中芯国际", "光芯片")
 
 
@@ -93,7 +94,7 @@ class TestChapterPrompt:
     def test_injects_all_sections(self):
         ch = CHAPTERS[0]
         prompt = chapter_prompt(ch, self.FACTS, self.VIEWS)
-        assert STYLE_PROMPT in prompt                    # 全局文风前缀
+        assert STYLE_PROMPT in prompt                    # global style prefix
         assert ch["question"] in prompt
         assert ch["length_hint"] in prompt
         for item in ch["structure"]:
@@ -122,7 +123,7 @@ class TestChapterPrompt:
                 assert "```json" not in prompt
 
     def test_json_braces_survive(self):
-        """JSON 示例花括号原样保留 (AGENTS 坑: .format 花括号曾被吃掉)"""
+        """JSON example braces kept verbatim (AGENTS pitfall: .format once ate the braces)"""
         prompt = chapter_prompt(CHAPTERS[HYPOTHESES_CHAPTER_NO - 1])
         assert '[{"statement": "假设陈述(一句话)", "indicators": ' in prompt
 
@@ -133,7 +134,7 @@ class TestChapterPrompt:
 
 
 class TestImports:
-    """禁止 import harness/tools/storage/core (T05 禁止条款的静态检查)"""
+    """Static check that harness/tools/storage/core are never imported (T05 prohibition clause)"""
 
     @pytest.mark.parametrize("mod", ["prompts_chapters", "prompts_style"])
     def test_no_heavy_imports(self, mod):

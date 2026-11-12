@@ -1,13 +1,15 @@
 """
-产业链分析原子能力 (Beta Skill 的映射层+量化层)
+Industry-chain analysis atomic capability (mapping layer + quant layer of Beta Skill)
 
-职责 (纯 SQL + pandas, 无 LLM 依赖, LLM 综述在 skill 层):
-- 种子链模板加载与匹配 (beta_alpha/chains/*.yaml)
-- 环节->标的三源映射: 主营构成占比(硬) / 申万L2(兜底) / 研报tags(佐证)
-- 环节指数与超额收益: 成分股流通市值加权组合 vs 沪深300 (复权收益)
-- 环节景气度: 成分股营收同比中位数 / 研报热度
+Responsibilities (pure SQL + pandas, no LLM dependency; the LLM summary lives in the skill layer):
+- Seed-chain template loading and matching (beta_alpha/chains/*.yaml)
+- Segment -> constituent mapping via three sources: main-business composition
+  share (hard evidence) / Shenwan L2 (fallback) / report tags (corroboration)
+- Segment index and excess return: free-float-market-cap weighted portfolio of
+  constituents vs CSI 300 (adjusted returns)
+- Segment prosperity: median revenue YoY of constituents / report heat
 
-用法(命令行验证):
+CLI verification:
     python -m agent.beta_alpha.analysis.chain_analysis ai_compute
 """
 from __future__ import annotations
@@ -28,26 +30,29 @@ from storage.pg import PgClient
 logger = get_logger(__name__)
 
 CHAINS_DIR = Path(__file__).resolve().parents[1] / "chains"
-BENCHMARK = "000300.SH"          # 沪深300
+BENCHMARK = "000300.SH"          # CSI 300
 LOOKBACK_TRADE_DAYS = 120
 EXCESS_SHORT_DAYS = 20
-MIN_METRICS_MEMBERS = 2          # 成分股少于此数不算环节指数
-MAX_INDEX_MEMBERS = 20           # 环节指数成分上限 (按主营占比降序)
+MIN_METRICS_MEMBERS = 2          # a segment index needs at least this many constituents
+MAX_INDEX_MEMBERS = 20           # cap on segment index constituents (by main-business share, desc)
 
-# 分档阈值 (主营构成收入占比, %)
+# Tiering thresholds (main-business revenue share, %)
 STRONG_SHARE = 30
 MEDIUM_SHARE = 10
 
-# 关键词裸泛词黑名单 (曾致误报, tests 与 forge 校验共用一份定义)
+# Blacklist of bare generic keywords (once caused false positives); one shared
+# definition used by tests and forge validation
 GENERIC_KEYWORD_BLACKLIST = {"整机", "树脂", "电子", "电机设备", "零部件"}
 
 _chains_cache: Optional[List[Dict]] = None
 
-# 素材缓存 (进程级): 回填期 fina_mainbz 已至百万行级, 逐环节全表查询会拖垮接口
-# (曾致 Cloudflare 524); 改为一次索引扫描拉全量, 关键词匹配在内存完成
-_MAINBZ_CACHE_TTL = 600       # 最新报告期主营构成缓存 10 分钟
-_REPORTS_CACHE_TTL = 600      # 近一年研报标签索引缓存 10 分钟
-_RESULT_TTL = 300             # 链条分析结果缓存 5 分钟 (页面刷新防抖)
+# Material caches (process level): fina_mainbz has grown to millions of rows in
+# the backfill period; per-segment full-table queries would drag the API down
+# (once caused a Cloudflare 524). Instead: one indexed scan pulls everything,
+# keyword matching happens in memory.
+_MAINBZ_CACHE_TTL = 600       # latest-report-period main-business cache: 10 minutes
+_REPORTS_CACHE_TTL = 600      # last-year report tag index cache: 10 minutes
+_RESULT_TTL = 300             # chain analysis result cache: 5 minutes (page-refresh debounce)
 _mainbz_cache: Optional[Tuple[float, Dict[str, Dict]]] = None
 _reports_cache: Optional[Tuple[float, List[Dict]]] = None
 _result_cache: Dict[Tuple[str, Optional[str]], Tuple[float, Dict]] = {}
@@ -56,18 +61,18 @@ _PROD_SUFFIX = re.compile(r"[（(]产品[)）]$")
 
 
 # ============================================================
-# 模板加载与匹配
+# Template loading and matching
 # ============================================================
 
 def load_chains(refresh: bool = False) -> List[Dict]:
-    """加载全部种子链模板 (缓存)"""
+    """Load all seed-chain templates (cached)"""
     global _chains_cache
     if _chains_cache is not None and not refresh:
         return _chains_cache
     chains: List[Dict] = []
     for fp in sorted(CHAINS_DIR.glob("*.yaml")):
         if fp.stem.startswith("_"):
-            continue  # _template.yaml 等非链文件
+            continue  # non-chain files such as _template.yaml
         try:
             with open(fp, encoding="utf-8") as f:
                 data = yaml.safe_load(f)
@@ -87,7 +92,7 @@ def get_chain(chain_id: str) -> Optional[Dict]:
 
 
 def match_chain(text: str) -> Optional[Dict]:
-    """用户文本 -> 链模板 (name/desc/drivers/节点名/关键词 子串匹配)"""
+    """User text -> chain template (substring match on name/desc/drivers/node names/keywords)"""
     if not text:
         return None
     for c in load_chains():
@@ -101,7 +106,7 @@ def match_chain(text: str) -> Optional[Dict]:
 
 
 def find_node(chain: Dict, text: str) -> Optional[Dict]:
-    """用户文本 -> 链内节点 (节点名/id/关键词 子串匹配)"""
+    """User text -> node within a chain (substring match on node name/id/keywords)"""
     if not text:
         return None
     for node in chain.get("nodes", []):
@@ -114,15 +119,15 @@ def find_node(chain: Dict, text: str) -> Optional[Dict]:
 
 
 # ============================================================
-# 映射分档 (纯函数, 供 tests 验证)
+# Tier assignment (pure function, verified by tests)
 # ============================================================
 
 def assign_tier(share: Optional[float], sw_hit: bool, hits: int) -> str:
     """
-    环节成员分档:
-    - 强: 主营构成占比 >= 30%
-    - 中: 占比 10~30%; 或无主营证据但申万L2命中且研报提及 >=2
-    - 弱: 其余 (仅研报提及等弱证据)
+    Segment member tiering:
+    - strong: main-business composition share >= 30%
+    - medium: share 10~30%; or no main-business evidence but Shenwan L2 hit with >= 2 report mentions
+    - weak: everything else (only weak evidence such as report mentions)
     """
     if share is not None and share >= STRONG_SHARE:
         return "强"
@@ -132,17 +137,17 @@ def assign_tier(share: Optional[float], sw_hit: bool, hits: int) -> str:
 
 
 # ============================================================
-# SQL 片段
+# SQL fragments
 # ============================================================
 
 def _kw_any_clause(col: str, keywords: List[str]) -> Tuple[str, List[str]]:
-    """col ILIKE ANY 关键词 -> (clause, params)"""
+    """col ILIKE ANY over keywords -> (clause, params)"""
     likes = " OR ".join([f"{col} ILIKE %s" for _ in keywords])
     return f"({likes})", [f"%{k}%" for k in keywords]
 
 
 def _load_sw_members() -> Dict[str, str]:
-    """申万 L2 当前成分: ts_code -> industry_name"""
+    """Current Shenwan L2 constituents: ts_code -> industry_name"""
     with PgClient() as pg:
         rows = pg.fetch_all(
             "SELECT si.con_code AS ts_code, ic.industry_name "
@@ -160,10 +165,12 @@ def _load_stock_names() -> Dict[str, str]:
 
 
 def _load_latest_mainbz() -> Dict[str, Dict]:
-    """全市场最新报告期 P 维度构成 (一次索引扫描; 走原始表绕开全表物化视图)
+    """Whole-market latest-report-period P-dimension composition (one indexed scan;
+    hits the raw table to bypass the full-table materialized view)
 
-    返回 {ts_code: {end_date, items: [(bz_item, sales, is_sub)], total}}
-    total = 非子项正收入合计 (占比分母); is_sub = 其中*/冒号分层 (与 v_main_biz 口径一致)
+    Returns {ts_code: {end_date, items: [(bz_item, sales, is_sub)], total}}
+    total = sum of positive non-sub-item revenue (denominator for shares);
+    is_sub = the "其中*" / colon layering (same caliber as v_main_biz)
     """
     global _mainbz_cache
     if _mainbz_cache and time.time() - _mainbz_cache[0] < _MAINBZ_CACHE_TTL:
@@ -206,7 +213,8 @@ def _load_latest_mainbz() -> Dict[str, Dict]:
 
 
 def _map_mainbz(keywords: List[str]) -> Dict[str, Dict]:
-    """主营构成硬证据: 最新报告期 P 维度关键词命中 (内存匹配), ts_code -> {share, items}"""
+    """Hard evidence from main-business composition: keyword hits in the latest
+    report period, P dimension (in-memory matching); ts_code -> {share, items}"""
     data = _load_latest_mainbz()
     kws = [k.lower() for k in keywords]
     out: Dict[str, Dict] = {}
@@ -216,7 +224,7 @@ def _map_mainbz(keywords: List[str]) -> Dict[str, Dict]:
         matched = []
         for item, sales, _sub in d["items"]:
             share = sales / d["total"] * 100
-            if share < 5:      # 与原 SQL 口径一致: 单项占比 >=5 才参与
+            if share < 5:      # same caliber as the original SQL: only items with share >= 5 count
                 continue
             if any(k in item.lower() for k in kws):
                 matched.append((item, share))
@@ -231,7 +239,8 @@ def _map_mainbz(keywords: List[str]) -> Dict[str, Dict]:
 
 
 def _load_reports_index() -> List[Dict]:
-    """近一年研报标签索引 (tags/标题/代码), 供股票命中与环节热度内存计算"""
+    """Last-year report tag index (tags/title/code) for in-memory stock matching
+    and segment-heat computation"""
     global _reports_cache
     if _reports_cache and time.time() - _reports_cache[0] < _REPORTS_CACHE_TTL:
         return _reports_cache[1]
@@ -244,7 +253,7 @@ def _load_reports_index() -> List[Dict]:
         r["blob"] = " ".join(filter(None, [
             r.get("tags_industries"), r.get("tags_themes"),
             r.get("tags_targets"), r.get("title")]) or "").lower()
-        # 热度口径不含 tags_targets
+        # Heat caliber deliberately excludes tags_targets
         r["blob_heat"] = " ".join(filter(None, [
             r.get("tags_industries"), r.get("tags_themes"),
             r.get("title")]) or "").lower()
@@ -253,7 +262,8 @@ def _load_reports_index() -> List[Dict]:
 
 
 def _map_reports(keywords: List[str], days: int = 365) -> Dict[str, int]:
-    """研报佐证: 近 N 天 tags/标题命中关键词的研报数, ts_code -> hits (内存匹配)"""
+    """Report corroboration: count of reports in the last N days whose
+    tags/title hit the keywords; ts_code -> hits (in-memory matching)"""
     cutoff = date.today() - timedelta(days=days)
     kws = [k.lower() for k in keywords]
     hits: Dict[str, int] = {}
@@ -267,7 +277,8 @@ def _map_reports(keywords: List[str], days: int = 365) -> Dict[str, int]:
 
 
 def _node_report_heat(keywords: List[str], days: int = 180) -> int:
-    """环节研报热度: 近 N 天全库命中关键词(tags/标题)的研报数 (内存匹配)"""
+    """Segment report heat: count of reports in the last N days repo-wide whose
+    tags/title hit the keywords (in-memory matching)"""
     cutoff = date.today() - timedelta(days=days)
     kws = [k.lower() for k in keywords]
     n = 0
@@ -284,7 +295,8 @@ _chain_extract_exists: Optional[bool] = None
 
 
 def _node_chain_mentions(keywords: List[str]) -> int:
-    """研报链抽取提及数 (fin.chain_extract; 表缺失时静默返回0)"""
+    """Mention count from report chain extraction (fin.chain_extract; silently
+    returns 0 when the table is missing)"""
     global _chain_extract_exists
     if _chain_extract_exists is False:
         return 0
@@ -303,13 +315,15 @@ def _node_chain_mentions(keywords: List[str]) -> int:
 
 
 # ============================================================
-# 环节指数 (批量: daily/daily_basic 主键 trade_date 开头, 按股票过滤是全表扫描,
-# 逐环节查询在百万行级时曾致接口分钟级延迟 -> Cloudflare 524)
+# Segment index (batched: daily/daily_basic are keyed on trade_date first, so
+# filtering by stock is a full-table scan; per-segment queries once caused
+# minute-level API latency at millions of rows -> Cloudflare 524)
 # ============================================================
 
 def _batch_metrics(codes_by_node: Dict[str, List[str]]) -> Dict[str, Dict]:
-    """全链环节指标一次算: 行情/基准/估值/财务各一次合并查询, 内存切环节。
-    返回 {node_id: metrics}; 成分不足 2 只的环节不计。"""
+    """Compute metrics for all chain segments at once: one merged query each for
+    quotes/benchmark/valuation/financials, split per segment in memory.
+    Returns {node_id: metrics}; segments with fewer than 2 constituents are skipped."""
     if not codes_by_node:
         return {}
     all_codes = sorted({c for cs in codes_by_node.values() for c in cs})
@@ -348,7 +362,8 @@ def _batch_metrics(codes_by_node: Dict[str, List[str]]) -> Dict[str, Dict]:
     if not daily or not bench:
         return {}
 
-    # PG NUMERIC -> Decimal, 统一转 float; 复权因子取自 stock.adj_factor, 现算后复权价
+    # PG NUMERIC -> Decimal, uniformly cast to float; adjustment factor from
+    # stock.adj_factor, adjusted price computed on the fly
     df = pd.DataFrame(daily)
     df["price"] = (df["close"].astype(float) * df["adj_factor"].astype(float))
     wide_all = df.pivot(index="trade_date", columns="ts_code", values="price").sort_index()
@@ -377,7 +392,8 @@ def _batch_metrics(codes_by_node: Dict[str, List[str]]) -> Dict[str, Dict]:
         if len(wide) < EXCESS_SHORT_DAYS + 5:
             continue
         w = pd.Series({c: max(mv_map.get(c, 0.0), 1.0) for c in wide.columns})
-        # fill_method=None: 停牌缺口留 NaN, 由 notna 掩码重分配权重 (不前向填充)
+        # fill_method=None: suspension gaps stay NaN, and the notna mask
+        # redistributes weights (no forward filling)
         ret = wide.pct_change(fill_method=None)
         wr = (ret.mul(w, axis=1).sum(axis=1)
               / ret.notna().mul(w, axis=1).sum(axis=1)).dropna()
@@ -400,15 +416,17 @@ def _batch_metrics(codes_by_node: Dict[str, List[str]]) -> Dict[str, Dict]:
 
 
 # ============================================================
-# 主入口: 链条分析
+# Main entry: chain analysis
 # ============================================================
 
 def map_chain_members(chain: Dict, node_filter: Optional[Dict] = None,
                       top_members: int = 12, use_cache: bool = True) -> Dict:
     """
-    环节->标的映射 + 环节指标.
-    node_filter: 只算指定节点 (单环节下钻), None 算全链.
-    use_cache: 命中 5 分钟内的相同请求直接返回 (页面刷新防抖; 强制重算传 False)
+    Segment -> constituent mapping + segment metrics.
+    node_filter: compute only the given node (single-segment drill-down);
+    None computes the whole chain.
+    use_cache: identical requests within 5 minutes return the cached copy
+    (page-refresh debounce; pass False to force recomputation)
     """
     cache_key = (chain.get("chain_id", ""), node_filter["id"] if node_filter else None)
     if use_cache and cache_key in _result_cache:
@@ -437,7 +455,8 @@ def map_chain_members(chain: Dict, node_filter: Optional[Dict] = None,
             hits = reports.get(code, 0)
             sw_name = sw.get(code, "")
             sw_hit = any(s in sw_name for s in sw_list) if sw_name else False
-            # 仅行业归属不构成成员 (噪声大): 须有主营证据或研报提及
+            # Industry membership alone does not make a member (too noisy):
+            # main-business evidence or a report mention is required
             if not (mb or hits >= 1):
                 continue
             tier = assign_tier(share, sw_hit, hits)
@@ -478,7 +497,7 @@ def map_chain_members(chain: Dict, node_filter: Optional[Dict] = None,
             "chain_mentions": _node_chain_mentions(kws),
         })
 
-    # 环节指标批量一次算 (避免逐环节对 daily/daily_basic 的全表扫描)
+    # Segment metrics computed in one batch (avoids per-segment full-table scans on daily/daily_basic)
     metrics_map = _batch_metrics(index_members_map)
     for n in nodes_out:
         n["metrics"] = metrics_map.get(n["id"])
@@ -500,7 +519,7 @@ def map_chain_members(chain: Dict, node_filter: Optional[Dict] = None,
 
 
 def nodes_to_table(result: Dict) -> Tuple[List[str], List[Dict]]:
-    """链分析结果 -> 前端 data 事件平表 (环节x指标)"""
+    """Chain analysis result -> flat table for the frontend data event (segment x metric)"""
     cols = ["node", "node_name", "strong", "medium", "port_ret_120d",
             "excess_120d", "excess_20d", "or_yoy_median", "report_heat_6m"]
     rows = []

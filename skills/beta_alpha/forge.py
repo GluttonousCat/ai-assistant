@@ -1,14 +1,16 @@
 """
-种子链锻造 (forge) — 双通道建链:
+Seed-chain forging (forge) — building chains via two channels:
 
-1. LLM 生成: 主题 -> 草稿(喂真实披露语料样本) -> 结构校验 -> 关键词命中率校验
-   (vs 74.5万行主营构成) -> 命中不足自动修正一轮 -> 落盘
-2. 用户自建: 手写/编辑 YAML -> save_chain 结构校验后落盘; --check 出命中率报告
+1. LLM generation: theme -> draft (fed with real disclosure-corpus samples) ->
+   structural validation -> keyword hit-rate validation (vs 745k rows of
+   main-business composition) -> one auto-refinement round if hits are weak -> saved to disk
+2. User-built: hand-written/edited YAML -> save_chain validates the structure
+   then writes to disk; --check prints a hit-rate report
 
-用法(命令行):
-    python -m agent.beta_alpha.forge "苹果代工产业链"            # 生成并保存
-    python -m agent.beta_alpha.forge "磷化工" --no-save          # 只看草稿
-    python -m agent.beta_alpha.forge --check ai_compute          # 校验已有链
+CLI usage:
+    python -m agent.beta_alpha.forge "苹果代工产业链"            # generate and save
+    python -m agent.beta_alpha.forge "磷化工" --no-save          # draft only
+    python -m agent.beta_alpha.forge --check ai_compute          # validate an existing chain
 """
 from __future__ import annotations
 
@@ -26,7 +28,6 @@ from skills.beta_alpha.analysis.chain_analysis import (
     GENERIC_KEYWORD_BLACKLIST,
     _load_latest_mainbz,
     get_chain,
-    load_chains,
 )
 from skills.beta_alpha.prompts import CHAIN_FORGE_PROMPT, CHAIN_REFINE_PROMPT
 
@@ -38,11 +39,11 @@ _MAX_YAML_CHARS = 20000
 
 
 # ============================================================
-# 结构校验 (纯函数, tests 验证)
+# Structural validation (pure function, verified by tests)
 # ============================================================
 
 def validate_chain_dict(data) -> Tuple[bool, List[str]]:
-    """链模板结构校验: 字段/格式/引用完整性/泛词纪律"""
+    """Chain template structural validation: fields/formats/reference integrity/generic-word discipline"""
     errors: List[str] = []
     if not isinstance(data, dict):
         return False, ["顶层必须是 YAML mapping"]
@@ -94,7 +95,8 @@ def validate_chain_dict(data) -> Tuple[bool, List[str]]:
 
 
 # ============================================================
-# 关键词命中率 (vs 最新报告期主营构成, 内存匹配, 复用素材缓存)
+# Keyword hit rate (vs latest-report-period main-business composition,
+# in-memory matching, reuses the material cache)
 # ============================================================
 
 def _corpus_index() -> List[Tuple[str, str, List[Tuple[str, str, float]]]]:
@@ -114,7 +116,7 @@ def _corpus_index() -> List[Tuple[str, str, List[Tuple[str, str, float]]]]:
 
 
 def keyword_hit_report(chain: Dict) -> Dict:
-    """每环节每关键词的命中股票数与披露样例 (生成闭环与 --check 共用)"""
+    """Hit stock count and disclosure samples per keyword per segment (shared by the generation loop and --check)"""
     idx = _corpus_index()
     nodes_report = []
     for node in chain.get("nodes", []):
@@ -140,7 +142,7 @@ def keyword_hit_report(chain: Dict) -> Dict:
 
 
 def hit_report_text(report: Dict) -> str:
-    """命中率报告的纯文本形态 (喂给 LLM 修正 / CLI 打印)"""
+    """Plain-text form of the hit-rate report (fed to the LLM refinement / CLI printing)"""
     lines = []
     for n in report.get("nodes", []):
         parts = []
@@ -163,7 +165,7 @@ def _corpus_sample_text() -> str:
 
 
 # ============================================================
-# LLM 生成闭环
+# LLM generation loop
 # ============================================================
 
 def _parse_yaml_llm(text: str) -> Optional[Dict]:
@@ -185,8 +187,9 @@ def _parse_yaml_llm(text: str) -> Optional[Dict]:
 def forge_chain(theme: str, llm=None,
                 on_stage: Optional[Callable[[str], None]] = None) -> Dict:
     """
-    主题 -> 种子链 (草稿 -> 结构校验 -> 命中率 -> 弱则修正一轮)。
-    返回 {chain, report, rounds, errors}; chain 可能为 None (生成失败)。
+    Theme -> seed chain (draft -> structural validation -> hit rate -> one
+    refinement round if weak).
+    Returns {chain, report, rounds, errors}; chain may be None (generation failed).
     """
     from harness.llm import get_agent_llm
     llm = llm or get_agent_llm()
@@ -200,7 +203,7 @@ def forge_chain(theme: str, llm=None,
         corpus_sample=_corpus_sample_text(), theme=theme)
     chain = None
     errors: List[str] = []
-    for attempt in (1, 2):   # 结构不合法带错误重试一次
+    for attempt in (1, 2):   # one retry with errors attached if the structure is invalid
         raw = llm.invoke(prompt)
         chain = _parse_yaml_llm(raw)
         ok, errors = validate_chain_dict(chain)
@@ -224,7 +227,7 @@ def forge_chain(theme: str, llm=None,
     if weak_kws > 0 or weak_nodes > 0:
         _stage(f"命中不足 (零命中关键词 {weak_kws} 个/零命中环节 {weak_nodes} 个), LLM 修正一轮…")
         refined = None
-        for attempt in (1, 2):   # 修正轮重试一次 (长 prompt 偶发超时)
+        for attempt in (1, 2):   # one retry of the refinement round (long prompts occasionally time out)
             try:
                 refined = _parse_yaml_llm(llm.invoke(CHAIN_REFINE_PROMPT.format(
                     hit_report=hit_report_text(report),
@@ -246,7 +249,7 @@ def forge_chain(theme: str, llm=None,
 
 
 # ============================================================
-# 落盘 (LLM 生成 / 用户自建共用)
+# Persisting to disk (shared by LLM generation / user-built chains)
 # ============================================================
 
 def chain_to_yaml(chain: Dict) -> str:
@@ -257,7 +260,7 @@ def chain_to_yaml(chain: Dict) -> str:
 
 
 def save_chain_yaml(yaml_text: str, source: str = "manual") -> Tuple[bool, List[str], Optional[str]]:
-    """校验 + 落盘 beta_alpha/chains/<chain_id>.yaml; 成功返回 (True, [], path)"""
+    """Validate + write beta_alpha/chains/<chain_id>.yaml; returns (True, [], path) on success"""
     if not yaml_text or len(yaml_text) > _MAX_YAML_CHARS:
         return False, ["YAML 内容为空或超过 20KB 上限"], None
     try:
@@ -274,8 +277,8 @@ def save_chain_yaml(yaml_text: str, source: str = "manual") -> Tuple[bool, List[
         data["source"] = source
     path = CHAINS_DIR / f"{cid}.yaml"
     path.write_text(chain_to_yaml(data), encoding="utf-8")
-    ca._chains_cache = None   # 清链模板缓存, 新链即刻可被 match/get 发现
-    ca._result_cache.clear()  # 同 id 重存(编辑)时避免读到旧分析结果
+    ca._chains_cache = None   # clear the chain template cache so the new chain is immediately visible to match/get
+    ca._result_cache.clear()  # re-saving the same id (edit) must not serve stale analysis results
     logger.info(f"种子链已保存: {path.name} (source={source})")
     return True, [], str(path)
 

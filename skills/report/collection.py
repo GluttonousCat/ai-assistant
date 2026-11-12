@@ -1,15 +1,16 @@
 # -*- encoding: utf-8 -*-
-"""report_chunks collection — 研报分块语义检索的业务定义 (字段/生命周期)
+"""report_chunks collection — business definitions for report-chunk semantic retrieval (fields / lifecycle)
 
-契约:
-- PG 为主 Milvus 为从: report_id 连 fin.report_meta.report_id,
-  删研报须连带 delete_report_chunks(report_id) (尽力而为, 不阻断主流程);
-- 维度 = milvus_config()["embed_dim"], 与 embedding 模型强耦合,
-  换模型须 rebuild_report_chunks() 重建并重灌;
-- 标量无 NULL: 未知 ts_code 用 '', 未知 publish_year 用 0;
-- 切分契约 (入库须遵守): 清洗剥页眉页脚/免责声明尾部; 表格线性化文本
-  不入 embedding (数字断行是毒药, 占位"[表格: …]"代替); 重切算法变更后
-  重灌须先 delete_report_chunks 清孤儿 (chunk_idx 会整体位移)。
+Contracts:
+- PG is the master, Milvus the replica: report_id references fin.report_meta.report_id;
+  deleting a report must also call delete_report_chunks(report_id) (best effort, must not block the main flow);
+- dimension = milvus_config()["embed_dim"], strongly coupled with the embedding model;
+  switching models requires rebuild_report_chunks() to recreate and re-ingest;
+- scalars have no NULL: unknown ts_code uses '', unknown publish_year uses 0;
+- chunking contract (ingestion must obey): cleaning strips headers/footers and the disclaimer tail;
+  linearized table text never goes into embedding (numbers broken across lines are poison — the
+  "[表格: …]" placeholder is used instead); after a re-chunking algorithm change, re-ingestion must
+  first call delete_report_chunks to clear orphans (chunk_idx shifts as a whole).
 """
 from __future__ import annotations
 
@@ -35,16 +36,16 @@ CHUNK_TEXT_MAX = 16384
 
 
 def _schema(dim: int):
-    """字段定义 (确定性主键 "{report_id}:{chunk_idx}", upsert 幂等)"""
+    """Field definitions (deterministic primary key "{report_id}:{chunk_idx}", upsert is idempotent)"""
     schema = new_schema()
     schema.add_field("chunk_id", DataType.VARCHAR, is_primary=True, max_length=128)
     schema.add_field("report_id", DataType.INT64)                 # -> fin.report_meta.report_id
-    schema.add_field("chunk_idx", DataType.INT64)                 # 分块序号 (0 起)
-    schema.add_field("ts_code", DataType.VARCHAR, max_length=16)  # '' = 非A股/未知
-    schema.add_field("market", DataType.VARCHAR, max_length=8)    # 词表同 fin.report_meta.market
-    schema.add_field("org_name", DataType.VARCHAR, max_length=64)  # 券商 (检索回显)
-    schema.add_field("publish_year", DataType.INT32)              # 0 = 未知 (无 DATE 类型)
-    schema.add_field("section", DataType.VARCHAR, max_length=256)  # 标题路径 (回显+过滤)
+    schema.add_field("chunk_idx", DataType.INT64)                 # chunk ordinal (0-based)
+    schema.add_field("ts_code", DataType.VARCHAR, max_length=16)  # '' = non-A-share / unknown
+    schema.add_field("market", DataType.VARCHAR, max_length=8)    # vocabulary same as fin.report_meta.market
+    schema.add_field("org_name", DataType.VARCHAR, max_length=64)  # broker (echoed in retrieval)
+    schema.add_field("publish_year", DataType.INT32)              # 0 = unknown (no DATE type)
+    schema.add_field("section", DataType.VARCHAR, max_length=256)  # title path (echo + filter)
     schema.add_field("chunk_type", DataType.VARCHAR, max_length=16)  # text/table/chart
     schema.add_field("chunk_text", DataType.VARCHAR, max_length=CHUNK_TEXT_MAX)
     schema.add_field("embedding", DataType.FLOAT_VECTOR, dim=dim)
@@ -65,12 +66,12 @@ def _ensure_created() -> bool:
 
 
 def ensure_report_chunks() -> bool:
-    """幂等建 collection (进程内一次); 返回是否本次新建"""
+    """Idempotently create the collection (once per process); returns whether it was newly created this time"""
     return _ensure_created()
 
 
 def rebuild_report_chunks() -> None:
-    """drop + 重建 (换 embedding 模型/维度后; 原向量作废须重灌)"""
+    """Drop + recreate (after switching embedding model/dimension; old vectors are void and must be re-ingested)"""
     client = get_milvus()
     dim = milvus_config()["embed_dim"]
     rebuild_collection(client, COLLECTION_REPORT_CHUNKS,
@@ -79,10 +80,11 @@ def rebuild_report_chunks() -> None:
 
 
 def delete_report_chunks(report_id: int) -> int:
-    """删单篇研报的全部向量 (PG 侧删除时联动)。
+    """Delete all vectors of a single report (chained from the PG-side delete).
 
-    尽力而为: Milvus 不可达时告警不阻断 (merge 主流程不因向量层故障中断;
-    孤儿向量无害 — 检索回显 report_id 查不到 PG 时上层丢弃)。
+    Best effort: if Milvus is unreachable, warn without blocking (the merge main
+    flow must not break on vector-layer failure; orphan vectors are harmless —
+    when retrieval echoes a report_id that PG no longer has, the upper layer discards it).
     """
     try:
         return delete_by_expr(COLLECTION_REPORT_CHUNKS,

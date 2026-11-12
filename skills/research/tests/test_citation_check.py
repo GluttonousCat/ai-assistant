@@ -1,13 +1,15 @@
 # -*- encoding: utf-8 -*-
-"""T06 引用校验器测试 — 纯离线 (不连 LLM/DB), 构造样例覆盖四类检查。
+"""T06 citation-checker tests — fully offline (no LLM/DB), built samples cover all four
+check kinds.
 
-分组:
-  test_extract / test_iter       引用提取与句子切分基础行为
-  test_unverified_*              数字句启发 (有引用/无引用/年份豁免/待验证豁免/标题表格跳过)
-  test_ghost_*                   幽灵引用 (正文/used_eids/假设 related_eids)
-  test_used_eids_*               used_eids 与正文一致性
-  test_view_style_*              观点句宽松提示
-  test_check_draft               全稿入口: 去重保序、聚合上限
+Groups:
+  test_extract / test_iter       basic behavior of citation extraction and sentence splitting
+  test_unverified_*              numeric-sentence heuristic (cited/uncited/year exemption/
+                                 to-verify exemption/heading-table skipping)
+  test_ghost_*                   ghost citations (body/used_eids/hypothesis related_eids)
+  test_used_eids_*               used_eids consistency with the body
+  test_view_style_*              loose hints on view sentences
+  test_check_draft               whole-draft entry: dedup order preservation, aggregation cap
 """
 from skills.research.compose.citation_check import (
     check_draft,
@@ -39,7 +41,7 @@ VID_SET = {v.vid for v in VIEWS}
 
 
 def _draft(**kw) -> Draft:
-    """默认合法草稿: 第1章正文引用齐全, used_eids 与正文一致。"""
+    """A valid draft by default: chapter 1's body fully cited, used_eids consistent with the body."""
     body = kw.pop("body", "2025年营业收入1741亿元[E:T:tushare.revenue.2025A]。"
                           "中金(2026-03-01)认为需求稳健[V:R:101.1]。")
     used = kw.pop("used_eids", ["T:tushare.revenue.2025A", "R:101.1"])
@@ -48,7 +50,7 @@ def _draft(**kw) -> Draft:
                  **kw)
 
 
-# ---------- 基础行为 ----------
+# ---------- basic behavior ----------
 
 def test_extract_citations_ordered_with_dup():
     text = "甲[E:A:2025.mdna.1]乙[V:R:101.1]丙[E:A:2025.mdna.1]"
@@ -61,7 +63,7 @@ def test_iter_sentences_skips_heading_and_table():
     assert list(iter_sentences(md)) == ["正文一句", "第二句"]
 
 
-# ---------- 数字句启发 ----------
+# ---------- numeric-sentence heuristic ----------
 
 def test_unverified_number_flagged():
     flags = check_unverified_numbers(1, "净利润达862亿元。")
@@ -86,17 +88,18 @@ def test_pending_verification_exemption():
 
 
 def test_cited_by_view_not_flagged_by_number_heuristic():
-    """句内已有 [V:] 标注 → 数字句启发不再重复告警 (归观点规范检查负责)。"""
+    """Sentence already carries [V:] -> the numeric-sentence heuristic stays silent (the
+    view-style check owns it)."""
     assert check_unverified_numbers(1, "2025年净利润862亿元[V:R:101.1]。") == []
 
 
 def test_unverified_flags_aggregate_over_cap():
     body = "。".join(f"第{i}项指标为{i}亿元" for i in range(1, 13)) + "。"
     flags = check_unverified_numbers(2, body)
-    assert len(flags) == 9      # 8 条样例 + 1 条聚合 (12 - 8 = 4 句省略)
+    assert len(flags) == 9      # 8 sample entries + 1 aggregate (12 - 8 = 4 sentences elided)
 
 
-# ---------- 幽灵引用 ----------
+# ---------- ghost citations ----------
 
 def test_ghost_body_citation():
     flags = check_ghost_citations(_draft(body="销量大增[E:T:ghost.1]。"), EID_SET, VID_SET)
@@ -119,17 +122,17 @@ def test_no_ghost_on_valid_draft():
     assert check_ghost_citations(_draft(), EID_SET, VID_SET) == []
 
 
-# ---------- used_eids 一致性 ----------
+# ---------- used_eids consistency ----------
 
 def test_used_eids_extra_and_missing():
-    d = _draft(used_eids=["T:tushare.revenue.2025A"])     # 漏记 R:101.1
-    d.chapters[0].used_eids.append("A:2025.mdna.1")       # 多记正文未引用
+    d = _draft(used_eids=["T:tushare.revenue.2025A"])     # R:101.1 under-registered
+    d.chapters[0].used_eids.append("A:2025.mdna.1")       # over-registered, not cited in body
     flags = check_used_eids_consistency(d)
     assert any("正文引用有 1 项未记入" in f for f in flags)
     assert any("used_eids 有 1 项正文未引用" in f for f in flags)
 
 
-# ---------- 观点句宽松提示 ----------
+# ---------- loose hints on view sentences ----------
 
 def test_view_style_with_org_passes():
     assert check_view_style(1, "中金(2026-03-01)认为需求稳健[V:R:101.1]。", VIEWS) == []
@@ -144,7 +147,7 @@ def test_view_style_without_org_hinted():
     assert len(flags) == 1 and flags[0].startswith("view-style-hint: 第1章")
 
 
-# ---------- 全稿入口 ----------
+# ---------- whole-draft entry ----------
 
 def test_check_draft_combines_and_dedups():
     d = _draft(body="净利润862亿元。净利润862亿元。渠道无引用[V:R:404.9]。")
@@ -153,4 +156,4 @@ def test_check_draft_combines_and_dedups():
     assert any(f.startswith("unverified-number") for f in flags)
     assert any(f.startswith("ghost-citation") and "R:404.9" in f for f in flags)
     assert any(f.startswith("used-eids-mismatch") for f in flags)
-    assert len(flags) == len(set(flags))       # 去重: 两个相同数字句只留一条
+    assert len(flags) == len(set(flags))       # dedup: two identical numeric sentences leave one flag

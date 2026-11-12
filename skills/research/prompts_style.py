@@ -1,13 +1,15 @@
 # -*- encoding: utf-8 -*-
 """
-研究生产线 Stage 2 · 全局文风与纪律 prompt (T05)
+Research production line Stage 2 · global style and discipline prompt (T05)
 
-所有章节 prompt 的共用前缀 (prompts_chapters.chapter_prompt 会自动前置本段),
-T06 (compose/generator.py) 无需重复拼接; 单独调用时直接 import STYLE_PROMPT。
+Common prefix of every chapter prompt (prompts_chapters.chapter_prompt prepends this
+automatically), so T06 (compose/generator.py) must not concatenate it again; import
+STYLE_PROMPT directly when used standalone.
 
-依据: docs/research/company_industry_guide.md 原则1 (三层分离) 与原则2 (机制解释)
-+ docs/research/tasks/T00 铁律。本文件是纯数据 (字符串常量), 不 import 任何模块,
-与具体公司无关 (禁止写死公司数据)。
+Basis: docs/research/company_industry_guide.md principle 1 (three-layer separation) and
+principle 2 (mechanism explanation) + docs/research/tasks/T00 iron rules. This file is
+pure data (a string constant): imports no modules, company-agnostic (hardcoding company
+data is forbidden).
 """
 
 STYLE_PROMPT = """【研究纪律与文风 · 全章适用, 优先级高于一切行文考虑】

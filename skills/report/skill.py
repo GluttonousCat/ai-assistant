@@ -1,15 +1,19 @@
 # -*- encoding: utf-8 -*-
 """
-Report Skill - 研报分析 (M4: 知识星球研报解读, 多市场)
+Report Skill - report analysis (M4: zsxq report interpretation, multi-market)
 
-三种工作模式 (由 user_input / params 决定):
-1. extract  给定 report_id (或自动挑未分析的研报), LLM 结构化提取:
-            回填 report_meta.ts_code / market / report_type, 预测写入 fin.report_forecast
-            (A股用 ts_code 关联 Tushare; 美股/港股/商品等非 A 股标的同样入库保留)
-2. analyze  给定标的 (A股名/代码/美股代码/商品名), 汇总其全部已提取研报, 生成综合解读报告
-3. qa       给定 report_id + question, 基于单篇研报内容问答
+Three working modes (decided by user_input / params):
+1. extract  Given a report_id (or auto-pick unanalyzed reports), LLM structured
+            extraction: backfills report_meta.ts_code / market / report_type,
+            forecasts go into fin.report_forecast
+            (A-shares link to Tushare via ts_code; non-A-share targets such as
+            US/HK stocks and commodities are also stored and kept)
+2. analyze  Given a target (A-share name/code/US ticker/commodity name), aggregate
+            all its extracted reports and generate a synthesized interpretation
+3. qa       Given report_id + question, answer based on a single report's content
 
-无 OPENAI_API_KEY 时返回明确错误 (本 Skill 依赖 LLM, 不做规则降级)。
+Returns an explicit error when OPENAI_API_KEY is missing (this skill depends on
+the LLM, no rule-based degradation).
 """
 from __future__ import annotations
 
@@ -30,20 +34,23 @@ from skills.report.prompts import (
 
 logger = get_logger(__name__)
 
-# 单篇研报送 LLM 的最大字符数 (控制 token 成本)
+# Max characters of a single report sent to the LLM (controls token cost)
 _MAX_TEXT_CHARS = 12000
 
-# market 白名单
+# market whitelist
 MARKETS = {"A股", "H股", "台股", "日股", "韩股", "美股", "欧洲股", "东南亚股", "宏观", "商品", "行业", "其他"}
 
 
-# 研报表增量列 DDL (analysis_json/market/tags_*/forecast.symbol 等) 的
-# 单一事实源在 storage.pg_schema.DDL_REPORT_ANALYSIS_STATEMENTS,
-# 由 ensure_report_analysis_columns() 统一补列 (analysis_status: none/done/failed/no_llm)。
+# The single source of truth for the report-table incremental column DDL
+# (analysis_json/market/tags_*/forecast.symbol etc.) lives in
+# storage.pg_schema.DDL_REPORT_ANALYSIS_STATEMENTS; columns are added uniformly
+# by ensure_report_analysis_columns() (analysis_status: none/done/failed/no_llm).
 
-# 视觉 OCR 并发上限: 本地已有的积压文件会在下载循环里秒过 (无网络请求无睡眠),
-# 瞬间起十几个 OCR 线程有打爆 qwen 网关的风险 — 信号量限流, 超出的排队等待
-# (排队期间状态已是 pending_ocr, 幂等守卫保证不会被重复提交)
+# Vision OCR concurrency cap: backlog files already on disk breeze through the
+# download loop (no network request, no sleep), so instantly spawning a dozen
+# OCR threads risks overwhelming the qwen gateway — a semaphore throttles them,
+# the excess queue up (while queued the status is already pending_ocr, and the
+# idempotent guard prevents duplicate submission)
 _OCR_SEMAPHORE = threading.BoundedSemaphore(4)
 
 _METRIC_WHITELIST = {"revenue", "net_profit", "eps", "roe", "target_price", "gross_margin"}
@@ -58,7 +65,7 @@ class ReportSkill(BaseSkill):
     intent_keywords = ["研报", "报告", "解读", "观点", "评级", "目标价", "盈利预测",
                        "商品", "原油", "黄金", "铜", "宏观"]
 
-    # ---------- 入口 ----------
+    # ---------- Entry ----------
     def run(self, context: SkillContext) -> SkillContext:
         params = context.params or {}
         mode = params.get("mode") or self._guess_mode(context.user_input)
@@ -89,7 +96,7 @@ class ReportSkill(BaseSkill):
 
     @staticmethod
     def _extract_llm():
-        """结构化提取用 extract 模型"""
+        """Use the extract-purpose model for structured extraction"""
         if not get_config().openai_api_key:
             return None
         from harness.llm import get_extract_llm
@@ -98,18 +105,20 @@ class ReportSkill(BaseSkill):
     @staticmethod
     def _vision_backfill(row: Dict[str, Any]) -> bool:
         """
-        图片型 PDF 视觉 OCR 回填: 有本地文件但 content_chars=0 时,
-        渲染页面 -> 视觉模型识别 -> 回写 content_text.
-        返回是否成功取得文本。
+        Vision OCR backfill for image-type PDFs: when a local file exists but
+        content_chars=0, render pages -> recognize via the vision model ->
+        write content_text back.
+        Returns whether text was successfully obtained.
         """
         path = row.get("file_path")
         if not path or row.get("content_chars"):
             return bool(row.get("content_chars"))
         if row.get("extraction_status") == "pending_ocr":
-            # 已有 OCR 任务在跑/排队: 不重复起线程 (幂等)
+            # an OCR task is already running/queued: do not spawn a duplicate thread (idempotent)
             return False
-        # 视觉 OCR 耗时 (每册 2-5 分钟): 放后台线程执行, 不阻塞当前提取批次.
-        # 状态置 pending_ocr; 完成后由下轮提取/分析自然接上.
+        # Vision OCR is slow (2-5 minutes per report): run in a background thread,
+        # do not block the current extraction batch.
+        # Status becomes pending_ocr; the next extraction/analysis round picks it up naturally.
         import threading
         rid, fname = row["report_id"], row.get("file_name") or path
         from storage.pg import PgClient as _Pg
@@ -123,7 +132,7 @@ class ReportSkill(BaseSkill):
             from harness.llm import get_vision_llm
             from skills.report.prompts import VISION_OCR_PROMPT
             try:
-                with _OCR_SEMAPHORE:  # 并发限流: 同时最多 4 册 OCR
+                with _OCR_SEMAPHORE:  # concurrency throttle: at most 4 reports OCR'd at once
                     text = ocr_pdf(path, prompt=VISION_OCR_PROMPT, max_pages=10,
                                    vision_llm=get_vision_llm())
                 from storage.pg import PgClient as _Pg
@@ -135,7 +144,7 @@ class ReportSkill(BaseSkill):
                             "extraction_status='extracted' WHERE report_id=%s",
                             (text, len(text), rid))
                         if n == 0:
-                            # OCR 期间记录被 merge 判重删除 —— 丢弃, 不接续提取
+                            # record was deleted by merge dedup during OCR — discard, do not continue extraction
                             logger.info(f"#{rid} OCR 完成但记录已被去重删除, 结果丢弃")
                         else:
                             logger.info(f"图片型 PDF 视觉识别完成 #{rid}: {len(text)} 字")
@@ -146,8 +155,9 @@ class ReportSkill(BaseSkill):
                             "analysis_status='failed' WHERE report_id=%s", (rid,))
                 if not ok:
                     return
-                # OCR 完成 -> 立即接续单篇深度提取 (此前要等下一轮调度, 最长 12h;
-                # 此刻 content_chars>0, 不会再进视觉分支, 无递归风险)
+                # OCR done -> immediately continue with single-report deep extraction
+                # (previously it waited for the next scheduler round, up to 12h;
+                # at this point content_chars>0 so the vision branch cannot re-enter, no recursion risk)
                 from skills.base import SkillContext
                 from skills.report.skill import ReportSkill
                 ctx = ReportSkill()(SkillContext(user_input="", params={
@@ -169,7 +179,7 @@ class ReportSkill(BaseSkill):
         return False
 
     def _guess_mode(self, text: str) -> str:
-        """没有显式 mode 时按输入猜: 带疑问 -> qa, 其余 -> analyze"""
+        """When no explicit mode, guess from the input: question-like -> qa, else analyze"""
         t = (text or "").strip()
         if not t:
             return "analyze"
@@ -179,7 +189,7 @@ class ReportSkill(BaseSkill):
             return "qa"
         return "analyze"
 
-    # ---------- 模式 1: 结构化提取 ----------
+    # ---------- Mode 1: structured extraction ----------
     def _run_extract(self, context: SkillContext, params: Dict[str, Any]) -> None:
         report_id = params.get("report_id")
         limit = int(params.get("limit", 1))
@@ -192,8 +202,9 @@ class ReportSkill(BaseSkill):
                     "report_type, author, org_name, publish_date, market, symbols, file_path, "
                     "extraction_status FROM fin.report_meta WHERE report_id=%s", (int(report_id),))
             else:
-                # 自动取未分析的研报 (以正文文本为准, extraction_status 可能未回填);
-                # 有文件但无文本的图片型 PDF 也纳入 (提取前会做视觉 OCR 回填)
+                # auto-pick unanalyzed reports (judged by body text; extraction_status
+                # may not be backfilled); image-type PDFs with a file but no text are
+                # included too (vision OCR backfill happens before extraction)
                 rows = pg.fetch_all(
                     "SELECT report_id, title, content_text, content_chars, ts_code, "
                     "report_type, author, org_name, publish_date, market, symbols, file_path, "
@@ -207,8 +218,10 @@ class ReportSkill(BaseSkill):
 
             for row in rows:
                 if not row.get("content_chars"):
-                    # 图片型 PDF: 视觉模型 OCR 转后台线程 (2-5 分钟), 完成后由下轮自动接上.
-                    # 只有"无文件可 OCR"才标 failed; 排队 OCR 的保持 none, 否则永远不再被提取.
+                    # Image-type PDF: vision-model OCR goes to a background thread
+                    # (2-5 minutes), the next round picks it up automatically.
+                    # Only "no file to OCR" is marked failed; queued OCR keeps status
+                    # none, otherwise it would never be extracted again.
                     if not self._vision_backfill(row):
                         if row.get("file_path"):
                             context.log(f"研报 #{row['report_id']} 为图片型 PDF, 已转后台视觉 OCR")
@@ -226,16 +239,18 @@ class ReportSkill(BaseSkill):
             "processed": [r["report_id"] for r in rows],
         }
 
-    # ---------- 模式 1b: 单篇 AI 分析 (流式, 供 SSE 端点) ----------
+    # ---------- Mode 1b: single-report AI analysis (streaming, for the SSE endpoint) ----------
     def extract_stream(self, report_id: int) -> Iterator[Dict[str, Any]]:
         """
-        单篇研报 AI 分析, 按 Agent 流程逐阶段产出事件 (供 /api/reports/{id}/analyze/stream):
-          {type: stage, stage, message}   流程阶段 (读取正文 / LLM 提取 / 解析规范化 / 入库)
-          {type: delta, text}             LLM 原始输出逐块 (多次, 弹窗内流式展示)
-          {type: data,  data}             结构化结果摘要 (与入库内容一致)
-          {type: error, message}          失败终止 (之后不再产出; API 层会补发 done)
-          {type: done}                    正常结束
-        同步生成器: 由 API 层放 worker 线程执行, 事件经队列转 SSE。
+        Single-report AI analysis, yielding one event per Agent-flow stage
+        (for /api/reports/{id}/analyze/stream):
+          {type: stage, stage, message}   pipeline stage (load body / LLM extract / parse & normalize / persist)
+          {type: delta, text}             raw LLM output chunk by chunk (multiple, streamed into the dialog)
+          {type: data,  data}             structured result summary (same as what is persisted)
+          {type: error, message}          fatal stop (nothing yielded afterwards; the API layer sends done)
+          {type: done}                    normal end
+        Synchronous generator: the API layer runs it in a worker thread, events go
+        to SSE through a queue.
         """
         def _ev(t: str, **kw: Any) -> Dict[str, Any]:
             return {"type": t, **kw}
@@ -254,7 +269,8 @@ class ReportSkill(BaseSkill):
             title = (row.get("title") or row.get("file_name") or f"#{report_id}").strip()
 
             if not row.get("content_chars"):
-                # 图片型 PDF: 与批量链路一致转后台 OCR, 不长时间占住 SSE 连接
+                # Image-type PDF: same as the batch pipeline, hand off to background OCR
+                # instead of holding the SSE connection for long
                 if row.get("file_path"):
                     self._vision_backfill(row)
                     yield _ev("stage", stage="ocr",
@@ -275,7 +291,8 @@ class ReportSkill(BaseSkill):
                       message="LLM 结构化提取中 (评级 / 标的 / 盈利预测 / tags)…")
             chunks: List[str] = []
             try:
-                # 思考开关由 LLMClient 按 config 统一注入 (reasoning 块自动跳过, 只流出正文)
+                # The thinking switch is injected uniformly by LLMClient per config
+                # (reasoning blocks are skipped automatically, only body text streams out)
                 for chunk in self._extract_llm().stream(
                         REPORT_EXTRACT_PROMPT.format(report_text=text)):
                     chunks.append(chunk)
@@ -296,7 +313,7 @@ class ReportSkill(BaseSkill):
 
             summary = self._apply_extract_result(pg, row, data)
             if summary is None:
-                # 提取期间记录被去重合并删除
+                # the record was dedup-merged away during extraction
                 yield _ev("error", message="提取完成, 但该研报在处理期间被去重合并移除 "
                                            "(同话题保留了另一条记录), 本次结果已丢弃")
                 return
@@ -318,7 +335,8 @@ class ReportSkill(BaseSkill):
                 (row["report_id"],))
             return
 
-        # 思考开关与 max_tokens 由 LLMClient 按 config 统一注入 (当前全局开启最强思考)
+        # The thinking switch and max_tokens are injected uniformly by LLMClient
+        # per config (currently the strongest thinking mode is globally on)
         raw = self._extract_llm().invoke(
             REPORT_EXTRACT_PROMPT.format(report_text=text))
         data = self._parse_json(raw)
@@ -330,13 +348,15 @@ class ReportSkill(BaseSkill):
 
         self._apply_extract_result(pg, row, data)
         self._spawn_chain_extract(row["report_id"])
-        # 英文原版正文后台翻译 → content_text_cn (中文正文幂等跳过, 失败不影响主链路)
+        # background translation of the English-original body -> content_text_cn
+        # (Chinese bodies are skipped idempotently; failure does not affect the main flow)
         from skills.report.translate import spawn_translate
         spawn_translate(row["report_id"])
 
     @staticmethod
     def _spawn_chain_extract(report_id: int) -> None:
-        """深度提取完成后, 后台线程抽取产业链环节 (beta_alpha 模块; 失败不影响主链路)"""
+        """After deep extraction completes, extract industry-chain links in a
+        background thread (beta_alpha module; failure does not affect the main flow)"""
         try:
             from skills.beta_alpha.analysis.chain_extract import spawn_chain_extract
             spawn_chain_extract(report_id)
@@ -346,18 +366,20 @@ class ReportSkill(BaseSkill):
     def _apply_extract_result(self, pg: PgClient, row: Dict[str, Any],
                               data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        LLM 提取 JSON -> 规范化 -> 回写 report_meta + report_forecast.
-        (extract / extract_stream 两条链路共用; 返回给前端的结构化摘要)
+        LLM-extracted JSON -> normalize -> write back to report_meta + report_forecast.
+        (shared by both the extract / extract_stream paths; returns the structured
+        summary for the frontend)
         """
 
-        # 规范化
+        # normalize
         market = str(data.get("market") or "其他").strip()
         if market not in MARKETS:
             market = "其他"
         ts_codes = self._normalize_codes(data.get("ts_codes") or [])
         symbols = self._normalize_symbols(data.get("symbols") or [])
         commodities = [str(c)[:32] for c in (data.get("commodities") or [])][:10]
-        # 多维度分类标签 (逗号分隔存列; analysis_json 里保留完整结构)
+        # multi-dimensional classification tags (stored comma-separated in columns;
+        # the full structure is kept in analysis_json)
         tags = data.get("tags") or {}
         tag_industries = self._join_tags(tags.get("industries"))
         tag_regions = self._join_tags(tags.get("regions"))
@@ -372,7 +394,7 @@ class ReportSkill(BaseSkill):
         forecasts = self._normalize_forecasts(
             data.get("forecasts") or [], ts_codes, market)
 
-        # 回填元数据 (原值为空才写)
+        # backfill metadata (write only when the existing value is empty)
         primary_symbol = (ts_codes[0] if ts_codes else (symbols[0] if symbols else None))
         sets = ["analysis_json=%s", "analysis_status='done'", "market=%s",
                 "tags_industries=%s", "tags_regions=%s", "tags_commodities=%s",
@@ -390,8 +412,9 @@ class ReportSkill(BaseSkill):
         if data.get("report_type") and not row.get("report_type"):
             sets.append("report_type=%s")
             args.append(str(data["report_type"])[:16])
-        # 发布日期兜底: publish_date 优先用知识星球公布时间 (sync 已写入);
-        # 缺失时才回写 LLM 从研报正文提取的日期 —— 绝不用爬取/入库时间
+        # publish_date fallback: prefer the zsxq announce time (written by sync);
+        # only when missing, backfill the date the LLM extracted from the report body
+        # — never use the crawl/ingest time
         pd_raw = str(data.get("publish_date") or "").strip()[:10]
         if pd_raw and not row.get("publish_date") and re.match(r"^\d{4}-\d{2}-\d{2}$", pd_raw):
             sets.append("publish_date=%s")
@@ -402,9 +425,11 @@ class ReportSkill(BaseSkill):
         if data.get("org_name") and not row.get("org_name"):
             sets.append("org_name=%s")
             args.append(normalize_org_name(str(data["org_name"]))[:64])
-        # 展示标题: 机构 + 原文件名 (保留原名, 不拆切)
-        # 机构优先用库里已归一的中文 org_name (LLM Analysis 词表), 其次归一化 LLM 提取值
-        # —— 否则英文原版会提取出 "J.P. Morgan" 等英文名拼进标题 (曾致 title 英文污染)
+        # display title: broker + original file name (keep the original name, no re-splitting)
+        # for the broker prefer the already-normalized Chinese org_name in the DB
+        # (LLM Analysis vocabulary), otherwise normalize the LLM-extracted value
+        # — otherwise English originals extract "J.P. Morgan" etc. into the title
+        # (this once polluted titles with English)
         display = self._display_title(
             (row.get("org_name") or "").strip() or normalize_org_name(data.get("org_name")),
             row.get("file_name") or row.get("title") or "")
@@ -415,13 +440,15 @@ class ReportSkill(BaseSkill):
         n_updated = pg.execute(
             f"UPDATE fin.report_meta SET {', '.join(sets)} WHERE report_id=%s", tuple(args))
         if n_updated == 0:
-            # OCR/深度提取耗时期间, 该记录被 merge 判定重复删除 —— 结果丢弃,
-            # 绝不能继续插 forecast (否则外键违规, 曾致 "OCR 后自动提取失败")
+            # the record was deleted as a merge duplicate while OCR/deep extraction
+            # was running — discard the result and never continue inserting
+            # forecasts (would violate the foreign key; once caused "OCR 后自动提取失败")
             logger.info(f"#{row['report_id']} 提取完成但记录已被去重删除, 结果丢弃")
             return None
 
-        # 预测数据: 先删旧再插 (幂等重跑)
-        # (此块曾在 _display_title 的 return 之后为死代码, 盈利预测从未入库, 已移回)
+        # forecast data: delete old rows first, then insert (idempotent rerun)
+        # (this block was once dead code sitting after _display_title's return —
+        # forecasts never got persisted; it has been moved back)
         if forecasts:
             pg.execute("DELETE FROM fin.report_forecast WHERE report_id=%s",
                        (row["report_id"],))
@@ -456,10 +483,10 @@ class ReportSkill(BaseSkill):
             "forecasts": forecasts,
         }
 
-    # ---------- 展示标题: 机构 + 原文件名 ----------
+    # ---------- Display title: broker + original file name ----------
     @staticmethod
     def _join_tags(items: Any, limit: int = 6) -> str:
-        """标签数组 -> 逗号分隔字符串 (去重/去空/截断)"""
+        """Tag list -> comma-separated string (dedupe/drop empties/truncate)"""
         if not isinstance(items, list):
             return ""
         seen: List[str] = []
@@ -474,10 +501,10 @@ class ReportSkill(BaseSkill):
     @staticmethod
     def _display_title(org: Optional[str], orig_name: str) -> str:
         """
-        生成 '机构-原文件名' 展示标题.
-        - 机构取 LLM 提取的 org_name (缺省不动标题);
-        - 原文件名保留原文 (含 .pdf 后缀去除);
-        - 若文件名本身已以该机构开头, 不重复拼接.
+        Build the 'broker-original file name' display title.
+        - the broker comes from the LLM-extracted org_name (missing -> leave the title alone);
+        - the original file name is kept as-is (minus any .pdf suffix);
+        - if the file name already starts with the broker, do not prepend it again.
         """
         org = (str(org or "")).strip()
         name = (orig_name or "").strip()
@@ -485,14 +512,15 @@ class ReportSkill(BaseSkill):
             name = name[:-4]
         if not org or not name:
             return (name or orig_name or "")[:200]
-        # 文件名已含机构前缀 -> 只去 ".pdf" 即可
+        # file name already carries the broker prefix -> just strip ".pdf"
         if name.startswith(org) or name.startswith(f"中文版-{org}"):
             return name[:200]
         return f"{org}-{name}"[:200]
 
-    # ---------- 模式 2: 综合解读 ----------
+    # ---------- Mode 2: synthesized interpretation ----------
     def _run_analyze(self, context: SkillContext, params: Dict[str, Any]) -> None:
-        # 优先显式参数; 其次从输入推断 (A股名/代码/美股代码/商品关键词); 都失败则整句做关键词
+        # explicit params first; then infer from the input (A-share name/code/US
+        # ticker/commodity keyword); on failure use the whole sentence as a keyword
         target = (params.get("ts_code") or params.get("stock")
                   or params.get("symbol") or params.get("topic")
                   or self._first_target(context.user_input)
@@ -520,7 +548,7 @@ class ReportSkill(BaseSkill):
                            f"或等待每日自动抓取任务入库。"}
             return
 
-        # 优先用已提取的 analysis_json; 没有的现场补提取
+        # prefer the already-extracted analysis_json; extract on the spot when missing
         llm = self._llm()
         reports_payload: List[Dict[str, Any]] = []
         with PgClient() as pg:
@@ -559,7 +587,7 @@ class ReportSkill(BaseSkill):
             "reports": reports_payload,
         }
 
-    # ---------- 模式 3: 单篇问答 ----------
+    # ---------- Mode 3: single-report Q&A ----------
     def _run_qa(self, context: SkillContext, params: Dict[str, Any]) -> None:
         report_id = params.get("report_id")
         question = params.get("question") or context.user_input
@@ -581,27 +609,27 @@ class ReportSkill(BaseSkill):
             title=row["title"], report_text=text, question=question))
         context.result = {"summary": answer, "report_id": row["report_id"]}
 
-    # ---------- 目标匹配 (A股/美股/港股/商品/宏观主题) ----------
+    # ---------- Target matching (A-share/US/HK stocks/commodities/macro themes) ----------
     def _match_reports(self, pg: PgClient, target: str):
-        """返回 (where_sql, args); 无法匹配返回 (None, None)"""
+        """Returns (where_sql, args); (None, None) when nothing matches"""
         t = target.strip()
 
-        # A股: 6位代码 或 名称精确匹配
+        # A-share: 6-digit code or exact name match
         ts_code = self._resolve_a_share(pg, t)
         if ts_code:
             return "ts_code = %s", [ts_code]
 
-        # 美股/港股代码 (如 NVDA.O / 0981.HK) 或名称: symbols LIKE 匹配
+        # US/HK ticker (e.g. NVDA.O / 0981.HK) or name: symbols LIKE match
         if re.match(r"^[A-Za-z0-9.\-]+$", t) and ("." in t or len(t) <= 6):
             if re.match(r"^[A-Za-z]{1,6}(\.[A-Z]{1,2})?$", t.upper()) or re.match(r"^\d{4,5}\.HK$", t):
                 return "symbols ILIKE %s", [f"%{t}%"]
 
-        # 商品/主题关键词: 标题或 analysis_json 中的 commodities/key_points 匹配
+        # commodity/theme keyword: match commodities/key_points in title or analysis_json
         return ("(title ILIKE %s OR analysis_json ILIKE %s)",
                 [f"%{t}%", f"%{t}%"])
 
     def _resolve_a_share(self, pg: PgClient, target: str) -> Optional[str]:
-        """股票名/代码 -> A股 ts_code (仅 A 股库)"""
+        """Stock name/code -> A-share ts_code (A-share universe only)"""
         t = target.strip().upper()
         if re.match(r"^\d{6}\.(SH|SZ|BJ)$", t):
             return t
@@ -613,7 +641,8 @@ class ReportSkill(BaseSkill):
         return row["ts_code"] if row else None
 
     def _keyword_fallback(self, text: str) -> Optional[str]:
-        """词典/正则都没命中时: 去掉常见指令词, 剩余部分作为标题关键词 (最短 2 字)"""
+        """When dictionary/regex both miss: strip common command words and use the
+        remainder as a title keyword (2 chars minimum)"""
         t = (text or "").strip()
         for w in ("的研报", "研报", "解读", "分析", "观点", "一下", "帮我", "看看",
                   "报告", "怎么样", "吗", "?", "？"):
@@ -622,7 +651,7 @@ class ReportSkill(BaseSkill):
         return t if len(t) >= 2 else None
 
     def _first_target(self, text: str) -> Optional[str]:
-        """从输入中找第一个股票名/代码/商品词"""
+        """Find the first stock name/code/commodity word in the input"""
         from tools.finance.stock_kb import get_stock_kb
         try:
             kb = get_stock_kb()
@@ -635,20 +664,20 @@ class ReportSkill(BaseSkill):
         m = re.search(r"\d{6}\.(SH|SZ|BJ)", (text or "").upper())
         if m:
             return m.group(0)
-        # 美股代码 (如 "英伟达 NVDA" / "NVDA.O")
+        # US ticker (e.g. "英伟达 NVDA" / "NVDA.O")
         m = re.search(r"\b[A-Z]{2,6}(\.[A-Z]{1,2})?\b", (text or ""))
         if m:
             return m.group(0)
-        # 商品关键词
+        # commodity keywords
         for kw in ("黄金", "原油", "铜", "锂", "稀土", "gold", "oil", "copper"):
             if kw in (text or "").lower():
                 return kw
         return None
 
-    # ---------- 工具 ----------
+    # ---------- Utilities ----------
     @staticmethod
     def _ensure_columns(pg: PgClient) -> None:
-        """确保 tags/market 等扩展列存在 (DDL 单一事实源: storage.pg_schema)"""
+        """Ensure extension columns like tags/market exist (DDL single source of truth: storage.pg_schema)"""
         ensure_report_analysis_columns()
 
     @staticmethod
@@ -689,7 +718,7 @@ class ReportSkill(BaseSkill):
 
     @staticmethod
     def _normalize_symbols(symbols: List[Any]) -> List[str]:
-        """非A股标的代码 (NVDA.O / 0981.HK / BABA 等)"""
+        """Non-A-share ticker symbols (NVDA.O / 0981.HK / BABA etc.)"""
         out = []
         for s in symbols:
             s = str(s).strip().upper()
@@ -713,13 +742,13 @@ class ReportSkill(BaseSkill):
             symbol = str(f.get("symbol") or "").strip().upper()
             ts_code = None
             if re.match(r"^\d{6}\.(SH|SZ|BJ)$", symbol):
-                # A股 ts_code
+                # A-share ts_code
                 ts_code, symbol = symbol, None
             elif not symbol:
                 if ts_codes:
                     ts_code = ts_codes[0]
                 elif market != "A股":
-                    symbol = ""  # 无标的的宏观/商品预测
+                    symbol = ""  # targetless macro/commodity forecast
                 else:
                     continue
             out.append({

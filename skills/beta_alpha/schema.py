@@ -1,8 +1,9 @@
 """
-beta_alpha 模块自有 DDL (fin.chain_extract 研报环节抽取表)
+beta_alpha module's own DDL (fin.chain_extract: report chain-segment extraction table)
 
-按项目约定「模块内 ensure 函数」存放; fin.fina_mainbz 属于 Tushare 同步族,
-其 DDL 仍在 storage/pg_schema.py。
+Stored here per the project convention of "ensure functions inside the module";
+fin.fina_mainbz belongs to the Tushare sync family, so its DDL stays in
+storage/pg_schema.py.
 """
 from __future__ import annotations
 
@@ -23,6 +24,6 @@ COMMENT ON TABLE fin.chain_extract IS '研报产业链环节抽取 (每篇报告
 
 
 def init_chain_extract_schema(pg_client) -> None:
-    """执行链图谱建表 DDL (幂等; 独立连接/事务外调用)"""
+    """Run the chain-graph DDL (idempotent; call outside business transactions, on its own connection)"""
     pg_client.execute(DDL_CHAIN_EXTRACT)
     pg_client.conn.commit()
