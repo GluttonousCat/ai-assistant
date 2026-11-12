@@ -1,5 +1,5 @@
 # -*- encoding: utf-8 -*-
-"""工具层公共助手: 股票解析 / DataFrame 序列化 / 行情加载"""
+"""Tool-layer common helpers: stock resolution / DataFrame serialization / quotes loading."""
 from __future__ import annotations
 
 import re
@@ -11,7 +11,7 @@ from harness.mcp.spec import ToolError
 
 
 def _jsonable(v: Any) -> Any:
-    """PG NUMERIC->Decimal / date / NaN 统一转 JSON 安全类型"""
+    """Normalize PG NUMERIC->Decimal / date / NaN into JSON-safe types."""
     import datetime as _dt
     import decimal as _dec
     if isinstance(v, _dec.Decimal):
@@ -31,7 +31,7 @@ def _jsonable(v: Any) -> Any:
 
 
 def df_payload(df: pd.DataFrame, max_rows: int = 60) -> Dict[str, Any]:
-    """DataFrame -> {columns, rows, data} (Decimal/NaN 已清洗, 超限截断)"""
+    """DataFrame -> {columns, rows, data} (Decimal/NaN cleaned; truncated beyond the cap)."""
     if df is None or df.empty:
         return {"columns": list(df.columns) if df is not None else [],
                 "rows": 0, "data": [], "truncated": False}
@@ -44,8 +44,9 @@ def df_payload(df: pd.DataFrame, max_rows: int = 60) -> Dict[str, Any]:
 
 
 def resolve_stocks(text: str, max_n: int = 5) -> List[Dict[str, str]]:
-    """从文本解析全部股票实体 [(ts_code, name, matched_alias)]
-    词典最长匹配 + 互斥去重 (防 '平安银行' 与 '平安' 双命中)"""
+    """Resolve all stock entities from text [(ts_code, name, matched_alias)].
+    Longest-match over the dictionary + mutually exclusive dedup (prevents '平安银行'
+    and '平安' both hitting)."""
     from tools.finance.stock_kb import get_stock_kb
     kb = get_stock_kb()
     kb.load()
@@ -56,7 +57,7 @@ def resolve_stocks(text: str, max_n: int = 5) -> List[Dict[str, str]]:
             continue
         idx = text_l.find(alias)
         if idx >= 0:
-            # 与已命中区间重叠的跳过 (保留更长的)
+            # Skip aliases overlapping an already-hit span (keep the longer one)
             if any(not (idx + len(alias) <= s or idx >= s + l)
                    for s, l, _ in hits):
                 continue
@@ -70,7 +71,7 @@ def resolve_stocks(text: str, max_n: int = 5) -> List[Dict[str, str]]:
         out.append({"ts_code": code, "name": kb.get_name(code) or alias,
                     "matched": alias})
     if not out:
-        # 6 位代码兜底 (文本内直接写 600519 / 300308.SZ)
+        # 6-digit code fallback (when the text contains 600519 / 300308.SZ directly)
         for m in re.finditer(r"(\d{6})(?:\.(SH|SZ|BJ))?", text or ""):
             sym, suf = m.group(1), m.group(2)
             if len(sym) != 6 or sym[0] not in "0369":
@@ -78,7 +79,7 @@ def resolve_stocks(text: str, max_n: int = 5) -> List[Dict[str, str]]:
             suffix = f".{suf}" if suf else ""
             code = f"{sym}{suffix}"
             if not suffix:
-                # 无后缀时按交易所规则补
+                # No suffix: derive it by exchange rules
                 code = (f"{sym}.SH" if sym[0] == "6" else
                         f"{sym}.BJ" if sym[0] in "48" else f"{sym}.SZ")
             name = kb.get_name(code)
@@ -88,7 +89,7 @@ def resolve_stocks(text: str, max_n: int = 5) -> List[Dict[str, str]]:
 
 
 def resolve_one(text: str) -> Dict[str, str]:
-    """解析单只股票, 失败抛 ToolError"""
+    """Resolve a single stock; raises ToolError on failure."""
     hits = resolve_stocks(text)
     if not hits:
         raise ToolError(
@@ -97,7 +98,7 @@ def resolve_one(text: str) -> Dict[str, str]:
 
 
 def stock_profile(ts_code: str) -> Dict[str, Any]:
-    """股票基础档案 (含申万行业)"""
+    """Basic stock profile (including Shenwan industry)."""
     from storage.pg import PgClient
     with PgClient() as pg:
         row = pg.fetch_one(
@@ -110,7 +111,7 @@ def stock_profile(ts_code: str) -> Dict[str, Any]:
 
 
 def load_daily_bars(ts_code: str, days: int = 300) -> pd.DataFrame:
-    """日K (前复权, float8), 供技术指标计算"""
+    """Daily bars (forward-adjusted, float8) for technical-indicator computation."""
     from storage.pg import PgClient
     with PgClient() as pg:
         df = pg.fetch_df(

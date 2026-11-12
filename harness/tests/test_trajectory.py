@@ -1,5 +1,5 @@
 # -*- encoding: utf-8 -*-
-"""轨迹日志单测: 落盘形状 / 无 session 兜底 / disabled no-op (不依赖 DB)"""
+"""Trajectory log unit tests: on-disk shape / no-session fallback / disabled no-op (no DB dependency)."""
 from __future__ import annotations
 
 import json
@@ -18,7 +18,7 @@ def test_open_turn_writes_events(tmp_path, monkeypatch):
     files = list(tmp_path.glob("t-traj_*.jsonl"))
     assert len(files) == 1
     lines = [json.loads(l) for l in files[0].read_text(encoding="utf-8").splitlines()]
-    # 首行 turn_start 带用户输入; 其后逐事件, 均带 ts
+    # First line turn_start carries the user input; subsequent lines are one per event, all with ts
     assert lines[0]["event"] == "turn_start"
     assert lines[0]["text"] == "中际旭创的营收"
     assert [l["event"] for l in lines[1:]] == ["stage", "tool_call", "delta"]
@@ -43,4 +43,4 @@ def test_disabled_is_noop(tmp_path, monkeypatch):
     monkeypatch.setattr(trajectory, "_dir", lambda: tmp_path)
     tee = trajectory.open_turn("t-off", "问题")
     tee("stage", {})
-    assert list(tmp_path.glob("*.jsonl")) == []   # 一个文件都不落
+    assert list(tmp_path.glob("*.jsonl")) == []   # not a single file written

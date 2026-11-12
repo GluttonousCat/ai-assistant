@@ -1,8 +1,8 @@
 # -*- encoding: utf-8 -*-
 """
-内容域工具 (2个):
-- build_company_profile  上市公司画像 (八大板块, 纯数据只读)
-- write_article          公众号文章生成 (LLM 成文, 写文件, 默认不进对话沙盒)
+Content domain tools (2):
+- build_company_profile  listed-company profile (eight sections, pure data, read-only)
+- write_article          WeChat official-account article generation (LLM writing; writes files; excluded from the conversation sandbox by default)
 """
 from __future__ import annotations
 

@@ -1,11 +1,11 @@
 # -*- encoding: utf-8 -*-
 """
-产业链 + Alpha 域工具 (5个):
-- list_chains     种子链清单 (支持哪些产业链)
-- analyze_chain   链条量化分析 (环节->标的映射 + 环节指数超额收益)
-- forge_chain     LLM 生成新种子链模板 (写文件, 需审核)
-- analyze_alpha   个股预期差四象限 (预测分歧x财务动量x估值分位x研报观点)
-- industry_peers  同行业比对 (申万二级成分股 估值x成长x盈利 横向排名)
+Industry-chain + Alpha domain tools (5):
+- list_chains     seed-chain catalog (which industry chains are supported)
+- analyze_chain   chain quantitative analysis (node->stock mapping + node-index excess return)
+- forge_chain     LLM-generated new seed-chain template (writes files; needs review)
+- analyze_alpha   stock expectation-gap four quadrants (forecast divergence x financial momentum x valuation percentile x report views)
+- industry_peers  same-industry comparison (Shenwan L2 constituents ranked on valuation x growth x profitability)
 """
 from __future__ import annotations
 
@@ -144,7 +144,7 @@ def analyze_alpha(stock: str) -> Dict[str, Any]:
     except Exception as e:  # noqa: BLE001
         raise ToolError(f"预期差分析失败: {e}")
     cols, data = skill.build_table(res)
-    # quadrants 内 momentum 含 Timestamp/float, 统一清洗
+    # momentum inside quadrants contains Timestamp/float; normalize uniformly
     mom = res.get("momentum") or []
     res["momentum"] = [{k: _jsonable(v) for k, v in r.items()} for r in mom]
     return {"stock": hit, "quadrants": res,
@@ -154,7 +154,7 @@ def analyze_alpha(stock: str) -> Dict[str, Any]:
 
 
 # ============================================================
-# 15. industry_peers 同行业比对
+# 15. industry_peers (same-industry comparison)
 # ============================================================
 
 @REGISTRY.tool(

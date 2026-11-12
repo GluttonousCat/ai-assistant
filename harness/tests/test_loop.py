@@ -1,8 +1,8 @@
 # -*- encoding: utf-8 -*-
-"""agent 对话循环单元测试 (不调 LLM/不连 DB)
+"""Agent conversation loop unit tests (no LLM calls / no DB).
 
-运行: .venv\\Scripts\\python.exe -m pytest agent/tests -q
-E2E (真实 LLM) 见 docs/agents/agent_loop.md 验证记录。
+Run: .venv\\Scripts\\python.exe -m pytest agent/tests -q
+E2E (real LLM) see the verification records in docs/agents/agent_loop.md.
 """
 from __future__ import annotations
 
@@ -11,10 +11,10 @@ from harness.loop import (DEFAULT_TOOL_TIMEOUT, MAX_ROUNDS, REPEAT_LIMIT,
                         TOOL_TIMEOUTS, _extract_table, build_system_prompt)
 
 
-# ---------- 快车道 NL2SQL (LLM 主 / 规则兜底) ----------
+# ---------- Fast-lane NL2SQL (LLM primary / rule fallback) ----------
 
 def test_extract_sql_tolerant_shapes():
-    """LLM 输出的 SQL 提取: 围栏/裸语句/带解释/垃圾输入"""
+    """SQL extraction from LLM output: fences / bare statement / with explanation / garbage."""
     from harness.loop import _extract_sql
     assert _extract_sql("SELECT 1") == "SELECT 1"
     assert _extract_sql("```sql\nSELECT 2\n```") == "SELECT 2"
@@ -24,7 +24,7 @@ def test_extract_sql_tolerant_shapes():
         == "SELECT a FROM b LIMIT 10"
     assert _extract_sql("这不是 SQL") is None
     assert _extract_sql("") is None
-    assert _extract_sql("UPDATE x SET y=1") is None      # 非 SELECT/WITH 拒绝
+    assert _extract_sql("UPDATE x SET y=1") is None      # non-SELECT/WITH rejected
 
 
 def test_alias_digest_non_empty():
@@ -34,7 +34,7 @@ def test_alias_digest_non_empty():
 
 
 def test_nl2sql_config_registered():
-    """nl2sql 用途必须在 config 注册且关思考 (时延关键: 思考版实测 4~27s)"""
+    """The nl2sql purpose must be registered in config with thinking off (latency-critical: thinking variant measured 4~27s)."""
     from core.config import get_config
     from harness.llm import get_nl2sql_llm
     cfg = get_config()
@@ -48,23 +48,23 @@ def test_fast_lane_timeout_const():
     assert 10 <= NL2SQL_TIMEOUT <= 60
 
 
-# ---------- 系统提示词 ----------
+# ---------- System prompt ----------
 
 def test_system_prompt_contains_domain_knowledge():
     p = build_system_prompt()
-    # 口径知识 (环比质疑的关键)
+    # Caliber knowledge (key for quarter-over-quarter challenges)
     assert "累计口径" in p and "Q2单季" in p
-    # 反幻觉纪律
+    # Anti-hallucination discipline
     assert "必须来自工具" in p
-    # 多轮规则
+    # Multi-turn rules
     assert "省略主语" in p or "历史" in p
-    # 禁止输出工具过程信息给用户
+    # Tool-process info must not be shown to users
     assert "绝不向用户输出工具调用记录" in p
-    # 中文与免责
+    # Chinese and disclaimer
     assert "投资建议" in p
 
 
-# ---------- 会话历史 ----------
+# ---------- Session history ----------
 
 def test_history_roundtrip_and_injection():
     history_store.reset("t-s1")
@@ -79,19 +79,19 @@ def test_history_roundtrip_and_injection():
     msgs = history_store.get_messages("t-s1")
     roles = [m["role"] for m in msgs]
     assert roles == ["user", "assistant", "user", "system"]
-    # 工具摘要只进 system 后台记录, 绝不进 assistant 正文
-    # (曾因拼在正文里被模型模仿, 输出"[本轮工具调用]"给用户)
+    # Tool digests go only into the system background record, never the assistant body
+    # (once concatenated into the body, the model imitated them and output "[本轮工具调用]" to the user)
     assert "[本轮工具调用]" not in msgs[1]["content"]
     assert "query_financials" not in msgs[1]["content"]
     record = msgs[-1]["content"]
     assert "query_financials" in record and "严禁" in record
-    # 未定义 session 不炸, 空历史返回 []
+    # Undefined session doesn't blow up; empty history returns []
     assert history_store.get_messages(None) == []
     assert history_store.get_messages("no-such") == []
 
 
 def test_history_no_tool_record_without_tools():
-    """没有工具调用的会话不注入后台记录 system 消息"""
+    """Sessions without tool calls get no background-record system message."""
     history_store.reset("t-s4")
     history_store.append_user("t-s4", "什么是市盈率")
     history_store.append_assistant("t-s4", "市盈率 = 市值 / 净利润 …", [])
@@ -100,7 +100,7 @@ def test_history_no_tool_record_without_tools():
 
 
 def test_history_injection_caps():
-    """注入轮数上限生效 (超过 max_turns 只保留最近轮)"""
+    """Injection turn cap works (beyond max_turns only the most recent turns are kept)."""
     history_store.reset("t-s2")
     for i in range(10):
         history_store.append_user("t-s2", f"问题{i}" * 10)
@@ -108,23 +108,23 @@ def test_history_injection_caps():
     msgs = history_store.get_messages("t-s2", max_turns=3)
     users = [m["content"] for m in msgs if m["role"] == "user"]
     assert len(users) == 3
-    assert "问题9" in users[-1]          # 最近的保留
-    assert "问题0" not in users[0]       # 最早的被截掉
+    assert "问题9" in users[-1]          # most recent kept
+    assert "问题0" not in users[0]       # oldest truncated away
 
 
 def test_history_ttl_cleanup():
-    """过期会话被惰性清理 (直接改 ts 模拟 30 分钟前)"""
+    """Expired sessions are lazily cleaned (simulate 30 minutes ago by editing ts directly)."""
     import time
     history_store.reset("t-s3")
     history_store.append_user("t-s3", "旧会话")
     with history_store._LOCK:
         for t in history_store._STORE["t-s3"]:
             t["ts"] = time.time() - 3600
-    history_store.append_user("t-tick", "触发清理")   # 触发惰性清理
+    history_store.append_user("t-tick", "触发清理")   # triggers lazy cleanup
     assert history_store.get_messages("t-s3") == []
 
 
-# ---------- 沙盒参数 ----------
+# ---------- Sandbox parameters ----------
 
 def test_sandbox_config():
     assert MAX_ROUNDS <= 10
@@ -134,16 +134,16 @@ def test_sandbox_config():
 
 
 def test_tool_manifest_read_only():
-    """对话循环只能拿到只读工具 (forge_chain 不可见)"""
+    """The conversation loop can only see read-only tools (forge_chain invisible)."""
     from harness.mcp.bridge import openai_tools
     tools = openai_tools(include_write=False)
     names = {t["function"]["name"] for t in tools}
     assert "forge_chain" not in names
-    assert len(names) == 31   # 31 只读 (含 build_company_profile)
+    assert len(names) == 31   # 31 read-only (including build_company_profile)
     assert "query_financials" in names and "verify_forecasts" in names
 
 
-# ---------- 表格提取 ----------
+# ---------- Table extraction ----------
 
 def test_extract_table_shapes():
     assert _extract_table({"columns": ["a"], "data": [{"a": 1}], "rows": 1})
@@ -153,7 +153,7 @@ def test_extract_table_shapes():
     assert _extract_table(None) is None
 
 
-# ---------- 快车道 NL2SQL ----------
+# ---------- Fast-lane NL2SQL ----------
 
 def test_extract_sql_shapes():
     from harness.loop import _extract_sql
@@ -164,16 +164,16 @@ def test_extract_sql_shapes():
                          ).startswith("WITH")
     assert _extract_sql("抱歉我无法生成") is None
     assert _extract_sql("") is None
-    assert _extract_sql("UPDATE t SET a=1") is None   # 非 SELECT/WITH 拒绝
+    assert _extract_sql("UPDATE t SET a=1") is None   # non-SELECT/WITH rejected
 
 
 def test_fast_lane_llm_fallback_to_rules():
-    """LLM 生成失败/返回 None 时回退规则引擎 (需 DB, 无 LLM)"""
+    """LLM generation failure / None result falls back to the rule engine (needs DB, no LLM)."""
     import asyncio
     from harness import loop as loop_mod
 
     orig = loop_mod._llm_nl2sql
-    loop_mod._llm_nl2sql = lambda *a, **k: None    # 模拟 LLM 失败
+    loop_mod._llm_nl2sql = lambda *a, **k: None    # simulate LLM failure
     try:
         events = []
 
@@ -194,33 +194,35 @@ def test_fast_lane_llm_fallback_to_rules():
         loop_mod._llm_nl2sql = orig
 
 
-# ---------- 快车道判定 ----------
+# ---------- Fast-lane gate ----------
 
 def test_fast_path_intent_hit_and_miss():
     from harness.loop import _fast_path_intent
-    # 简单查询/对比 (核心词高置信 + 有股票实体) -> 快车道
+    # Simple query/compare (core keyword high confidence + stock entity) -> fast lane
     assert _fast_path_intent("查询贵州茅台的营收") == "query"
     assert _fast_path_intent("茅台和五粮液谁的毛利率高") == "compare"
-    # 复合/其他域问题 -> Agent 循环 (None)
-    assert _fast_path_intent("中际旭创的预期差") is None            # alpha 域
-    assert _fast_path_intent("茅台的研报怎么说") is None             # report 域
+    # Compound / other-domain questions -> Agent loop (None)
+    assert _fast_path_intent("中际旭创的预期差") is None            # alpha domain
+    assert _fast_path_intent("茅台的研报怎么说") is None             # report domain
     assert _fast_path_intent("帮我看看中际旭创有没有财务风险") is None
-    assert _fast_path_intent("环比竟然下降了，数据对吗？") is None   # 追问口语
-    # 无股票实体: 常识问题/库外标的不走快车道 (曾把"什么是市盈率"当数据查询硬跑)
+    assert _fast_path_intent("环比竟然下降了，数据对吗？") is None   # colloquial follow-up
+    # No stock entity: common-sense questions / out-of-database targets skip the fast lane
+    # ("什么是市盈率" was once force-run as a data query)
     assert _fast_path_intent("什么是市盈率") is None
     assert _fast_path_intent("特斯拉的营收是多少") is None
-    assert _fast_path_intent("白酒行业毛利率排名") is None           # 行业维度交 Agent
-    # 深水区词: 复合意图/延伸域不走快车道 (曾把"市盈率和估值分位一起看看"截胡答一半)
+    assert _fast_path_intent("白酒行业毛利率排名") is None           # industry dimension goes to the Agent
+    # Deep-water words: compound intents / extended domains skip the fast lane
+    # ("市盈率和估值分位一起看看" was once hijacked and half-answered)
     assert _fast_path_intent("中际旭创的最新市盈率和估值分位一起看看") is None
     assert _fast_path_intent("贵州茅台的营收分析一下") is None
     assert _fast_path_intent("中际旭创的研报怎么说") is None
     assert _fast_path_intent("") is None
 
 
-# ---------- 并行执行 ----------
+# ---------- Parallel execution ----------
 
 def test_execute_batch_parallel_and_ordered():
-    """同轮多个工具调用应并行 (总耗时≈max 而非求和) 且结果保序"""
+    """Multiple same-round tool calls must run in parallel (total elapsed ~= max, not sum) with results order-preserved."""
     import asyncio
     import time
     from harness import loop as loop_mod
@@ -236,7 +238,7 @@ def test_execute_batch_parallel_and_ordered():
         t0 = time.time()
         results = asyncio.run(loop_mod._execute_batch(calls))
         elapsed = time.time() - t0
-        assert [r["data"] for r in results] == [1, 2, 3]   # 保序
-        assert elapsed < 0.8, f"疑似串行: {elapsed:.2f}s"    # 串行应 ~0.9s
+        assert [r["data"] for r in results] == [1, 2, 3]   # order preserved
+        assert elapsed < 0.8, f"疑似串行: {elapsed:.2f}s"    # serial would be ~0.9s
     finally:
         loop_mod._run_tool = orig

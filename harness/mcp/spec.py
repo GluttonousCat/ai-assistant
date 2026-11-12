@@ -1,7 +1,7 @@
 # -*- encoding: utf-8 -*-
 """
-MCP ToolSpec
-MCP Tool = name + description + JSON Schema + handler。
+MCP ToolSpec.
+An MCP Tool = name + description + JSON Schema + handler.
 """
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from typing import Any, Callable, Dict, List
 
 
 class ToolError(Exception):
-    """工具级可预期错误 (面向用户的中文消息)"""
+    """Tool-level expected error (user-facing Chinese message)."""
 
 
 @dataclass
@@ -27,7 +27,7 @@ class ToolSpec:
     notes: str = ""
 
     def to_mcp(self) -> Dict[str, Any]:
-        """MCP 协议 tools/list 条目"""
+        """MCP protocol tools/list entry."""
         return {
             "name": self.name,
             "description": self.description,
@@ -35,7 +35,7 @@ class ToolSpec:
         }
 
     def to_openai(self) -> Dict[str, Any]:
-        """OpenAI function-calling 格式"""
+        """OpenAI function-calling format."""
         return {
             "type": "function",
             "function": {
@@ -46,12 +46,12 @@ class ToolSpec:
         }
 
 
-# ---------- 参数 Schema 构造小助手 (让工具定义少写样板) ----------
+# ---------- Parameter-schema builder helpers (less boilerplate in tool definitions) ----------
 
 def obj_schema(
         properties: Dict[str, Any], required: List[str] = None
 ) -> Dict[str, Any]:
-    """JSON Schema object 模板"""
+    """JSON Schema object template."""
     return {
         "type": "object",
         "properties": properties,
@@ -60,5 +60,5 @@ def obj_schema(
 
 
 def param(desc: str, ptype: str = "string", **extra) -> Dict[str, Any]:
-    """单个参数 Schema: param"""
+    """Single-parameter schema: param."""
     return {"type": ptype, "description": desc, **extra}

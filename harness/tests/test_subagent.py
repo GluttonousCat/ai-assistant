@@ -1,12 +1,12 @@
 # -*- encoding: utf-8 -*-
-"""sub-agent 分域路由单元测试 (不调 LLM/不连 DB)"""
+"""Sub-agent domain routing unit tests (no LLM calls / no DB)."""
 from __future__ import annotations
 
 from harness.subagent import (DOMAIN_DEFS, ESCALATE_TOOL, domain_manifest,
                             escalate_tool_manifest, route_domain)
 
 
-# ---------- 路由规则 ----------
+# ---------- Routing rules ----------
 
 def test_route_single_domain():
     assert route_domain("中际旭创的营收和净利润") == "financial"
@@ -19,12 +19,12 @@ def test_route_single_domain():
 
 
 def test_route_compound_and_miss_goes_full():
-    """复合信号(≥2域)与未命中 -> None (全工具循环, 兜底永在)"""
-    # 预测(报告域) + 形态(量化域) 复合
+    """Compound signals (>=2 domains) and misses -> None (full-tool loop; the fallback always remains)."""
+    # forecast (report domain) + pattern (quant domain) compound
     assert route_domain("中际旭创的盈利预测和现在的形态怎么样") is None
-    # 追问口语 (无域词)
+    # colloquial follow-up (no domain word)
     assert route_domain("环比竟然下降了，数据对吗？") is None
-    # 定义/解释类一律全循环 (模型直接答, 不进域)
+    # definition/explanation phrasing always goes to the full loop (model answers directly, enters no domain)
     assert route_domain("什么是市盈率") is None
     assert route_domain("毛利率是什么意思") is None
     assert route_domain("") is None
@@ -32,14 +32,15 @@ def test_route_compound_and_miss_goes_full():
 
 
 def test_route_never_locks_capability():
-    """路由是缩小菜单而非能力闸门: 模糊问法不得被误锁进错误域"""
+    """Routing shrinks the menu but is not a capability gate: vague phrasing must not be locked into a wrong domain."""
     for q in ("中际旭创怎么样", "帮我看下这家公司", "怎么样分析这个票"):
         assert route_domain(q) is None, q
-    # 库外标的: 路由进 financial 可接受 (工具报"未识别到股票"的行为与全循环一致)
+    # Out-of-database target: routing into financial is acceptable (the tool's
+    # "stock not recognized" behavior matches the full loop)
     assert route_domain("特斯拉的营收是多少") in (None, "financial")
 
 
-# ---------- 域定义完整性 ----------
+# ---------- Domain definition integrity ----------
 
 def test_domain_defs_well_formed():
     from harness.mcp import get_registry
@@ -48,32 +49,33 @@ def test_domain_defs_well_formed():
     for key, d in DOMAIN_DEFS.items():
         assert d["label"] and d["prompt"] and d["keywords"]
         assert 2 <= len(d["tools"]) <= 8, \
-            f"{key} 域工具数应 2~8 (subagent._load_domain_defs 校验上限)"
+            f"{key} domain tool count should be 2~8 (upper bound checked by subagent._load_domain_defs)"
         for t in d["tools"]:
-            assert t in registered, f"{key} 引用未注册工具 {t}"
-            assert registry.get(t).read_only, f"{key} 引用非只读工具 {t}"
+            assert t in registered, f"{key} references unregistered tool {t}"
+            assert registry.get(t).read_only, f"{key} references non-read-only tool {t}"
         assert "escalate_to_full_agent" in d["prompt"]
 
 
 def test_domains_cover_most_tools():
-    """6 域工具并集应覆盖绝大多数只读工具 (未覆盖的应是合理的)"""
+    """The union of the 6 domains' tools should cover most read-only tools (uncovered ones should be justifiable)."""
     from harness.mcp import get_registry
     covered = {t for d in DOMAIN_DEFS.values() for t in d["tools"]}
     uncovered = ({s.name for s in get_registry().specs()
                   if s.read_only} - covered)
-    # 允许不分组: 跨域综合工具 (如 build_company_profile 八板块画像) — 全循环主场
+    # Allowed to stay ungrouped: cross-domain composite tools (e.g. build_company_profile's
+    # eight-section profile) — the full loop's home turf
     assert uncovered <= {"get_schema", "build_company_profile", "extract_pdf_tables", "read_annual_profile"}, uncovered
 
 
-# ---------- 域 manifest 与 escalate 伪工具 ----------
+# ---------- Domain manifest and the escalate pseudo-tool ----------
 
 def test_domain_manifest_includes_escalate():
     tools = domain_manifest("report")
     names = [t["function"]["name"] for t in tools]
-    # manifest 顺序=注册顺序, 与 config 清单顺序无关, 集合比对
+    # manifest order = registration order, independent of the config list order; compare as sets
     assert set(names) == set(DOMAIN_DEFS["report"]["tools"]) | {ESCALATE_TOOL}
-    assert names[-1] == ESCALATE_TOOL  # escalate 恒追加在末尾
-    # escalate 不进全局注册表 (它只是循环内的伪工具)
+    assert names[-1] == ESCALATE_TOOL  # escalate is always appended last
+    # escalate never enters the global registry (it is only a pseudo-tool inside the loop)
     from harness.mcp import get_registry
     assert get_registry().get(ESCALATE_TOOL) is None
 

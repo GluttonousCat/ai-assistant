@@ -1,15 +1,18 @@
 # -*- encoding: utf-8 -*-
-"""REGISTRY -> FastMCP 适配层 (企业出口: stdio + streamable HTTP 的形态转换)
+"""REGISTRY -> FastMCP adapter layer (enterprise exit: shape conversion for stdio + streamable HTTP).
 
-- 工具层零改动: ToolSpec (harness/mcp/spec.py) 仍是唯一事实源, 双 manifest
-  (to_mcp/to_openai) 与本适配器三形态并存;
-- 中文参数 schema 保留: Tool.from_function 从签名推骨架 -> model_copy 覆盖为
-  手写 params_schema (含中文参数描述, LLM 选参质量的关键);
-- 执行仍走 REGISTRY.call 统一信封 (计时/幻觉参数剔除/中文错误兜底);
-  ok=False 抛 fastmcp ToolError -> 协议 isError (与 legacy server.py 行为等价);
-- read_only 沙盒: 只读模式仅注册 read_only 工具 (ALPHA_MCP_READ_ONLY 同源约定);
-- 同步 handler + run_in_thread=True: fastmcp 线程池执行, 无需异步化改造
-  (配套: storage.pg PgPool 已线程安全化)。
+- Zero change to the tool layer: ToolSpec (harness/mcp/spec.py) remains the single source
+  of truth; the dual manifests (to_mcp/to_openai) and this adapter coexist as three shapes;
+- Chinese parameter schemas preserved: Tool.from_function derives the skeleton from the
+  signature -> model_copy overrides it with the hand-written params_schema (with Chinese
+  parameter descriptions — key to LLM argument-selection quality);
+- Execution still goes through the unified REGISTRY.call envelope (timing / hallucinated-arg
+  pruning / Chinese error fallback); ok=False raises fastmcp ToolError -> protocol isError
+  (equivalent to legacy server.py behavior);
+- read_only sandbox: read-only mode registers only read_only tools (same-source convention
+  as ALPHA_MCP_READ_ONLY);
+- Synchronous handler + run_in_thread=True: fastmcp thread-pool execution, no async
+  refactor needed (storage.pg PgPool is already thread-safe).
 """
 from __future__ import annotations
 
@@ -21,16 +24,17 @@ from harness.mcp.tools import REGISTRY
 
 
 def read_only_mode() -> bool:
-    """只读沙盒开关 (与 legacy server.py 同源: ALPHA_MCP_READ_ONLY, 默认开)"""
+    """Read-only sandbox switch (same source as legacy server.py: ALPHA_MCP_READ_ONLY, default on)."""
     return os.environ.get("ALPHA_MCP_READ_ONLY", "1") not in ("0", "false", "False")
 
 
 def _make_handler(spec: ToolSpec) -> Callable[..., Dict[str, Any]]:
-    """包一层: 统一信封 + ok=False 转 ToolError (isError 语义)。
+    """Wraps: unified envelope + ok=False converted to ToolError (isError semantics).
 
-    functools.wraps(handler) 让 from_function 经 __wrapped__ 解析到工具的
-    显式参数签名 (fastmcp 不支持 **kwargs 签名); 实际入参仍收进 dict 走
-    REGISTRY.call, 骨架 schema 随后被手写 params_schema 覆盖。
+    functools.wraps(handler) lets from_function resolve the tool's explicit parameter
+    signature through __wrapped__ (fastmcp does not support **kwargs signatures); the
+    actual arguments are still collected into a dict and go through REGISTRY.call, and the
+    skeleton schema is subsequently overridden by the hand-written params_schema.
     """
     import functools
 
@@ -44,7 +48,7 @@ def _make_handler(spec: ToolSpec) -> Callable[..., Dict[str, Any]]:
 
 
 def build_fastmcp(read_only: bool = True, auth=None):
-    """REGISTRY -> FastMCP 实例; 返回 (mcp, 注册工具数)。auth 为 fastmcp 鉴权器或 None"""
+    """REGISTRY -> FastMCP instance; returns (mcp, number of registered tools). auth is a fastmcp authenticator or None."""
     from fastmcp import FastMCP
     from fastmcp.tools import Tool
 

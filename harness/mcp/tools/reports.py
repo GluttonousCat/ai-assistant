@@ -1,13 +1,13 @@
 # -*- encoding: utf-8 -*-
 """
-研报域工具 (7个):
-- search_reports       研报检索 (关键词/标的/行业/商品/评级)
-- read_report          读研报 (元数据+正文节选; 带 question 时对单篇做问答)
-- get_forecasts        券商盈利预测 + 分歧度统计
-- summarize_sell_side  卖方观点汇总 (覆盖机构/预测聚合/目标价区间)
-- fetch_annual_report  巨潮定期报告拉取 (写类: 入库+下载 PDF)
-- extract_document     本地文档解析 (PDF/DOCX/TXT; 扫描件走视觉OCR)
-- extract_pdf_tables   PDF 线框表格提取 (pdfplumber, 不调模型)
+Report domain tools (7):
+- search_reports       report search (keyword / target / industry / commodity / rating)
+- read_report          read a report (metadata + body excerpt; with a question, Q&A over that single report)
+- get_forecasts        broker earnings forecasts + divergence stats
+- summarize_sell_side  sell-side view summary (covering orgs / forecast aggregation / target-price range)
+- fetch_annual_report  cninfo periodic-report fetch (write: DB insert + PDF download)
+- extract_document     local document parsing (PDF/DOCX/TXT; scanned docs go through vision OCR)
+- extract_pdf_tables   PDF ruled-table extraction (pdfplumber, no model calls)
 """
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from harness.mcp.tools._common import _jsonable, resolve_one
 
 
 def _brief(row) -> Dict[str, Any]:
-    """report_meta 行 -> 精简摘要"""
+    """report_meta row -> concise summary."""
     rating = None
     try:
         aj = json.loads(row.get("analysis_json") or "{}")
@@ -132,7 +132,7 @@ def read_report(report_id: int, question: str = "",
 
     content = row.get("content_text") or ""
     if question:
-        # 单篇问答: 走 ReportSkill qa 模式 (LLM, 输出中文)
+        # Single-report Q&A: goes through ReportSkill qa mode (LLM, Chinese output)
         from skills.report.skill import ReportSkill
         from skills.base import SkillContext
         skill = ReportSkill()
@@ -198,7 +198,7 @@ def get_forecasts(stock: str, limit: int = 6) -> Dict[str, Any]:
 
 
 # ============================================================
-# 10b. fetch_annual_report (巨潮爬虫, 写类: 入库+下载文件, 默认不进对话沙盒)
+# 10b. fetch_annual_report (cninfo crawler; write tool: DB insert + file download; excluded from the conversation sandbox by default)
 # ============================================================
 
 @REGISTRY.tool(
@@ -226,7 +226,7 @@ def fetch_annual_report(stock: str, year: int, category: str = "ndbg") -> Dict[s
     from tools.cninfo import store
     from tools.cninfo.downloader import CninfoDownloader, DOWNLOAD_ROOT
 
-    ts_code = resolve_one(stock)["ts_code"]   # 名称→代码解析归 agent 侧
+    ts_code = resolve_one(stock)["ts_code"]   # name->code resolution stays on the agent side
     dl = CninfoDownloader()
     stats = dl.sync_stock(ts_code, [int(year)], download=True,
                           categories=(category,))
@@ -341,7 +341,7 @@ def extract_pdf_tables(file_path: str, max_pages: int = 20,
 
 
 # ============================================================
-# 7. summarize_sell_side 卖方观点汇总
+# 7. summarize_sell_side (sell-side view summary)
 # ============================================================
 
 @REGISTRY.tool(

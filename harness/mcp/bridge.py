@@ -1,6 +1,6 @@
 # -*- encoding: utf-8 -*-
 """
-OpenAI function-calling bridge:
+OpenAI function-calling bridge (exposes the MCP registry to LLM tool-calling).
 """
 from __future__ import annotations
 
@@ -11,12 +11,12 @@ from harness.mcp.tools import REGISTRY
 
 
 def openai_tools(include_write: bool = False) -> List[Dict[str, Any]]:
-    """OpenAI tools 参数 (默认只给只读工具, 写类需显式放开)"""
+    """OpenAI tools parameter (read-only tools only by default; write tools require explicit opt-in)."""
     return REGISTRY.openai_manifest(include_write=include_write)
 
 
 def run_tool_call(name: str, arguments_json: str = "{}") -> Dict[str, Any]:
-    """执行一次 tool_call (参数是 LLM 给的 JSON 字符串)"""
+    """Execute one tool_call (arguments are the JSON string provided by the LLM)."""
     try:
         args = json.loads(arguments_json or "{}")
         if not isinstance(args, dict):
@@ -27,7 +27,7 @@ def run_tool_call(name: str, arguments_json: str = "{}") -> Dict[str, Any]:
 
 
 def system_prompt_hint() -> str:
-    """注入 Agent system prompt 的工具使用守则 (中文)"""
+    """Tool-usage rules injected into the Agent system prompt (Chinese)."""
     return (
         "工具使用守则:\n"
         "1. 股票类工具直接传股票名/代码 (内部自解析); resolve_stock 只用于身份查询/"

@@ -1,8 +1,8 @@
 # -*- encoding: utf-8 -*-
 """
-量化/技术域工具 (2个):
-- compute_indicators   技术指标计算 (ADX / POC / Wyckoff Spring)
-- run_quant_scan       range_trading 扫描 (单标的 regime / 全市场震荡 / 趋势 / 蓄势盾)
+Quant/technical domain tools (2):
+- compute_indicators   technical indicator computation (ADX / POC / Wyckoff Spring)
+- run_quant_scan       range_trading scans (single-symbol regime / full-market range / trend / setup shield)
 """
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ from harness.mcp.tools._common import _jsonable, df_payload, load_daily_bars, re
 def compute_indicators(stock: str, days: int = 250) -> Dict[str, Any]:
     hit = resolve_one(stock)
     df = load_daily_bars(hit["ts_code"], days=max(150, int(days)))
-    # indicators.py 约定: 列名 volume; index 为 DatetimeIndex (信号函数会取 index.date())
+    # indicators.py convention: column named volume; DatetimeIndex (signal functions read index.date())
     df = df.rename(columns={"vol": "volume"})
     df.index = pd.DatetimeIndex(pd.to_datetime(df["trade_date"]))
     from tools.kline.indicators import (

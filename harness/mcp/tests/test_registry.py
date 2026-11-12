@@ -1,8 +1,8 @@
 # -*- encoding: utf-8 -*-
-"""mcp/ 单元测试: 注册表完整性与信封契约 (不依赖 DB, 秒级)
+"""mcp/ unit tests: registry integrity and envelope contracts (no DB dependency, seconds).
 
-运行: .venv\\Scripts\\python.exe -m pytest mcp/tests -q
-数据相关的端到端验证用 jobs/smoke_mcp_tools.py (需要 PG)。
+Run: .venv\\Scripts\\python.exe -m pytest mcp/tests -q
+For data-dependent end-to-end verification use jobs/smoke_mcp_tools.py (requires PG).
 """
 from __future__ import annotations
 
@@ -16,9 +16,9 @@ REGISTRY = get_registry()
 
 def test_34_tools_registered():
     specs = REGISTRY.specs()
-    assert len(specs) == 34      # 31 只读 + 3 写类 (forge_chain/fetch_annual_report/write_article)
+    assert len(specs) == 34      # 31 read-only + 3 write (forge_chain/fetch_annual_report/write_article)
     names = [s.name for s in specs]
-    assert len(set(names)) == 34  # 无重名
+    assert len(set(names)) == 34  # no duplicate names
 
 
 def test_domains_cover_six_groups():
@@ -28,9 +28,9 @@ def test_domains_cover_six_groups():
 
 @pytest.mark.parametrize("spec", REGISTRY.specs(), ids=lambda s: s.name)
 def test_spec_well_formed(spec):
-    """每个工具: 中文 description / 合法 schema / handler 可调"""
+    """Every tool: Chinese description / valid schema / callable handler."""
     assert spec.description and len(spec.description) >= 20
-    assert any("\u4e00" <= ch <= "\u9fff" for ch in spec.description)  # 含中文
+    assert any("\u4e00" <= ch <= "\u9fff" for ch in spec.description)  # contains Chinese
     schema = spec.params_schema
     assert schema.get("type") == "object"
     props = schema.get("properties", {})
@@ -44,11 +44,11 @@ def test_call_unknown_tool_envelope():
     env = REGISTRY.call("no_such_tool", {})
     assert env["ok"] is False
     assert "no_such_tool" in env["error"]
-    assert "resolve_stock" in env["error"]  # 错误里带可用工具提示
+    assert "resolve_stock" in env["error"]  # error includes a hint of available tools
 
 
 def test_call_strips_undeclared_params():
-    # 未声明参数被剔除, warnings 提示 (handler 必然缺参 -> ToolError 而非 TypeError)
+    # Undeclared params are stripped with a warnings hint (handler necessarily misses the arg -> ToolError, not TypeError)
     @REGISTRY.tool(name="_t_strip", domain="entity", description="测试用临时工具",
                    params_schema={"type": "object",
                                   "properties": {"x": {"type": "string"}}})
@@ -83,7 +83,7 @@ def test_manifests_consistent():
     openai_manifest = REGISTRY.openai_manifest()
     assert len(mcp_manifest) == len(REGISTRY.specs())
     assert len(openai_manifest) == len(REGISTRY.specs())
-    # 只读过滤: 31 个只读 (3 写类被排除)
+    # Read-only filter: 31 read-only (3 write tools excluded)
     assert len(REGISTRY.openai_manifest(include_write=False)) == 31
     for entry in mcp_manifest:
         assert set(entry) == {"name", "description", "inputSchema"}

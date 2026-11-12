@@ -1,22 +1,28 @@
 # -*- encoding: utf-8 -*-
 """
-子 Agent 分域路由 (Sub-Agent Domain Routing)
+Sub-agent domain routing.
 
-动机: 18 个工具一次摊给 LLM, 弱模型 (deepseek flash 档) 选择面大易误选。
-主流做法不是拆 MCP server (宿主会把工具清单拍平, 拆 server 对模型不可见),
-而是**缩小菜单**: 先路由到领域, 子 Agent 只看本域 2~4 个工具。
+Motivation: presenting all 18 tools at once to a weaker model (deepseek flash tier)
+makes the choice space large and mis-selection likely. The mainstream fix is not
+splitting MCP servers (hosts flatten tool lists, so server splits are invisible to the
+model) but **shrinking the menu**: route to a domain first, the sub-agent sees only its
+2-4 domain tools.
 
-设计 (零回归风险):
-- 路由用 L1 纯规则 (毫秒级, 不调 LLM): 单域高置信 -> 域子 Agent;
-  未命中 / 复合信号(≥2 域) / 知识闲聊 -> 全工具循环 (即现有行为, 兜底永在)
-- 每个子 Agent 附带域专家提示词 (追加 system, 全局口径知识保留)
-- 升级链路: 域清单里放一个 escalate_to_full_agent 伪工具,
-  子 Agent 发现需要域外能力时调用 -> 同一 messages 换全工具清单续跑, 上下文不丢
+Design (zero regression risk):
+- Routing is pure L1 rules (milliseconds, no LLM call): single-domain high confidence ->
+  domain sub-agent; miss / compound signal (>=2 domains) / knowledge chit-chat ->
+  full-tool loop (i.e. existing behavior, the fallback always remains)
+- Each sub-agent gets a domain-expert prompt (appended as system; global caliber knowledge kept)
+- Escalation chain: the domain manifest includes an escalate_to_full_agent pseudo-tool;
+  when the sub-agent finds it needs out-of-domain capability it calls it -> the same
+  messages continue with the full tool manifest, context preserved
 
-域定义事实源 (DSH "组合进配置" 的落地): config.yaml `agent.domains`,
-改工具清单/关键词/prompt 只动配置不动代码 (重启生效);
-config 缺失或整段非法时回落下方内置默认 (fresh clone 可跑);
-单域结构不完整仅跳过该域并告警 — 宁漏勿误: 漏路由只是少优化, 误路由才是事故。
+Domain-definition source of truth (landing the DSH "compose into config" idea):
+config.yaml `agent.domains`; changing tool lists / keywords / prompts touches config
+only, not code (effective after restart); if the config section is missing or wholly
+invalid, the built-in defaults below apply (fresh clone runs); a structurally
+incomplete single domain is just skipped with a warning — prefer missing over
+mis-routing: a missed route is only a lost optimization, a wrong route is an incident.
 """
 from __future__ import annotations
 
@@ -26,7 +32,7 @@ ESCALATE_TOOL = "escalate_to_full_agent"
 
 
 def escalate_tool_manifest() -> Dict[str, Any]:
-    """升级伪工具的 OpenAI manifest (仅注入域子 Agent, 不进 REGISTRY/MCP)"""
+    """OpenAI manifest of the escalation pseudo-tool (injected into domain sub-agents only; never enters REGISTRY/MCP)."""
     return {
         "type": "function",
         "function": {
@@ -48,8 +54,8 @@ def escalate_tool_manifest() -> Dict[str, Any]:
 
 
 # ============================================================
-# 域定义内置默认 (config.yaml agent.domains 缺失时的兜底)
-# 结构: 标签 / 工具清单 / 域专家提示词 / L1 路由核心词
+# Built-in default domain definitions (fallback when config.yaml agent.domains is missing)
+# Structure: label / tool list / domain-expert prompt / L1 routing core keywords
 # ============================================================
 
 _DEFAULT_DOMAINS: Dict[str, Dict[str, Any]] = {
@@ -137,7 +143,7 @@ _DEFAULT_DOMAINS: Dict[str, Dict[str, Any]] = {
 
 
 def _load_domain_defs() -> Dict[str, Dict[str, Any]]:
-    """读 config.yaml agent.domains; 缺失/整段非法回落内置默认, 单域非法跳过"""
+    """Read config.yaml agent.domains; missing/wholly invalid falls back to built-in defaults; a single invalid domain is skipped."""
     from core.config import get_config
     from core.logger import get_logger
     logger = get_logger(__name__)
@@ -168,7 +174,7 @@ DOMAIN_DEFS: Dict[str, Dict[str, Any]] = _load_domain_defs()
 
 
 def domain_manifest(domain: str, with_escalate: bool = True) -> List[Dict[str, Any]]:
-    """域工具 OpenAI manifest (含 escalate 伪工具; 不查 REGISTRY 状态, 纯过滤)"""
+    """Domain-tools OpenAI manifest (includes the escalate pseudo-tool; no REGISTRY state check, pure filtering)."""
     from harness.mcp import get_registry
     registry = get_registry()
     names = DOMAIN_DEFS[domain]["tools"]
@@ -179,12 +185,14 @@ def domain_manifest(domain: str, with_escalate: bool = True) -> List[Dict[str, A
 
 
 def route_domain(text: str) -> Optional[str]:
-    """L1 纯规则路由: 返回域 key 或 None (None=全工具循环)。
+    """Pure L1 rule routing: returns a domain key or None (None = full-tool loop).
 
-    规则: 核心词命中的域集合; 恰好 1 个 -> 该域; >=2 个 -> None (复合, 交给
-    全工具循环自由组合); 0 个 -> None。宁漏勿误: 路由是缩小菜单的优化,
-    不是能力闸门 — 漏路由只是少优化, 误路由才是事故。
-    定义/解释类问法 (什么是市盈率) 一律全循环 — 模型直接答, 不该进任何域。
+    Rule: the set of domains whose core keywords hit; exactly 1 -> that domain;
+    >=2 -> None (compound, left to the full-tool loop to combine freely); 0 -> None.
+    Prefer missing over mis-routing: routing is a menu-shrinking optimization, not a
+    capability gate — a missed route is only a lost optimization, a wrong route is an incident.
+    Definition/explanation phrasing (什么是市盈率) always goes to the full loop —
+    the model answers directly and should enter no domain.
     """
     text_l = (text or "").lower()
     if not text_l.strip():

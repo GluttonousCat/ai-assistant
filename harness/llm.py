@@ -1,29 +1,29 @@
 """
-LLM 客户端封装
-- 消除原 infra/openai.py 中 ChatOpenAI 类名与 langchain_openai.ChatOpenAI 的冲突
-- api_key / base_url / model 统一从 core.config 读取
-- 支持多模型路由: 按"用途" (purpose) 取模型, 配置见 config.yaml llm.models
+LLM client wrapper.
+- Eliminates the clash between the old infra/openai.py ChatOpenAI class name and langchain_openai.ChatOpenAI
+- api_key / base_url / model are all read from core.config
+- Supports multi-model routing: model chosen by "purpose"; configuration in config.yaml llm.models
 
-config.yaml 结构:
+config.yaml structure:
     llm:
-      enable_thinking: true            # 思考开关全局默认 (深思考=最强推理; 开启时必须配足 max_tokens)
-      max_tokens: 16384                # 全局输出预算 (思考与正文共用, 勿设小值)
+      enable_thinking: true            # global default for the thinking switch (deep thinking = strongest reasoning; when enabled, max_tokens must be generous)
+      max_tokens: 16384                # global output budget (shared by thinking and body text; do not set it small)
       models:
-        default:   {model: xxx}          # 兜底 (必填)
-        agent:     {model: xxx}          # Skill/Agent 推理 (高性能)
-        extract:   {model: xxx}          # 研报结构化提取
-        vision:    {model: xxx, enable_thinking: false}   # 用途级覆盖思考开关
-        embedding: {model: xxx}          # 向量 (预留)
-      # 各用途可单独覆盖 api_key/base_url (默认用 .env 的 OPENAI_API_KEY/OPENAI_BASE_URL)
+        default:   {model: xxx}          # fallback (required)
+        agent:     {model: xxx}          # Skill/Agent reasoning (high performance)
+        extract:   {model: xxx}          # structured extraction of research reports
+        vision:    {model: xxx, enable_thinking: false}   # purpose-level override of the thinking switch
+        embedding: {model: xxx}          # vectors (reserved)
+      # Each purpose may override api_key/base_url (defaults to .env OPENAI_API_KEY/OPENAI_BASE_URL)
 
-思考开关注入 (client 统一处理, 业务代码不再传 enable_thinking):
-    显式 kwargs > 用途覆盖 llm.models.<purpose>.enable_thinking > 全局 llm.enable_thinking > True
+Thinking-switch injection (handled uniformly by the client; business code no longer passes enable_thinking):
+    explicit kwargs > purpose override llm.models.<purpose>.enable_thinking > global llm.enable_thinking > True
 
-用途 -> 场景映射 (代码里按语义取, 不感知具体模型名):
-    agent    : FinQuerySkill SQL生成/结果解读, ReportSkill 综合解读/问答, 意图识别 L2
-    extract  : ReportSkill 结构化提取 (长文本 JSON 输出)
-    vision   : 图片型 PDF 页面识别 (OCR 降级)
-    default  : 其余一切
+Purpose -> scenario mapping (code selects by semantics, unaware of concrete model names):
+    agent    : FinQuerySkill SQL generation / result interpretation, ReportSkill synthesis / Q&A, intent recognition L2
+    extract  : ReportSkill structured extraction (long-text JSON output)
+    vision   : image-only PDF page recognition (OCR fallback)
+    default  : everything else
 """
 from __future__ import annotations
 
@@ -50,7 +50,7 @@ class LLMClient:
         purpose: Optional[str] = None,
     ):
         config = get_config()
-        # 显式 model 参数优先; 其次按用途路由; 最后 default
+        # Explicit model parameter wins; then purpose-based routing; finally default
         if model:
             self.model = model
         else:
@@ -66,19 +66,19 @@ class LLMClient:
             max_retries=max_retries,
         )
 
-    # ---------- 默认参数 (思考开关 + 输出预算) ----------
+    # ---------- Default kwargs (thinking switch + output budget) ----------
     def _default_kwargs(self) -> Dict[str, Any]:
         """
-        思考与 token 预算统一注入:
-        - enable_thinking: 用途覆盖 > 全局 llm.enable_thinking > 默认开启 (最强思考)
-        - max_tokens: 全局 llm.max_tokens (思考与正文共用预算, 必须给足,
-          曾因小预算思考耗尽导致 content 为空 — 见 docs/agents/llm_models.md)
+        Thinking and token budget are injected uniformly here:
+        - enable_thinking: purpose override > global llm.enable_thinking > default on (strongest thinking)
+        - max_tokens: global llm.max_tokens (shared budget for thinking and body text; must be generous —
+          a too-small budget once let thinking exhaust it and yield empty content; see docs/agents/llm_models.md)
         """
         cfg = get_config()
         kw: Dict[str, Any] = {}
         mt = cfg.get("llm.max_tokens")
         if mt:
-            # 容错: 兼容千分位写法 (config 曾出现 "32,768")
+            # Tolerance: accept thousands separators (config once contained "32,768")
             kw["max_tokens"] = int(str(mt).replace(",", "").strip())
         et = cfg.get(f"llm.models.{self.purpose}.enable_thinking")
         if et is None:
@@ -93,7 +93,7 @@ class LLMClient:
         return input_data
 
     def _tracked(self, stream: bool, **create_kwargs):
-        """带监控埋位的 create: 耗时/成败/tokens (core.metrics, 异常吞掉不影响业务)"""
+        """create() with monitoring instrumentation: latency / success / tokens (core.metrics; exceptions swallowed so business flow is unaffected)."""
         t0 = time.time()
         merged = {**self._default_kwargs(), **create_kwargs}
         try:
@@ -111,25 +111,25 @@ class LLMClient:
         return response
 
     def invoke(self, input_data: Union[str, MessageList], **kwargs) -> str:
-        """同步调用, 返回文本"""
+        """Synchronous call, returns text."""
         messages = self._normalize(input_data)
         response = self._tracked(stream=False, messages=messages, **kwargs)
         return response.choices[0].message.content or ""
 
     def invoke_with_tools(self, messages: MessageList, tools: List[Dict],
                           tool_choice: str = "auto", **kwargs):
-        """function-calling 调用: 返回完整 assistant message (content + tool_calls)
+        """function-calling invocation: returns the full assistant message (content + tool_calls).
 
-        供 Agent 循环使用 (deepseek OpenAI 兼容):
-        - message.tool_calls: List[{id, function:{name, arguments}}] 或 None
-        - message.content: 无工具调用时的最终回答文本
+        Used by the Agent loop (deepseek OpenAI-compatible):
+        - message.tool_calls: List[{id, function:{name, arguments}}] or None
+        - message.content: final answer text when no tool was called
         """
         response = self._tracked(stream=False, messages=messages, tools=tools,
                                  tool_choice=tool_choice, **kwargs)
         return response.choices[0].message
 
     def stream(self, input_data: Union[str, MessageList], **kwargs) -> Iterator[str]:
-        """流式调用, 逐块产出文本 (思考模型的 reasoning 块自动跳过, 只出正文)"""
+        """Streaming call, yields text chunks (reasoning blocks of thinking models are skipped automatically; body text only)."""
         messages = self._normalize(input_data)
         response = self._tracked(stream=True, messages=messages, **kwargs)
         for chunk in response:
@@ -139,24 +139,24 @@ class LLMClient:
 
 
 def get_agent_llm(**kwargs) -> LLMClient:
-    """Agent/Skill 推理用途 (高性能模型)"""
+    """Agent/Skill reasoning purpose (high-performance model)."""
     kwargs.setdefault("timeout", 120.0)
     return LLMClient(purpose="agent", **kwargs)
 
 
 def get_extract_llm(**kwargs) -> LLMClient:
-    """结构化提取用途"""
+    """Structured-extraction purpose."""
     kwargs.setdefault("timeout", 120.0)
     return LLMClient(purpose="extract", **kwargs)
 
 
 def get_nl2sql_llm(**kwargs) -> LLMClient:
-    """快车道 NL2SQL 用途 (config 关思考+小预算: 只产出一条 SELECT, 秒级)"""
+    """Fast-lane NL2SQL purpose (config disables thinking + small budget: emits a single SELECT, seconds-level)."""
     kwargs.setdefault("timeout", 30.0)
     return LLMClient(purpose="nl2sql", **kwargs)
 
 
 def get_vision_llm(**kwargs) -> LLMClient:
-    """视觉用途 (图片型 PDF OCR)"""
+    """Vision purpose (image-only PDF OCR)."""
     kwargs.setdefault("timeout", 180.0)
     return LLMClient(purpose="vision", **kwargs)

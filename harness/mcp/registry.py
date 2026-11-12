@@ -1,12 +1,12 @@
 # -*- encoding: utf-8 -*-
 """
-MCP 工具注册表
+MCP tool registry.
 
-- mcp_tool(...) 装饰器: 工具实现处直接声明式注册
-- call(name, **kwargs): 统一入口, 计时 + 异常兜底, 返回统一信封
-    {"ok": true, "tool": ..., "elapsed_ms": ..., "data": <handler 返回>}
-    {"ok": false, "tool": ..., "error": "中文消息"}
-- mcp_manifest() / openai_manifest(): 两种协议形态导出
+- mcp_tool(...) decorator: declarative registration right at the tool implementation
+- call(name, **kwargs): unified entry, timing + exception fallback, returns a unified envelope
+    {"ok": true, "tool": ..., "elapsed_ms": ..., "data": <handler return>}
+    {"ok": false, "tool": ..., "error": "Chinese message"}
+- mcp_manifest() / openai_manifest(): export in the two protocol shapes
 """
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ class MCPToolRegistry:
     def __init__(self):
         self._tools: Dict[str, ToolSpec] = {}
 
-    # ---------- 注册 ----------
+    # ---------- Registration ----------
 
     def register(self, spec: ToolSpec) -> None:
         if spec.name in self._tools:
@@ -41,7 +41,7 @@ class MCPToolRegistry:
             return fn
         return deco
 
-    # ---------- 查询 ----------
+    # ---------- Queries ----------
 
     def get(self, name: str) -> Optional[ToolSpec]:
         return self._tools.get(name)
@@ -56,26 +56,26 @@ class MCPToolRegistry:
         return out
 
     def mcp_manifest(self) -> List[Dict[str, Any]]:
-        """MCP 协议 tools/list 格式"""
+        """MCP protocol tools/list format."""
         return [s.to_mcp() for s in self._tools.values()]
 
     def openai_manifest(self, include_write: bool = True) -> List[Dict[str, Any]]:
-        """OpenAI/deepseek function-calling 格式 (默认全量; 写类工具可过滤)"""
+        """OpenAI/deepseek function-calling format (all tools by default; write tools can be filtered out)."""
         return [s.to_openai() for s in self._tools.values()
                 if include_write or s.read_only]
 
-    # ---------- 执行 ----------
+    # ---------- Execution ----------
 
     def call(
             self, name: str, arguments: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
-        """统一调用入口。所有异常都转成中文错误信封, 不向上抛。"""
+        """Unified invocation entry. All exceptions become a Chinese error envelope; nothing propagates upward."""
         spec = self._tools.get(name)
         if spec is None:
             return {"ok": False, "tool": name,
                     "error": f"未知工具: {name}。可用: {', '.join(self._tools)}"}
         args = {k: v for k, v in (arguments or {}).items() if v is not None}
-        # 剔除 schema 未声明的参数 (防 LLM 幻觉参数导致 TypeError)
+        # Drop parameters not declared in the schema (guards against LLM-hallucinated args causing TypeError)
         known = spec.params_schema.get("properties", {})
         unknown = [k for k in args if k not in known]
         if unknown:
@@ -94,7 +94,7 @@ class MCPToolRegistry:
         except TypeError as e:
             return {"ok": False, "tool": name,
                     "error": f"参数不匹配: {e}"}
-        except Exception as e:  # noqa: BLE001 兜底, 错误消息必须回传给 LLM
+        except Exception as e:  # noqa: BLE001 catch-all; the error message must be returned to the LLM
             return {"ok": False, "tool": name,
                     "error": f"工具内部错误 ({type(e).__name__}): {e}"}
 

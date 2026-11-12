@@ -1,18 +1,20 @@
 # -*- encoding: utf-8 -*-
-"""FastMCP 出口 (stdio 默认 / --http streamable HTTP) — legacy server.py 的企业化平替
+"""FastMCP exit (stdio by default / --http for streamable HTTP) — enterprise-grade replacement for legacy server.py.
 
-legacy (harness/mcp/server.py, 零依赖手写 JSON-RPC) 保留为回退出口;
-本出口依赖 fastmcp 4.x, 与其共存, 外部客户端换接入命令即可迁移。
+The legacy exit (harness/mcp/server.py, zero-dependency hand-written JSON-RPC) is kept
+as the fallback; this exit depends on fastmcp 4.x and coexists with it — external
+clients migrate by switching their connect command.
 
-用法:
+Usage:
     python -m harness.mcp.server_fastmcp                 # stdio (dsh/Claude Desktop)
-    python -m harness.mcp.server_fastmcp --http          # streamable HTTP (默认 127.0.0.1:8765)
+    python -m harness.mcp.server_fastmcp --http          # streamable HTTP (default 127.0.0.1:8765)
 
-环境变量:
-    ALPHA_MCP_READ_ONLY=0   放开写类工具 (默认 1=只读沙盒, 写类不注册)
-    MCP_HTTP_TOKEN=<token>  HTTP 模式 Bearer 静态令牌鉴权 (不设=无鉴权, 仅建议本机回环;
-                            企业化建议反代 JWT/OAuth 或替换 _StaticTokenVerifier)
-    MCP_HTTP_HOST / MCP_HTTP_PORT  (默认 127.0.0.1 / 8765)
+Environment variables:
+    ALPHA_MCP_READ_ONLY=0   unlock write tools (default 1 = read-only sandbox; write tools not registered)
+    MCP_HTTP_TOKEN=<token>  Bearer static-token auth in HTTP mode (unset = no auth; recommended only
+                            for loopback. For enterprise use, front with a reverse proxy doing
+                            JWT/OAuth, or replace _StaticTokenVerifier)
+    MCP_HTTP_HOST / MCP_HTTP_PORT  (default 127.0.0.1 / 8765)
 """
 from __future__ import annotations
 
@@ -22,7 +24,7 @@ import sys
 
 
 def _token_auth():
-    """MCP_HTTP_TOKEN 启用时返回静态令牌校验器; 未设置返回 None (无鉴权)"""
+    """Return a static-token verifier when MCP_HTTP_TOKEN is set; None (no auth) when unset."""
     expected = os.environ.get("MCP_HTTP_TOKEN", "")
     if not expected:
         return None

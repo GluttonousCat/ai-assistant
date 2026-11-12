@@ -1,8 +1,9 @@
 # -*- encoding: utf-8 -*-
-"""mcp/server.py 协议行为单测 (无 IO/无 DB, 直接测 handle())
+"""Protocol behavior unit tests for mcp/server.py (no IO/no DB; calls handle() directly).
 
-覆盖: 握手形状 / 错误通道分流 (协议级 JSON-RPC error vs 业务级 isError) /
-通知不回包 / 只读清单过滤。stdio 端到端见 mcp/README.md 验证记录。
+Coverage: handshake shape / error channel split (protocol-level JSON-RPC error vs
+business-level isError) / notifications get no reply / read-only manifest filtering.
+For stdio end-to-end see the verification records in mcp/README.md.
 """
 from __future__ import annotations
 
@@ -42,7 +43,7 @@ def test_unknown_method_returns_32601():
 
 
 def test_non_object_message_returns_32600():
-    # 合法 JSON 但非对象 (标量/数组) -> Invalid Request, id=null
+    # Valid JSON but not an object (scalar/array) -> Invalid Request, id=null
     for bad in (["batch"], "hello", 42):
         r = _resp(server.handle(bad))
         assert r["error"]["code"] == -32600
@@ -50,7 +51,7 @@ def test_non_object_message_returns_32600():
 
 
 def test_unknown_tool_returns_32602():
-    # MCP 规范: 未知工具是协议级错误, 走 JSON-RPC error 而非 isError
+    # MCP spec: unknown tool is a protocol-level error -> JSON-RPC error, not isError
     r = _resp(server.handle({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
                              "params": {"name": "no_such_tool",
                                         "arguments": {}}}))
@@ -66,7 +67,7 @@ def test_non_object_arguments_returns_32602():
 
 
 def test_write_tool_blocked_in_read_only_mode():
-    # 已注册但被只读闸门禁用的写类工具: 保留 isError + 中文原因 (策略提示而非协议错误)
+    # Write tool registered but gated off by read-only mode: keeps isError + Chinese reason (policy hint, not a protocol error)
     if not server.READ_ONLY:
         return
     r = _resp(server.handle({"jsonrpc": "2.0", "id": 4, "method": "tools/call",

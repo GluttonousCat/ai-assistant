@@ -1,11 +1,11 @@
 # -*- encoding: utf-8 -*-
 """
-风控/校验域工具 (2个, 全新实现):
-- detect_financial_risk   财务排雷 (多规则扫描近8报告期, 输出风险信号清单)
-- verify_forecasts        券商预测兑现校验 (历史预测 vs 实际值, 命中率/偏差)
+Risk / verification domain tools (2, fresh implementations):
+- detect_financial_risk   financial landmine detection (multi-rule scan over the last 8 report periods; outputs a risk-signal list)
+- verify_forecasts        broker forecast fulfillment verification (historical forecasts vs actuals; hit rate / bias)
 
-数据底座: fin.fina_indicator / income / balancesheet / cashflow + report_forecast,
-全部存量数据, 无 LLM。
+Data base: fin.fina_indicator / income / balancesheet / cashflow + report_forecast,
+all existing data, no LLM.
 """
 from __future__ import annotations
 
@@ -74,12 +74,12 @@ def detect_financial_risk(stock: str) -> Dict[str, Any]:
         alerts.append({"rule": rule, "level": level, "message": msg,
                        "values": {k: _jsonable(v) for k, v in values.items()}})
 
-    # ---- 指标序列 (升序: 旧->新) ----
+    # ---- Indicator series (ascending: old -> new) ----
     ind_asc = list(reversed(ind))
     gms = [(_str_date(r["end_date"]), _num(r["grossprofit_margin"])) for r in ind_asc]
     gm_vals = [v for _, v in gms if v is not None]
 
-    # 1. 毛利率连续下滑 (近3期严格递减, 累计降幅>3pp)
+    # 1. Gross margin declining for consecutive periods (strictly decreasing over the last 3, cumulative drop >3pp)
     if len(gm_vals) >= 3 and all(
             gm_vals[-i - 1] < gm_vals[-i - 2] for i in range(3)):
         drop = gm_vals[-1 - 2] - gm_vals[-1]
@@ -88,7 +88,7 @@ def detect_financial_risk(stock: str) -> Dict[str, Any]:
                 f"毛利率连续3期下滑, 累计降 {drop:.1f}pp",
                 {"series": gm_vals[-4:], "latest_end_date": gms[-1][0]})
 
-    # 2. 营收利润背离 (营收增长但利润增速大幅落后)
+    # 2. Revenue/profit divergence (revenue growing while profit growth lags far behind)
     if ind:
         r = ind[0]
         or_yoy, np_yoy = _num(r["or_yoy"]), _num(r["netprofit_yoy"])
@@ -100,7 +100,7 @@ def detect_financial_risk(stock: str) -> Dict[str, Any]:
                 {"or_yoy": or_yoy, "netprofit_yoy": np_yoy,
                  "end_date": _str_date(r["end_date"])})
 
-    # 3. 净利润增速骤降 (相邻报告期落差>25pp)
+    # 3. Net-profit growth slump (drop >25pp between adjacent report periods)
     if len(ind) >= 2:
         cur, prev = _num(ind[0]["netprofit_yoy"]), _num(ind[1]["netprofit_yoy"])
         if cur is not None and prev is not None and prev - cur > 25:
@@ -109,7 +109,7 @@ def detect_financial_risk(stock: str) -> Dict[str, Any]:
                 {"prev": prev, "latest": cur,
                  "end_date": _str_date(ind[0]["end_date"])})
 
-    # 4. 现金流与利润背离 (净利润>0 但经营现金流/净利<0.5, <0 更严重)
+    # 4. Cashflow/profit divergence (net profit >0 but OCF/profit <0.5; <0 is worse)
     if fin_rows:
         r = fin_rows[0]
         np_v, ocf = _num(r["n_income_attr_p"]), _num(r["n_cashflow_act"])
@@ -128,7 +128,7 @@ def detect_financial_risk(stock: str) -> Dict[str, Any]:
                      "ratio": round(ratio, 2),
                      "end_date": _str_date(r["end_date"])})
 
-    # 5. 商誉占净资产比
+    # 5. Goodwill as a share of net assets
     if fin_rows:
         r = fin_rows[0]
         gw, eq = _num(r["goodwill"]), _num(r["total_hldr_eqy_exc_min_int"])
@@ -141,7 +141,7 @@ def detect_financial_risk(stock: str) -> Dict[str, Any]:
                      "share_pct": round(share, 1),
                      "end_date": _str_date(r["end_date"])})
 
-    # 6. 杠杆抬升 (资产负债率较8期前+10pp 且 >60%)
+    # 6. Leverage rising (debt-to-assets +10pp vs 8 periods ago and >60%)
     dts = [_num(r["debt_to_assets"]) for r in ind_asc]
     dts = [v for v in dts if v is not None]
     if len(dts) >= 4:
@@ -150,7 +150,7 @@ def detect_financial_risk(stock: str) -> Dict[str, Any]:
                 f"资产负债率从 {dts[0]:.0f}% 升到 {dts[-1]:.0f}%",
                 {"debt_to_assets_series": dts})
 
-    # 7. 应收增速远超营收 (年报口径同比)
+    # 7. Receivables growing far faster than revenue (annual-report basis, YoY)
     if len(fin_rows) >= 5:
         def _annual(rows, key):
             out = {}
@@ -171,7 +171,7 @@ def detect_financial_risk(stock: str) -> Dict[str, Any]:
                     {"ar_yoy": round(ar_g, 1), "revenue_yoy": round(rev_g, 1),
                      "year": y1})
 
-    # 8. 扣非利润占比低 (扣非/归母 < 50%)
+    # 8. Low deducted-non-recurring profit share (deducted / attributable < 50%)
     if fin_rows:
         r = fin_rows[0]
         dedt, np_v = _num(r.get("net_after_nr_lp_correct")), _num(r["n_income_attr_p"])
@@ -203,7 +203,7 @@ def _str_date(d) -> str:
 # 18. verify_forecasts
 # ============================================================
 
-# 预测指标 -> 实际值取数 (A股口径)
+# Forecast metric -> where to fetch the actual value (A-share basis)
 _FORECAST_ACTUAL = {
     "revenue": ("fin.income", "revenue", "元"),
     "net_profit": ("fin.income", "n_income_attr_p", "元"),
@@ -219,14 +219,14 @@ _CNY_MAGNITUDE = [
 
 
 def _cny_factor(unit: str) -> Optional[float]:
-    """人民币单位 -> 元 的倍率 (/%类单位原值); 非人民币或未知单位返回 None"""
+    """RMB unit -> multiplier to yuan (/%-type units keep the raw value); returns None for non-RMB or unknown units."""
     u = (unit or "").strip().replace("人民币", "").replace("RMB", "")
     if any(mark in u for mark in ("美元", "美金", "日元", "台币", "港元",
                                   "韩元", "NT$", "$", "¥", "US")):
         return None
     if not u:
         return 1.0
-    for k, v in _CNY_MAGNITUDE:      # 长词优先, 兼容 '亿元/年' 等尾缀
+    for k, v in _CNY_MAGNITUDE:      # longer words first; tolerates suffixes like '亿元/年'
         if u.startswith(k) or u == k:
             return v
     return None
@@ -262,7 +262,7 @@ def verify_forecasts(stock: str) -> Dict[str, Any]:
     import re
     from collections import defaultdict
     groups = defaultdict(list)   # (type, year) -> [(value_yuan_or_native, org, date)]
-    skipped = defaultdict(int)   # 原因 -> 次数
+    skipped = defaultdict(int)   # reason -> count
     for r in rows:
         ftype = (r["forecast_type"] or "").strip()
         period = str(r["forecast_period"] or "").strip()
@@ -295,7 +295,7 @@ def verify_forecasts(stock: str) -> Dict[str, Any]:
                 f"AND report_type='1' LIMIT 1",
                 (hit["ts_code"], f"{year}-12-31"))
             if not row or row["v"] is None:
-                continue  # 年报未出, 无法验证
+                continue  # annual report not yet published; cannot verify
             actual = float(row["v"])
             vals = [v for v, _, _ in items]
             mean_f = sum(vals) / len(vals)

@@ -1,23 +1,23 @@
 # -*- encoding: utf-8 -*-
 """
-Agent 对话循环 (新对话入口的核心)
+Agent conversation loop (core of the new conversation entry point).
 
-范式: LLM 自主决策 + MCP 工具循环 (替代旧的 意图路由+固定管道)
-  user -> [system(口径知识+守则) + 会话历史 + user]
-       -> LLM(deepseek, function-calling, 18 个只读工具)
-       -> 工具执行 (线程+超时) -> 结果回填 -> 再决策 ... -> 最终中文回答
+Paradigm: LLM autonomous decision + MCP tool loop (replaces the old intent-routing + fixed pipelines)
+  user -> [system(caliber knowledge + rules) + session history + user]
+       -> LLM (deepseek, function-calling, 18 read-only tools)
+       -> tool execution (thread + timeout) -> result fed back -> decide again ... -> final Chinese answer
 
-沙盒策略 (只读安全):
-- 只暴露 read_only=True 工具 (17 个; forge_chain 等写类不进对话)
-- 每工具超时 (默认 120s, 重扫描 900s); 超时即返回错误给 LLM, 不再等待
-- LLM 决策轮数上限 (MAX_ROUNDS); 重复调用相同工具+参数防死循环
-- 工具结果注入 LLM 前截断 (MAX_RESULT_CHARS); 工具本身有行数上限 (df_payload)
+Sandbox policy (read-only safety):
+- Only read_only=True tools are exposed (17; write tools like forge_chain never enter the conversation)
+- Per-tool timeout (default 120s, heavy scans 900s); on timeout an error is returned to the LLM instead of waiting
+- Cap on LLM decision rounds (MAX_ROUNDS); repeated calls of the same tool+args guard against infinite loops
+- Tool results are truncated before injection into the LLM (MAX_RESULT_CHARS); tools themselves cap row counts (df_payload)
 
-事件协议 (SSE, 与旧链路同构, 前端零改动可用):
-  stage     {stage:"tool", message:"调用 query_financials …"}   工具执行进度
-  tool_call {tool, args, ok, elapsed_ms, rows}                   工具结果元信息 (新)
-  data      {intent:"agent", tool, data, columns, rows}          表格型结果 (图表渲染)
-  delta     {text}                                               最终回答分块
+Event protocol (SSE, isomorphic with the old chain so the frontend works unchanged):
+  stage     {stage:"tool", message:"调用 query_financials …"}   tool execution progress
+  tool_call {tool, args, ok, elapsed_ms, rows}                   tool result metadata (new)
+  data      {intent:"agent", tool, data, columns, rows}          tabular result (chart rendering)
+  delta     {text}                                               final answer chunks
 """
 from __future__ import annotations
 
@@ -35,25 +35,25 @@ logger = get_logger(__name__)
 
 SseFormatter = Callable[[str, object], str]
 
-# ---------- 沙盒参数 (默认值; config.yaml agent.sandbox 可覆盖, 重启生效) ----------
+# ---------- Sandbox parameters (defaults; overridable via config.yaml agent.sandbox, effective after restart) ----------
 _sb = get_config()
-FAST_LANE_ENABLED = bool(_sb.get("agent.fast_lane.enabled", True))   # 快车道总开关 (config)
+FAST_LANE_ENABLED = bool(_sb.get("agent.fast_lane.enabled", True))   # fast-lane master switch (config)
 MAX_ROUNDS = int(_sb.get("agent.sandbox.max_rounds", 8))
 MAX_RESULT_CHARS = int(_sb.get("agent.sandbox.max_result_chars", 4000))
-REPEAT_LIMIT = int(_sb.get("agent.sandbox.repeat_limit", 3))          # 相同 (工具,参数) 最多调用次数
-MAX_SAME_TOOL_CALLS = int(_sb.get("agent.sandbox.max_same_tool_calls", 4))   # 同名工具上限, 防按环节逐个刷
-TOOL_TIMEOUTS: Dict[str, int] = {    # 秒; 未列出的默认 DEFAULT_TOOL_TIMEOUT
-    "run_quant_scan": 900,           # 全市场扫描分钟级
-    "extract_document": 600,         # 扫描件 OCR
-    "read_report": 180,              # 带 question 时内部走 LLM
+REPEAT_LIMIT = int(_sb.get("agent.sandbox.repeat_limit", 3))          # max calls of the same (tool, args)
+MAX_SAME_TOOL_CALLS = int(_sb.get("agent.sandbox.max_same_tool_calls", 4))   # per-tool-name cap, prevents grinding segment by segment
+TOOL_TIMEOUTS: Dict[str, int] = {    # seconds; unlisted tools use DEFAULT_TOOL_TIMEOUT
+    "run_quant_scan": 900,           # full-market scan takes minutes
+    "extract_document": 600,         # scanned-document OCR
+    "read_report": 180,              # with a question it runs an LLM internally
     "analyze_chain": 300,
-    # config 覆盖项最后合并 (单键覆盖默认)
+    # config overrides merged last (single keys override defaults)
     **{k: int(v) for k, v in (_sb.get("agent.sandbox.tool_timeouts") or {}).items()},
 }
 DEFAULT_TOOL_TIMEOUT = int(_sb.get("agent.sandbox.default_tool_timeout", 120))
 
 
-# ---------- 系统提示词 (专业 Know-How 都在这里) ----------
+# ---------- System prompt (professional know-how lives here) ----------
 def build_system_prompt() -> str:
     from datetime import date
     return f"""你是 Alpha Finance Radar 平台的投研助手 (今天是 {date.today().isoformat()})。
@@ -100,7 +100,7 @@ def build_system_prompt() -> str:
 
 
 def _extract_table(data: Any) -> Optional[Dict[str, Any]]:
-    """从工具结果中提取表格"""
+    """Extract a table from a tool result."""
     if not isinstance(data, dict):
         return None
     for holder in (data, data.get("table")):
@@ -112,7 +112,7 @@ def _extract_table(data: Any) -> Optional[Dict[str, Any]]:
 
 
 def _fmt_tool_args(args: Dict[str, Any]) -> str:
-    """参数 -> 短摘要 (stage 气泡与历史记录共用)"""
+    """Args -> short summary (shared by the stage bubbles and history records)."""
     parts = []
     for k, v in (args or {}).items():
         if v in (None, "", []):
@@ -123,7 +123,7 @@ def _fmt_tool_args(args: Dict[str, Any]) -> str:
 
 
 async def _run_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
-    """沙盒执行"""
+    """Sandboxed execution."""
     from harness.mcp import get_registry
     registry = get_registry()
     timeout = TOOL_TIMEOUTS.get(name, DEFAULT_TOOL_TIMEOUT)
@@ -137,58 +137,61 @@ async def _run_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 async def _execute_batch(calls: List[tuple]) -> List[Dict[str, Any]]:
-    """并行执行一组同轮工具调用 (彼此无依赖), 返回与入参同序的信封列表"""
+    """Execute a batch of same-round tool calls in parallel (mutually independent); returns envelopes in input order."""
     if len(calls) == 1:
         return [await _run_tool(calls[0][0], calls[0][1])]
     return list(await asyncio.gather(*[_run_tool(n, a) for n, a in calls]))
 
 
 # ============================================================
-# 快车道: 高置信简单 query/compare 直连 FinQuerySkill (省 1-2 轮 LLM 决策)
+# Fast lane: high-confidence simple query/compare goes straight to FinQuerySkill (saves 1-2 LLM decision rounds)
 # ============================================================
 
-FAST_PATH_CONFIDENCE = 0.85   # 仅核心词命中 (0.9/0.95) 才走, 宁可漏走快车道不可误走
-NL2SQL_TIMEOUT = 30           # 快车道 LLM 生成 SQL 超时 (秒), 超时走规则兜底
+FAST_PATH_CONFIDENCE = 0.85   # only core-keyword hits (0.9/0.95) qualify; better to miss the fast lane than take it wrongly
+NL2SQL_TIMEOUT = 30           # fast-lane LLM SQL generation timeout (seconds); on timeout fall back to the rule engine
 
-# 深水区词: 出现任一即放弃快车道 — 这些词意味着复合意图/延伸域/要分析,
-# 快车道只会答一半 (如"最新市盈率和估值分位一起看看"曾只返回行情宽表)
+# Deep-water words: any occurrence abandons the fast lane — these words imply compound intents /
+# extended domains / analysis needs, where the fast lane would answer only half
+# (e.g. "最新市盈率和估值分位一起看看" once returned only the wide quotes table)
 _DEEP_WORDS = ("分析", "怎么看", "怎么样", "为什么", "一起", "同时", "还有", "再看看",
                "对比分析", "分位", "水位", "预期差", "分歧", "研报", "风险", "排雷",
                "产业链", "环节", "受益", "形态", "扫描", "预测", "兑现", "财报体检")
 
 
 def _fast_path_intent(text: str) -> Optional[str]:
-    """L1 纯规则判定 (不调 LLM): 返回 'query'/'compare' 走快车道, None 走 Agent 循环
+    """Pure L1 rule verdict (no LLM call): returns 'query'/'compare' for the fast lane, None for the Agent loop.
 
-    三重门槛 (宁漏勿误 — 误走快车道会把复合/常识问题截胡答一半):
-    ① L1 命中 query/compare 且置信度 >= 0.85 (核心词/组合信号);
-    ② 文本含股票实体 (词典/6位代码) — 数据查询必有标的,
-      "什么是市盈率"/"特斯拉的营收" 这类无 A 股实体的问题交给 Agent 循环判断;
-    ③ 不含深水区词 (_DEEP_WORDS) — 复合意图/延伸域交给 Agent 循环完整作答。
+    Triple gate (prefer missing over mis-hitting — a wrong fast-lane hit would hijack a
+    compound/common-sense question and answer only half of it):
+    (1) L1 hits query/compare with confidence >= 0.85 (core keyword / composite signal);
+    (2) text contains a stock entity (dictionary / 6-digit code) — a data query must have a
+      target; questions without an A-share entity like "什么是市盈率"/"特斯拉的营收" go to the Agent loop;
+    (3) no deep-water words (_DEEP_WORDS) — compound intents / extended domains go to the
+      Agent loop for a complete answer.
     """
     try:
         if any(w in text for w in _DEEP_WORDS):
             return None
         from harness.intent import get_intent_classifier
         clf = get_intent_classifier()
-        r = clf._rule_classify(text)          # L1 only, 毫秒级
+        r = clf._rule_classify(text)          # L1 only, millisecond-level
         if r.intent not in ("query", "compare") or r.confidence < FAST_PATH_CONFIDENCE:
             return None
         from tools.finance.stock_kb import get_stock_kb
         if not get_stock_kb().match_stock(text):
             return None
         return r.intent
-    except Exception as e:  # noqa: BLE001 快车道失败不影响主路径
+    except Exception as e:  # noqa: BLE001 fast-lane failure must not affect the main path
         logger.debug(f"快车道判定异常: {e}")
     return None
 
 
 # ============================================================
-# 快车道 NL2SQL: LLM 生成 (复杂时间/指标表述更稳), 规则引擎兜底
+# Fast-lane NL2SQL: LLM generation (more robust for complex time/metric phrasing), rule engine as fallback
 # ============================================================
 
 def _extract_sql(text: str) -> Optional[str]:
-    """从 LLM 输出剥出 SQL (剥 ```sql 围栏, 取第一条 SELECT/WITH 语句)"""
+    """Extract SQL from LLM output (strip ```sql fences, take the first SELECT/WITH statement)."""
     import re
     if not text:
         return None
@@ -205,7 +208,7 @@ def _extract_sql(text: str) -> Optional[str]:
 
 
 def _alias_digest(limit: int = 34) -> str:
-    """指标中文别名 -> 字段 映射摘要 (进 prompt, 控制长度)"""
+    """Metric Chinese-alias -> field mapping digest (goes into the prompt; length-capped)."""
     try:
         from skills.fin_query.skill import METRIC_ALIAS_FULL
         items = list(METRIC_ALIAS_FULL.items())[:limit]
@@ -215,17 +218,17 @@ def _alias_digest(limit: int = 34) -> str:
 
 
 def _llm_nl2sql(text: str, context_stocks=None) -> Optional[str]:
-    """LLM 生成只读 SELECT (同步, 由上层 to_thread 包裹)。
+    """LLM generates a read-only SELECT (synchronous; wrapped in to_thread by callers).
 
-    规则引擎对 '最近三年' 这类相对时间不生成过滤 (recent_years 落空分支),
-    时序跨度失真 — LLM 生成对时间/指标/复合条件更稳, 规则引擎仅作兜底。
+    The rule engine generates no filter for relative times like '最近三年' (recent_years
+    falls into an empty branch), distorting the time span — LLM generation is more robust
+    for time/metric/compound conditions; the rule engine is only a fallback.
     """
-    import re
     from harness.llm import get_nl2sql_llm
     from harness.mcp.tools._common import resolve_stocks
     from tools.finance.sql_guard import validate_sql
 
-    # 实体解析在规则层完成 (毫秒级), LLM 只负责拼 SQL — 实体零幻觉
+    # Entity resolution happens in the rule layer (milliseconds); the LLM only assembles SQL — zero entity hallucination
     entities = resolve_stocks(text) or []
     if context_stocks and not entities:
         entities = [{"ts_code": c, "name": n} for c, n in context_stocks]
@@ -265,7 +268,7 @@ def _llm_nl2sql(text: str, context_stocks=None) -> Optional[str]:
 用户问题: {text}"""
     try:
         resp = get_nl2sql_llm().invoke(prompt)
-    except Exception as e:  # noqa: BLE001 LLM 失败走规则兜底
+    except Exception as e:  # noqa: BLE001 LLM failure falls back to the rule engine
         logger.warning(f"快车道 LLM 生成 SQL 失败: {e}")
         return None
     sql = _extract_sql(resp)
@@ -277,11 +280,11 @@ def _llm_nl2sql(text: str, context_stocks=None) -> Optional[str]:
 
 async def _fast_query_stream(text: str, session_id: Optional[str],
                              sse: SseFormatter) -> AsyncIterator[str]:
-    """快车道: LLM 生成 SQL (规则引擎兜底) -> 校验 -> 执行 -> 图表 + 规则简报。
+    """Fast lane: LLM generates SQL (rule engine as fallback) -> validate -> execute -> chart + rule-based brief.
 
-    单次 LLM 调用 (~4-10s), 省掉 Agent 循环的工具选择与作答轮;
-    简报仍为零 LLM 规则摘要, 深度解读由追问触发 Agent 循环。
-    与 Agent 循环同事件协议; 结果写入会话历史, 追问可无缝衔接。
+    A single LLM call (~4-10s) saves the Agent loop's tool-selection and answering rounds;
+    the brief is still a zero-LLM rule summary; deeper interpretation is triggered by follow-ups entering the Agent loop.
+    Same event protocol as the Agent loop; results go into session history so follow-ups continue seamlessly.
     """
     from harness.session import get_session_stocks, update_session_from_result
     from skills.fin_query.skill import FinQuerySkill, _result_brief
@@ -292,7 +295,7 @@ async def _fast_query_stream(text: str, session_id: Optional[str],
     skill = FinQuerySkill()
     context_stocks = get_session_stocks(session_id)
 
-    # 1. LLM 生成 (主, 30s 超时), 规则引擎 (兜底)
+    # 1. LLM generation (primary, 30s timeout), rule engine (fallback)
     yield sse("stage", {"stage": "sql", "message": "LLM 生成查询语句…"})
     sql = None
     try:
@@ -346,21 +349,22 @@ async def _fast_query_stream(text: str, session_id: Optional[str],
 async def _decision_loop(llm, tools, messages: List[Dict[str, Any]],
                          sse: SseFormatter, holder: Dict[str, Any],
                          max_rounds: int = MAX_ROUNDS) -> AsyncIterator[str]:
-    """共享决策循环 (全工具/域子Agent/升级续跑 共用一份机制)。
+    """Shared decision loop (one mechanism for full-tools / domain subagent / escalated continuation).
 
-    产出 SSE 事件; 结束时写 holder:
-      final_text  最终回答 (无工具调用轮的 content)
-      tool_events [{name, args, ok, elapsed_ms, rows}] (跨调用累积)
-      escalated   bool — 子Agent调用了 escalate 伪工具, 申请全工具接管
-    messages 原地追加 (升级续跑时已获上下文保留)。
+    Emits SSE events; on exit writes to holder:
+      final_text  final answer (content of the round with no tool calls)
+      tool_events [{name, args, ok, elapsed_ms, rows}] (accumulated across calls)
+      escalated   bool — the subagent called the escalate pseudo-tool, requesting full-tool takeover
+    messages is appended in place (context already gathered is preserved across escalation).
 
-    沙盒: 只执行本次 manifest 里列出的工具 (模型偶尔会幻觉调用清单外
-    但全局注册表里存在的工具名 — 曾实测发生, 必须在执行层拦截并引导走 escalate)。
+    Sandbox: only tools listed in this round's manifest are executed (the model occasionally
+    hallucinates tool names outside the manifest but present in the global registry — observed
+    in practice; must be blocked at the execution layer and guided toward escalate).
     """
     from harness.subagent import ESCALATE_TOOL
     allowed = {t["function"]["name"] for t in tools}
-    call_counts: Dict[str, int] = {}          # (工具, 参数) 精确防重复
-    name_counts: Dict[str, int] = {}          # 同名工具次数 (防按环节逐个刷)
+    call_counts: Dict[str, int] = {}          # exact (tool, args) dedup
+    name_counts: Dict[str, int] = {}          # per-tool-name call count (prevents grinding segment by segment)
     holder.setdefault("tool_events", [])
     holder["final_text"] = ""
     holder["escalated"] = False
@@ -374,8 +378,8 @@ async def _decision_loop(llm, tools, messages: List[Dict[str, Any]],
             holder["final_text"] = (msg.content or "").strip()
             return
 
-        # ---- 解析本轮调用 (escalate 伪工具优先拦截) ----
-        batch = []          # [(tc, fname, fargs, env_or_None)]  None=待执行
+        # ---- Parse this round's calls (escalate pseudo-tool intercepted first) ----
+        batch = []          # [(tc, fname, fargs, env_or_None)]  None=pending execution
         for tc in tool_calls:
             fname = tc.function.name
             try:
@@ -394,7 +398,7 @@ async def _decision_loop(llm, tools, messages: List[Dict[str, Any]],
                 holder["tool_events"].append({
                     "name": ESCALATE_TOOL, "args": fargs, "ok": True,
                     "elapsed_ms": 0, "rows": 0})
-                # 协议完整性: tool_call 必须有对应 tool 消息
+                # Protocol integrity: every tool_call must have a matching tool message
                 messages.append({"role": "assistant", "content": None,
                                  "tool_calls": [
                                      {"id": tc.id, "type": "function",
@@ -409,7 +413,8 @@ async def _decision_loop(llm, tools, messages: List[Dict[str, Any]],
                 return
 
             if fname not in allowed:
-                # 幻觉工具名: 清单外 (哪怕全局注册表存在) 一律拒绝并引导升级
+                # Hallucinated tool name: anything outside the manifest (even if present
+                # in the global registry) is rejected and redirected toward escalation
                 batch.append((tc, fname, fargs, {
                     "ok": False, "tool": fname,
                     "error": f"当前子Agent未开放工具 {fname}。"
@@ -425,8 +430,8 @@ async def _decision_loop(llm, tools, messages: List[Dict[str, Any]],
                 continue
             batch.append((tc, fname, fargs, None))
 
-        # ---- stage 事件 + 重复调用防护 ----
-        # batch/batch_size: 同轮并行标记, 前端按轮分组展示并正确匹配耗时
+        # ---- stage events + repeat-call protection ----
+        # batch/batch_size: same-round parallel markers; the frontend groups by round and matches latencies correctly
         batch_size = len(batch)
         for i, (tc, fname, fargs, _) in enumerate(batch):
             key = f"{fname}|{json.dumps(fargs, ensure_ascii=False, sort_keys=True)}"
@@ -440,7 +445,7 @@ async def _decision_loop(llm, tools, messages: List[Dict[str, Any]],
                     "error": "该调用已重复执行多次且参数相同, 请勿再重复; "
                              "请基于已有结果直接回答用户"})
 
-        # ---- 并行执行 (耗时取 max 而非求和) ----
+        # ---- Parallel execution (wall time is max, not sum) ----
         pending = [i for i, (_, _, _, env) in enumerate(batch) if env is None]
         if pending:
             results = await _execute_batch(
@@ -448,7 +453,7 @@ async def _decision_loop(llm, tools, messages: List[Dict[str, Any]],
             for i, env in zip(pending, results):
                 batch[i] = (batch[i][0], batch[i][1], batch[i][2], env)
 
-        # ---- 按原序回填: messages + 事件 ----
+        # ---- Feed results back in original order: messages + events ----
         for tc, fname, fargs, env in batch:
             rows = 0
             table = _extract_table(env.get("data")) if env.get("ok") else None
@@ -459,7 +464,7 @@ async def _decision_loop(llm, tools, messages: List[Dict[str, Any]],
                 "name": fname, "args": fargs, "ok": env.get("ok", False),
                 "elapsed_ms": env.get("elapsed_ms", 0), "rows": rows})
 
-            # 工具结果回填给 LLM (截断保护)
+            # Feed the tool result back to the LLM (truncation protection)
             result_json = json.dumps(env, ensure_ascii=False, default=str)
             if len(result_json) > MAX_RESULT_CHARS:
                 result_json = result_json[:MAX_RESULT_CHARS] + \
@@ -487,7 +492,7 @@ async def _decision_loop(llm, tools, messages: List[Dict[str, Any]],
                                    "rows": rows})
 
         if round_no == max_rounds:
-            # 轮数用尽: 强制收口 (禁工具, 基于已获数据作答)
+            # Rounds exhausted: force a wrap-up (tools disabled, answer from data already gathered)
             messages.append({"role": "system", "content":
                              "已达工具调用轮数上限, 请立即基于已有信息给出最终中文回答。"})
             msg = await asyncio.to_thread(
@@ -499,13 +504,14 @@ async def run_agent_stream(text: str, session_id: Optional[str],
                            sse: SseFormatter,
                            fast_lane: Optional[bool] = None,
                            use_subagent: bool = True) -> AsyncIterator[str]:
-    """Agent 主循环 (async generator, 产出 SSE 帧; 不发 done, 由 api 层统一收尾)
+    """Agent main loop (async generator emitting SSE frames; does not emit done — the api layer wraps up uniformly).
 
-    路径: 快车道(高置信简单查询, 零 LLM) → 域子Agent(L1 规则单域命中, 域内
-    2~4 工具 + escalate 升级伪工具) → 全工具循环(未命中/复合/升级续跑)。
-    fast_lane 缺省跟随 config.yaml agent.fast_lane.enabled; 显式传参优先
-    (评测隔离: True 强制开 / False 强制关)。
-    全部事件经 trajectory tee 落盘 logs/trajectories/ (可 replay/归因)。
+    Paths: fast lane (high-confidence simple query, zero LLM) -> domain subagent (L1 rules hit a
+    single domain; 2-4 in-domain tools + escalate pseudo-tool) -> full-tool loop (miss / compound /
+    escalated continuation).
+    fast_lane defaults to config.yaml agent.fast_lane.enabled; explicit parameter wins
+    (evaluation isolation: True forces on / False forces off).
+    All events are teed through trajectory into logs/trajectories/ (replayable / attributable).
     """
     if fast_lane is None:
         fast_lane = FAST_LANE_ENABLED
@@ -527,7 +533,7 @@ async def run_agent_stream(text: str, session_id: Optional[str],
     from harness.subagent import DOMAIN_DEFS, domain_manifest, route_domain
 
     llm = get_agent_llm()
-    full_tools = openai_tools(include_write=False)   # 沙盒: 只读 17 个
+    full_tools = openai_tools(include_write=False)   # sandbox: 17 read-only tools
     messages: List[Dict[str, Any]] = [{"role": "system",
                                        "content": build_system_prompt()}]
     messages.extend(session.get_messages(session_id))
@@ -573,12 +579,12 @@ async def run_agent_stream(text: str, session_id: Optional[str],
         session.append_assistant(session_id, final_text, tool_events)
         metrics.record("session_end", session_id=session_id, ok=True)
 
-        # 最终回答分块推送 (打字机效果; 决策轮为非流式, 此处按块下发)
+        # Push the final answer in chunks (typewriter effect; decision rounds are non-streaming, so chunks are emitted here)
         for i in range(0, len(final_text), 80):
             yield sse_tee("delta", {"text": final_text[i:i + 80]})
             await asyncio.sleep(0.02)
 
-    except Exception as e:  # noqa: BLE001 顶层兜底, 保证 error 事件一定下发
+    except Exception as e:  # noqa: BLE001 top-level catch-all, guarantees the error event is always emitted
         logger.error(f"Agent 循环异常: {e}", exc_info=True)
         session.append_assistant(
             session_id, f"[异常] {e}", holder.get("tool_events") or [])
@@ -587,10 +593,10 @@ async def run_agent_stream(text: str, session_id: Optional[str],
         yield sse_tee("error", {"message": f"Agent 执行失败: {e}"})
 
 
-# ---------- 一次性调用 (非流式, 调试/测试用) ----------
+# ---------- One-shot invocation (non-streaming, for debugging/testing) ----------
 def run_agent(text: str, session_id: Optional[str] = None,
               fast_lane: Optional[bool] = None) -> Dict[str, Any]:
-    """同步入口: 收集全部事件, 返回 {answer, tool_events} (fast_lane 缺省跟随 config)"""
+    """Synchronous entry: collects all events, returns {answer, tool_events} (fast_lane defaults to config)."""
     events: List[Dict[str, Any]] = []
 
     def _collect(event: str, data: Any) -> str:
@@ -603,7 +609,7 @@ def run_agent(text: str, session_id: Optional[str] = None,
 
     asyncio.run(_run())
     answer = "".join(e.get("text", "") for e in events if e["event"] == "delta")
-    # 快车道不产生 tool_call 事件 (只有 data), 从 data 事件补记工具事实
+    # The fast lane emits no tool_call events (only data); reconstruct tool facts from data events
     tool_events = [e for e in events if e["event"] == "tool_call"]
     if not tool_events:
         tool_events = [{"tool": e.get("tool", "query_financials"), "ok": True,

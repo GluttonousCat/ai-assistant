@@ -1,15 +1,16 @@
 # -*- encoding: utf-8 -*-
 """
-Agent 会话 (Session) — 同一会话的完整上下文, 进程内存
+Agent session — full context of one conversation, held in process memory.
 
-会话 = 两类上下文, 生命周期一致 (TTL 30 分钟惰性清理, 重启即失):
-- 对话历史 (history): user/assistant 轮 + 工具调用摘要, 注入 LLM 用
-  (轮数/字符双限截断; 原始工具 JSON 不存——省 token, 全量轨迹在
-  harness/trajectory.py 落盘)
-- 股票槽位 (slots): 最近 3 只股票, 支持"它呢/环比呢"省略主语的追问
-  (快车道与 Text-to-SQL 均消费)
+A session = two context stores with a shared lifecycle (TTL 30 min with lazy cleanup, lost on restart):
+- Conversation history: user/assistant turns + tool-call digests, injected into the LLM
+  (dual turn-count/char limits; raw tool JSON is not kept — saves tokens; the full
+  trajectory is persisted by harness/trajectory.py)
+- Stock slots: the most recent 3 stocks, supporting subject-omitted follow-ups like
+  "它呢/环比呢" (consumed by both the fast lane and Text-to-SQL)
 
-设计: 个人平台单进程, 不落库; 多轮注入保持 user/assistant 严格配对。
+Design: single-process personal platform, no persistence; multi-turn injection keeps
+user/assistant strictly paired.
 """
 from __future__ import annotations
 
@@ -26,7 +27,7 @@ TTL_SECONDS = 30 * 60
 
 
 # ============================================================
-# 对话历史 (history)
+# Conversation history
 # ============================================================
 
 _MAX_TURNS = 12
@@ -38,7 +39,7 @@ _STORE: Dict[str, Deque[Dict[str, Any]]] = {}
 
 
 def _cleanup_locked(now: float) -> None:
-    """惰性清理过期会话"""
+    """Lazily clean up expired sessions."""
     expired = [sid for sid, turns in _STORE.items()
                if not turns or now - turns[-1]["ts"] > TTL_SECONDS]
     for sid in expired:
@@ -57,13 +58,13 @@ def append_user(session_id: Optional[str], text: str) -> None:
 
 def append_assistant(session_id: Optional[str], text: str,
                      tool_events: Optional[List[Dict[str, Any]]] = None) -> None:
-    """assistant 轮; tool_events: [{name, args, ok, elapsed_ms, rows}]"""
+    """Assistant turn; tool_events: [{name, args, ok, elapsed_ms, rows}]."""
     if not session_id:
         return
     with _LOCK:
         turns = _STORE.get(session_id)
         if not turns:
-            return  # 无对应 user 轮 (异常路径), 丢弃
+            return  # no matching user turn (error path); discard
         turns.append({"role": "assistant", "content": text,
                       "tools": tool_events or [], "ts": time.time()})
 
@@ -76,11 +77,11 @@ def _fmt_tool_line(t: Dict[str, Any]) -> str:
 
 
 def _turn_to_messages(turn: Dict[str, Any]) -> List[Dict[str, str]]:
-    """单轮 -> LLM messages。
+    """Single turn -> LLM messages.
 
-    工具摘要**不进 assistant 正文** (曾因拼进正文被模型模仿, 在回答末尾
-    自行生成"[本轮工具调用]"清单输出给用户) — 改由 get_messages
-    以 system 角色统一注入。
+    Tool digests **never go into the assistant body** (when they were once concatenated
+    into it, the model imitated them and emitted a "[本轮工具调用]" list at the end of
+    answers to users) — instead get_messages injects them uniformly as a system role.
     """
     if turn["role"] != "assistant":
         return [{"role": "user", "content": turn["content"]}]
@@ -93,12 +94,15 @@ def _turn_to_messages(turn: Dict[str, Any]) -> List[Dict[str, str]]:
 def get_messages(session_id: Optional[str],
                  max_turns: int = _INJECT_TURNS,
                  max_chars: int = _INJECT_MAX_CHARS) -> List[Dict[str, str]]:
-    """会话最近轮 -> LLM messages
+    """Recent session turns -> LLM messages.
 
-    按完整轮 (user + 其 assistant) 配对, 取最近 max_turns 轮, 再受 max_chars 截断;
-    始终保持 user/assistant 交替且以 user 开头 (中间被截的旧轮整体丢弃, 不产生孤儿消息)。
-    末尾若注入窗口内有工具调用, 追加一条 system 角色的后台记录 (供模型解析追问所指,
-    如"环比呢"该指向哪只股票哪个指标) — 不放 assistant 正文, 防模型模仿输出给用户。
+    Pairs full turns (user + its assistant), takes the most recent max_turns turns, then
+    truncates by max_chars; user/assistant always alternate starting with user (older turns
+    cut in the middle are dropped whole — no orphan messages are produced).
+    If any tool calls fall inside the injection window, a system-role background record is
+    appended (so the model can resolve what a follow-up like "环比呢" refers to — which
+    stock, which metric) — kept out of the assistant body to stop the model imitating it
+    back to the user.
     """
     if not session_id:
         return []
@@ -108,7 +112,7 @@ def get_messages(session_id: Optional[str],
     if not turns:
         return []
 
-    # 组完整轮: user 开头, 紧随的第一条 assistant 归它 (孤儿 assistant 跳过)
+    # Build full turns: a user turn plus the first assistant right after it (orphan assistants skipped)
     pairs: List[List[Dict[str, Any]]] = []
     i = 0
     while i < len(turns):
@@ -155,7 +159,7 @@ def reset(session_id: Optional[str]) -> None:
 
 
 # ============================================================
-# 股票槽位 (slots) — 省略主语追问的短期记忆
+# Stock slots — short-term memory for subject-omitted follow-ups
 # ============================================================
 
 _SLOT_LOCK = threading.Lock()
@@ -163,7 +167,7 @@ _SLOTS: Dict[str, Dict] = {}
 
 
 def get_session_stocks(session_id: Optional[str]) -> List[Tuple[str, str]]:
-    """取该会话最近一轮的股票 [(ts_code, name), ...]"""
+    """Get the session's most recent stocks [(ts_code, name), ...]."""
     if not session_id:
         return []
     with _SLOT_LOCK:
@@ -178,11 +182,11 @@ def get_session_stocks(session_id: Optional[str]) -> List[Tuple[str, str]]:
 
 def set_session_stocks(session_id: Optional[str],
                        stocks: List[Tuple[str, str]]) -> None:
-    """写入该会话的股票槽位 (空列表也写入, 表示本轮无股票 -> 追问链断开)"""
+    """Write the session's stock slots (an empty list is also written, meaning no stock this turn -> follow-up chain breaks)."""
     if not session_id:
         return
     with _SLOT_LOCK:
-        # 惰性清理过期会话
+        # Lazily clean up expired sessions
         now = time.time()
         for k in [k for k, v in _SLOTS.items() if now - v["updated_at"] > TTL_SECONDS]:
             _SLOTS.pop(k, None)
@@ -194,21 +198,21 @@ def set_session_stocks(session_id: Optional[str],
 
 def update_session_from_result(session_id: Optional[str], user_input: str,
                                data_rows) -> None:
-    """从本轮查询结果提取股票写回会话上下文.
-    本轮提取不到股票 (继承场景) 则保留原上下文不覆盖。"""
+    """Extract stocks from this turn's query result and write them back into session context.
+    If no stock is extracted this turn (inheritance scenario), keep the existing context unoverwritten."""
     if not session_id:
         return
     stocks: List[Tuple[str, str]] = []
     try:
         from tools.finance.stock_kb import get_stock_kb
         kb = get_stock_kb()
-        # 优先: 结果行里的 ts_code (财务 SQL 有该列)
+        # Preferred: ts_code in result rows (financial SQL has that column)
         for row in (data_rows or [])[:5]:
             if isinstance(row, dict) and row.get("ts_code"):
                 code = row["ts_code"]
                 if code not in [c for c, _ in stocks]:
                     stocks.append((code, kb.get_name(code) or code))
-        # 兜底: 从用户输入词典匹配 (行情 SQL 无 ts_code 列)
+        # Fallback: dictionary match against the user input (quotes SQL has no ts_code column)
         if not stocks:
             m = kb.match_stock(user_input)
             if m:

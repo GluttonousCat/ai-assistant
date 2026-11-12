@@ -1,16 +1,16 @@
 """
-分层意图识别器 (Layered Intent Classifier)
+Layered Intent Classifier.
 
-设计:
-- L1 规则层: 关键词+置信度评分 (确定性, 零成本, 秒响应)
-- L2 LLM 层: 调用 LLM 输出 JSON (处理复杂/口语化表达)
-- 决策: L1 高置信直接返回; 否则 L2; L2 低置信返回 unknown
+Design:
+- L1 rule layer: keyword + confidence scoring (deterministic, zero cost, instant response)
+- L2 LLM layer: call LLM which outputs JSON (handles complex / colloquial phrasing)
+- Decision: high-confidence L1 returns directly; otherwise L2; low-confidence L2 returns unknown
 
-置信度语义:
-- L1: 命中核心词 0.9, 命中一般词 0.7, 组合加权
-- L2: 模型自身输出的 confidence (0-1)
+Confidence semantics:
+- L1: core keyword hit 0.9, general keyword hit 0.7, combination-weighted
+- L2: the model's own reported confidence (0-1)
 
-用法:
+Usage:
     from harness.intent import LayeredIntentClassifier
     clf = LayeredIntentClassifier()
     intent, conf, slots = clf.classify("看看贵州茅台近三年的毛利率")
@@ -28,10 +28,10 @@ logger = get_logger(__name__)
 
 
 # ============================================================
-# 规则定义 (L1)
+# Rule definitions (L1)
 # ============================================================
 
-# 核心词: 命中即高置信
+# Core keywords: a hit yields high confidence
 CORE_KEYWORDS: Dict[str, List[str]] = {
     "query": ["营收", "营业收入", "净利润", "净利率", "毛利率", "毛利", "roe", "净资产收益率",
               "回报率", "市盈率", "市净率", "股价", "收盘价", "最新价", "市值", "涨跌幅",
@@ -48,7 +48,7 @@ CORE_KEYWORDS: Dict[str, List[str]] = {
     "alpha": ["预期差", "分歧度", "拐点", "预期在哪里"],
 }
 
-# 一般词: 命中给 0.6 基线
+# General keywords: a hit yields a 0.6 baseline
 GENERAL_KEYWORDS: Dict[str, List[str]] = {
     "query": ["查询", "查一下", "查查", "多少", "收入", "利润", "排名", "筛选",
               "大于", "小于", "同比", "看", "看看", "看下",
@@ -56,80 +56,80 @@ GENERAL_KEYWORDS: Dict[str, List[str]] = {
     "detect": ["风险", "异常", "检测"],
     "verify": ["校验", "验证", "研报", "一致性"],
     "report": ["报告", "生成", "写一份", "总结"],
-    # compare 口语句式: "谁毛利率高"/"哪个更高"/"谁的营收更高" (宽泛词给 0.6, 由优先级裁决)
+    # compare colloquial patterns: "谁毛利率高"/"哪个更高"/"谁的营收更高" (broad words get 0.6, resolved by priority)
     "compare": ["谁", "哪个", "更高", "更优", "孰"],
 }
 
-# 意图优先级 (同分时按此顺序; verify 在 report 前防 "验证XX的研报" 被抢)
+# Intent priority (on ties, this order wins; verify before report prevents "验证XX的研报" being hijacked by report)
 INTENT_PRIORITY = ["verify", "report", "detect", "chain", "alpha", "compare", "query"]
 
-# L1 高置信阈值 (>= 则直接返回, 不调 LLM)
+# L1 high-confidence threshold (>= means return directly, skip the LLM)
 HIGH_CONFIDENCE_THRESHOLD = 0.75
 
 
 @dataclass
 class IntentResult:
-    """意图识别结果"""
+    """Intent classification result."""
     intent: str
     confidence: float
     source: str  # 'rule' / 'llm' / 'fallback'
-    slots: Dict[str, Any] = field(default_factory=dict)  # 槽位 (实体)
+    slots: Dict[str, Any] = field(default_factory=dict)  # slots (entities)
 
 
 class LayeredIntentClassifier:
-    """分层意图分类器"""
+    """Layered intent classifier."""
 
     def __init__(self, llm: Optional[Any] = None, enable_llm: bool = True):
         self.config = get_config()
         self._llm = llm
-        # API key 非空才启用 LLM (空串/占位都不算)
+        # Enable the LLM only with a non-empty API key (empty string / placeholder do not count)
         self._enable_llm = (
             enable_llm and bool(self.config.openai_api_key)
         )
 
     @property
     def llm(self) -> Optional[Any]:
-        """懒加载 LLM"""
+        """Lazy-load the LLM."""
         if self._llm is None and self._enable_llm:
             from harness.llm import LLMClient
             self._llm = LLMClient()
         return self._llm
 
-    # ---------- 主入口 ----------
+    # ---------- Main entry ----------
     def classify(self, user_input: str) -> IntentResult:
         text = (user_input or "").strip()
         if not text:
             return IntentResult("unknown", 0.0, "fallback")
 
-        # L1: 规则
+        # L1: rules
         result = self._rule_classify(text)
         if result.intent != "unknown" and result.confidence >= HIGH_CONFIDENCE_THRESHOLD:
             return result
 
-        # L2: LLM (有 key 时)
+        # L2: LLM (when a key exists)
         if self.llm:
             llm_result = self._llm_classify(text)
             if llm_result is not None and llm_result.confidence >= HIGH_CONFIDENCE_THRESHOLD:
                 return llm_result
-            # LLM 结果存在但低置信, 与规则结果取高者
+            # LLM result exists but with low confidence: pick the higher of rule vs LLM result
             if llm_result is not None and result.confidence < llm_result.confidence:
                 return llm_result
 
         return result
 
-    # ---------- L1 规则层 ----------
+    # ---------- L1 rule layer ----------
     def _rule_classify(self, text: str) -> IntentResult:
         text_l = text.lower()
         scores: Dict[str, float] = {}
 
         for intent in INTENT_PRIORITY:
             score = 0.0
-            # 核心词
+            # Core keywords
             for kw in CORE_KEYWORDS.get(intent, []):
                 if kw in text_l:
                     score = max(score, 0.9)
                     break
-            # 一般词
+            # General keywords
             for kw in GENERAL_KEYWORDS.get(intent, []):
                 if kw in text_l:
                     score = max(score, 0.6)
@@ -137,25 +137,25 @@ class LayeredIntentClassifier:
             if score > 0:
                 scores[intent] = score
 
-        # compare 组合信号: 指标词 + 对比指示词 (谁/哪个/更高/vs) 共现 -> compare 强信号
-        # (否则 "谁毛利率更高" 会被 query 的指标核心词 0.9 压过)
+        # compare composite signal: metric word + comparison indicator word (谁/哪个/更高/vs) co-occurring -> strong compare signal
+        # (otherwise "谁毛利率更高" would be overwhelmed by query's 0.9 metric core keyword)
         if scores.get("query") and any(
             w in text_l for w in ("谁", "哪个", "更高", "更优", "vs", "孰")
         ):
             scores["compare"] = max(scores.get("compare", 0.0), 0.95)
 
-        # compare 强信号: 文本含 ≥2 个股票实体 ("X 和 Y 的指标")
+        # compare strong signal: text contains >= 2 stock entities ("X 和 Y 的指标")
         if scores.get("query") and self._count_stocks(text) >= 2:
             scores["compare"] = max(scores.get("compare", 0.0), 0.95)
 
         if not scores:
-            # 实体兜底: 同时含股票+指标实体 (电报体 "茅台 毛利率") -> query
+            # Entity fallback: contains both a stock + a metric entity (telegraphic style "茅台 毛利率") -> query
             if self._has_stock_and_metric(text):
                 slots = self._extract_slots_rule(text)
                 return IntentResult("query", 0.7, "rule", slots=slots)
             return IntentResult("unknown", 0.0, "rule")
 
-        # 取最高分意图
+        # Pick the highest-scoring intent
         best = max(scores, key=scores.get)
         conf = scores[best]
         slots = self._extract_slots_rule(text)
@@ -163,7 +163,7 @@ class LayeredIntentClassifier:
 
     @staticmethod
     def _count_stocks(text: str) -> int:
-        """统计文本中出现的股票实体数 (去重 + 区间互斥, 防 "平安银行" 同时命中 "平安")"""
+        """Count stock entities in text (dedup + interval exclusion, prevents "平安银行" also matching "平安")."""
         try:
             from tools.finance.stock_kb import get_stock_kb
             return get_stock_kb().count_stocks_in_text(text)
@@ -172,7 +172,7 @@ class LayeredIntentClassifier:
 
     @staticmethod
     def _has_stock_and_metric(text: str) -> bool:
-        """文本同时命中股票词典与指标词典 (轻量, 毫秒级)"""
+        """Text hits both the stock dictionary and the metric dictionary (lightweight, millisecond-level)."""
         try:
             from tools.finance.stock_kb import get_stock_kb
             kb = get_stock_kb()
@@ -180,25 +180,24 @@ class LayeredIntentClassifier:
         except Exception:
             return False
 
-    # ---------- 规则槽位提取 (股票/指标/时间) ----------
+    # ---------- Rule-based slot extraction (stock/metric/time) ----------
     def _extract_slots_rule(self, text: str) -> Dict[str, Any]:
-        """轻量槽位提取: 只提取核心指标词 (排除动作词)"""
+        """Lightweight slot extraction: only extracts core metric words (excludes action words)."""
         slots: Dict[str, Any] = {"metrics": []}
 
-        # 只取核心指标词 (CORE_KEYWORDS), 排除 GENERAL_KEYWORDS 里的动作词
+        # Only core metric words (CORE_KEYWORDS); exclude action words in GENERAL_KEYWORDS
         metric_kws = set(CORE_KEYWORDS["query"])
         for kw in metric_kws:
             if kw in text:
                 slots["metrics"].append(kw)
         return slots
 
-    # ---------- L2 LLM 层 ----------
+    # ---------- L2 LLM layer ----------
     def _llm_classify(self, text: str) -> Optional[IntentResult]:
-        """调用 LLM 输出: {"intent", "confidence", "stocks", "metrics", "time"}"""
+        """Call the LLM to output: {"intent", "confidence", "stocks", "metrics", "time"}."""
         if not self.llm:
             return None
         try:
-            from skills.fin_query.prompts import INTENT_ROUTER_PROMPT
             fallback_intent = self._rule_classify(text).intent
             prompt = (
                 "你是一个金融查询意图分类器。\n"
@@ -221,7 +220,7 @@ class LayeredIntentClassifier:
 
             intent = parsed["intent"].lower()
             if intent not in INTENT_PRIORITY + ["unknown", "compare"]:
-                intent = fallback_intent  # 非法类别回退规则
+                intent = fallback_intent  # illegal category falls back to rules
 
             conf = float(parsed.get("confidence", 0.5))
             conf = max(0.0, min(1.0, conf))
@@ -240,7 +239,7 @@ class LayeredIntentClassifier:
         if not text:
             return None
         t = text.strip()
-        # 去 ```json ``` 包裹
+        # Strip ```json ``` fences
         if t.startswith("```"):
             t = t.strip("`")
             if t.startswith("json"):
@@ -260,7 +259,7 @@ class LayeredIntentClassifier:
 
 
 # ============================================================
-# 快捷函数
+# Convenience functions
 # ============================================================
 
 _classifier: Optional[LayeredIntentClassifier] = None

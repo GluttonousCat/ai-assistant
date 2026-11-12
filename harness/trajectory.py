@@ -1,16 +1,18 @@
 # -*- encoding: utf-8 -*-
 """
-Agent 轨迹日志 (append-only JSONL)
+Agent trajectory log (append-only JSONL).
 
-DSH "全程可追溯" 思想的低成本落地: 每轮对话 (run_agent_stream 一次调用)
-落一个文件 logs/trajectories/<session>_<时间戳>.jsonl —
-首行 turn_start (用户输入), 其后逐事件 tee SSE 流 (stage/tool_call/data/delta/
-error), 事后可 replay 会话 / 归因 (evals 分析"模型为何误选工具"), 不再只有摘要
-(session 为省 token 只存摘要, 原始工具 JSON 此前直接丢弃)。
+A low-cost landing of the DSH "fully traceable" idea: each conversation turn (one
+run_agent_stream call) writes one file logs/trajectories/<session>_<timestamp>.jsonl —
+first line turn_start (user input), then every event tee'd from the SSE stream
+(stage/tool_call/data/delta/error). Afterwards a session can be replayed / attributed
+(evals can analyze "why the model picked the wrong tool") instead of having only
+summaries (session stores digests only to save tokens; raw tool JSON used to be
+discarded outright).
 
-- 零侵入: run_agent_stream 出口包装 sse formatter, 业务代码无感
-- 开关/保留: config.yaml agent.trajectory.enabled / retention_days (0=不清理)
-- 失败静默: 轨迹是旁路, 写入异常绝不影响对话主链路
+- Zero intrusion: run_agent_stream wraps its sse formatter at the exit; business code is unaware
+- Switch/retention: config.yaml agent.trajectory.enabled / retention_days (0 = never clean up)
+- Silent failure: trajectory is a side channel; write errors must never affect the main conversation chain
 """
 from __future__ import annotations
 
@@ -35,7 +37,7 @@ def _dir() -> Path:
 
 
 def _cleanup_locked(now: float) -> None:
-    """惰性清理过期轨迹 (每小时最多扫一次; 持锁调用)"""
+    """Lazily clean up expired trajectories (scan at most once per hour; called with lock held)."""
     global _last_cleanup
     if now - _last_cleanup < 3600:
         return
@@ -60,9 +62,9 @@ def _noop(event: str, data: Any) -> None:
 
 
 def open_turn(session_id: Optional[str], text: str) -> Callable[[str, Any], None]:
-    """开一轮轨迹文件并写入 turn_start; 返回 (event, data)->None 的 tee 函数。
+    """Open one turn's trajectory file, write turn_start; returns a (event, data)->None tee function.
 
-    agent.trajectory.enabled=false / 写失败 -> 返回 no-op (对话不受影响)。
+    agent.trajectory.enabled=false / write failure -> returns a no-op (conversation unaffected).
     """
     try:
         if not get_config().get("agent.trajectory.enabled", True):

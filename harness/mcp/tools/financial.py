@@ -1,14 +1,14 @@
 # -*- encoding: utf-8 -*-
 """
-财务/行情域工具 (8个):
-- query_financials        财务与行情查询 (单股/对比/行业/全市场排名, 底座 sql_builder)
-- query_main_business     主营构成查询 (靠什么赚钱/收入结构)
-- valuation_percentile    PE/PB 估值分位 (当前估值在历史中的水位)
-- query_dividend          分红送股历史 (派息/送转/登记日/除权日)
-- query_audit_opinion     审计意见 (结论/事务所/费用/签字会计师)
-- disclosure_calendar     财报披露日历 (预约/实际披露/延期)
-- analyze_cashflow        现金流质量 (三净额/自由现金流/净现比/收现比)
-- dupont_analysis         杜邦分解 (ROE三因子与驱动定位)
+Financial/quotes domain tools (8):
+- query_financials        financial & quotes queries (single/compare/industry/full-market rank; backed by sql_builder)
+- query_main_business     main-business composition (what it earns from / revenue structure)
+- valuation_percentile    PE/PB valuation percentile (current valuation vs its own history)
+- query_dividend          dividend & bonus-share history (payouts / bonus / record date / ex-date)
+- query_audit_opinion     audit opinions (conclusion / agency / fees / signing CPAs)
+- disclosure_calendar     report disclosure calendar (scheduled / actual / delays)
+- analyze_cashflow        cashflow quality (three net amounts / FCF / OCF-to-profit / cash-to-revenue)
+- dupont_analysis         DuPont decomposition (ROE three factors and driver attribution)
 """
 from __future__ import annotations
 
@@ -19,18 +19,18 @@ from harness.mcp.spec import ToolError, obj_schema, param
 from harness.mcp.tools._common import df_payload, resolve_one
 
 
-# 指标名 -> sql_builder 的 (field, prefix) 映射直接复用 FinQuerySkill 的别名表
+# Metric name -> sql_builder's (field, prefix) mapping reuses FinQuerySkill's alias table directly
 def _metric_alias() -> Dict[str, Dict[str, str]]:
     from skills.fin_query.skill import METRIC_ALIAS_FULL
     return METRIC_ALIAS_FULL
 
 
 def _resolve_metric(metric: str):
-    """中文指标 -> (裸字段名, 表前缀) ; sql_builder 需要 {prefix}.{bare_field}"""
+    """Chinese metric -> (bare field name, table prefix); sql_builder needs {prefix}.{bare_field}."""
     alias = _metric_alias()
     m = alias.get(metric) or alias.get(metric.strip())
     if not m:
-        # 宽容: 去掉常见后缀再试
+        # Tolerance: retry with common suffixes stripped/added
         for key in (metric.replace("率", ""), metric + "率"):
             if key in alias:
                 m = alias[key]
@@ -39,7 +39,7 @@ def _resolve_metric(metric: str):
         raise ToolError(
             f"不支持的指标: 「{metric}」。支持: "
             + "、".join(sorted(alias)[:40]))
-    dotted = m["field"]                    # 形如 'i.revenue' / 'db.pe_ttm'
+    dotted = m["field"]                    # e.g. 'i.revenue' / 'db.pe_ttm'
     prefix, _, bare = dotted.partition(".")
     return bare, prefix
 
@@ -107,7 +107,7 @@ def query_financials(mode: str = "single", stocks: List[str] = None,
     if not metrics:
         raise ToolError("必须提供至少一个指标 (metrics), 如 ['营收']")
 
-    # 时间表述 -> sql_builder 认的 (kw, val)
+    # Time phrase -> the (kw, val) form sql_builder understands
     time_phrase = None
     if time:
         from tools.finance.stock_kb import parse_time_phrase
@@ -149,7 +149,8 @@ def query_financials(mode: str = "single", stocks: List[str] = None,
         from tools.finance.stock_kb import get_stock_kb
         kb = get_stock_kb()
         kb.load()
-        # match_industry 需要行业语境词 (行业/板块), 工具入参只有行业名, 补齐
+        # match_industry needs an industry context word (行业/板块); the tool arg is the
+        # bare industry name, so append the context
         idx = kb.match_industry(f"{industry}行业")
         if not idx:
             raise ToolError(
@@ -270,7 +271,7 @@ def valuation_percentile(stock: str, years: int = 3) -> Dict[str, Any]:
 
 
 # ============================================================
-# 7. query_dividend 分红除权
+# 7. query_dividend (dividends & ex-rights)
 # ============================================================
 
 @REGISTRY.tool(
@@ -323,7 +324,7 @@ def query_dividend(stock: str, years: int = 10,
 
 
 # ============================================================
-# 8. query_audit_opinion 审计意见
+# 8. query_audit_opinion (audit opinion)
 # ============================================================
 
 @REGISTRY.tool(
@@ -374,7 +375,7 @@ def query_audit_opinion(stock: str, years: int = 15) -> Dict[str, Any]:
 
 
 # ============================================================
-# 9. disclosure_calendar 财报披露
+# 9. disclosure_calendar (report disclosure)
 # ============================================================
 
 @REGISTRY.tool(
@@ -440,7 +441,7 @@ def disclosure_calendar(stock: str = "", date: str = "",
 
 
 # ============================================================
-# 10. analyze_cashflow 现金流分析
+# 10. analyze_cashflow (cashflow analysis)
 # ============================================================
 
 @REGISTRY.tool(
@@ -497,7 +498,7 @@ def analyze_cashflow(stock: str, periods: int = 8) -> Dict[str, Any]:
         d["sales_cash_to_rev"] = _ratio(r["c_fr_sale_sg"], r["revenue"])
         for k in yi:
             if d.get(k) is not None:
-                d[k] = round(d[k] / 1e8, 2)   # 元 -> 亿元
+                d[k] = round(d[k] / 1e8, 2)   # yuan -> 100M yuan (亿)
         data.append(d)
     verdict = None
     ratios = [d["ocf_to_profit"] for d in data if d["ocf_to_profit"] is not None]
@@ -510,7 +511,7 @@ def analyze_cashflow(stock: str, periods: int = 8) -> Dict[str, Any]:
 
 
 # ============================================================
-# 11. dupont_analysis 杜邦分析
+# 11. dupont_analysis (DuPont analysis)
 # ============================================================
 
 @REGISTRY.tool(
@@ -557,7 +558,7 @@ def dupont_analysis(stock: str, years: int = 5) -> Dict[str, Any]:
         else:
             d["product_check"] = None
         data.append(d)
-    data.reverse()   # 旧 -> 新
+    data.reverse()   # old -> new
     drivers = None
     if len(data) >= 2:
         prev, cur = data[-2], data[-1]

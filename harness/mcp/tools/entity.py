@@ -1,14 +1,14 @@
 # -*- encoding: utf-8 -*-
 """
-实体/知识域工具 (8个):
-- resolve_stock           股票实体解析
-- get_schema              数据字典
-- trading_calendar        A股交易日历
-- query_top_holders       十大股东 (持股/变动/性质)
-- query_industry          申万行业归属与同行业成分
-- query_share_structure   股本结构变迁 (总股本/流通/自由流通)
-- get_session_history     历史对话检索 (轨迹回放)
-- make_table              临时数据制表 (markdown 表格)
+Entity/knowledge domain tools (8):
+- resolve_stock           stock entity resolution
+- get_schema              data dictionary
+- trading_calendar        A-share trading calendar
+- query_top_holders       top-10 holders (holdings / changes / type)
+- query_industry          Shenwan industry membership and same-industry constituents
+- query_share_structure   share-structure history (total/float/free-float)
+- get_session_history     historical conversation retrieval (trajectory replay)
+- make_table              ad-hoc tabulation of data (markdown table)
 """
 from __future__ import annotations
 
@@ -136,7 +136,7 @@ def trading_calendar(action: str = "last", ref_date: str = "",
 
 
 # ============================================================
-# 4. query_top_holders 十大股东
+# 4. query_top_holders (top-10 holders)
 # ============================================================
 
 @REGISTRY.tool(
@@ -175,7 +175,7 @@ def query_top_holders(stock: str, periods: int = 1) -> Dict[str, Any]:
             if hasattr(v, "isoformat"):
                 d[k] = v.isoformat()
             elif k in ("hold_amount", "hold_change") and v is not None:
-                d[k] = round(float(v) / 1e4, 2)     # 万股 -> 亿股
+                d[k] = round(float(v) / 1e4, 2)     # 10k shares -> 100M shares (亿)
             elif hasattr(v, "quantize"):
                 d[k] = float(v)
             else:
@@ -191,7 +191,7 @@ def query_top_holders(stock: str, periods: int = 1) -> Dict[str, Any]:
 
 
 # ============================================================
-# 5. query_industry 申万行业
+# 5. query_industry (Shenwan industry)
 # ============================================================
 
 @REGISTRY.tool(
@@ -237,7 +237,7 @@ def query_industry(stock: str, peers_limit: int = 15) -> Dict[str, Any]:
 
 
 # ============================================================
-# 6. query_share_structure 股本结构
+# 6. query_share_structure (share structure)
 # ============================================================
 
 @REGISTRY.tool(
@@ -275,7 +275,7 @@ def query_share_structure(stock: str, years: int = 6) -> Dict[str, Any]:
             if hasattr(v, "isoformat"):
                 d[k] = v.isoformat()
             elif v is not None and hasattr(v, "quantize"):
-                d[k] = round(float(v) / 1e4, 2)    # 万股 -> 亿股
+                d[k] = round(float(v) / 1e4, 2)    # 10k shares -> 100M shares (亿)
             else:
                 d[k] = v
         data.append(d)
@@ -293,7 +293,7 @@ def query_share_structure(stock: str, years: int = 6) -> Dict[str, Any]:
 
 
 # ============================================================
-# 7. get_session_history 历史对话
+# 7. get_session_history (historical conversation)
 # ============================================================
 
 @REGISTRY.tool(
@@ -350,7 +350,7 @@ def get_session_history(limit: int = 5, keyword: str = "") -> Dict[str, Any]:
 
 
 # ============================================================
-# 8. make_table 制表
+# 8. make_table (tabulation)
 # ============================================================
 
 @REGISTRY.tool(

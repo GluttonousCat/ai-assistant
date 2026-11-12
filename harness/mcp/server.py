@@ -1,6 +1,6 @@
 # -*- encoding: utf-8 -*-
 """
-Stdio MCP Server
+Stdio MCP Server (JSON-RPC over stdin/stdout, zero dependencies).
 """
 from __future__ import annotations
 
@@ -14,8 +14,9 @@ SERVER_INFO = {"name": "alpha-finance-radar-mcp", "version": "1.0.0"}
 
 from harness.mcp.tools import REGISTRY
 
-# 沙盒: 默认只读模式 (仅暴露 read_only=True 工具, 写类如 forge_chain 不可见也不可调)
-# 对外开放时保持默认; 需要放开生成类工具时设 ALPHA_MCP_READ_ONLY=0
+# Sandbox: read-only mode by default (only read_only=True tools are exposed; write tools
+# like forge_chain are neither visible nor callable). Keep the default when exposed
+# externally; set ALPHA_MCP_READ_ONLY=0 to unlock generation-type tools.
 READ_ONLY = os.environ.get("ALPHA_MCP_READ_ONLY", "1") not in ("0", "false", "False")
 
 
@@ -41,9 +42,9 @@ def _rpc_error(req_id: Any, code: int, message: str) -> str:
 
 
 def handle(msg: Any) -> Optional[str]:
-    """处理单条 JSON-RPC 消息; notification 返回 None (不回包)"""
+    """Handle one JSON-RPC message; notifications return None (no reply)."""
     if not isinstance(msg, dict):
-        # JSON-RPC 2.0: 非对象消息 (标量/数组) -> Invalid Request, id 置 null
+        # JSON-RPC 2.0: non-object messages (scalars/arrays) -> Invalid Request, id set to null
         return _rpc_error(None, -32600,
                           "invalid request: message must be a JSON-RPC object")
     method = msg.get("method", "")
@@ -67,8 +68,9 @@ def handle(msg: Any) -> Optional[str]:
         name = params.get("name", "")
         arguments = params.get("arguments") or {}
         spec = REGISTRY.get(name)
-        # 协议级错误走 JSON-RPC error 而非 isError (MCP 规范): 未知工具 / arguments 非对象;
-        # 业务失败仍走 isError, 中文原因留在 content 里供 LLM 自纠
+        # Protocol-level errors use JSON-RPC error, not isError (MCP spec): unknown tool /
+        # non-object arguments; business failures still use isError, with the Chinese reason
+        # kept in content for LLM self-correction
         if spec is None:
             return _rpc_error(req_id, -32602, f"Unknown tool: {name}")
         if not isinstance(arguments, dict):
@@ -83,13 +85,13 @@ def handle(msg: Any) -> Optional[str]:
                     ensure_ascii=False)}],
                 "isError": True,
             })
-        # 底座模块 (如 range_trading 扫描器) 会 print 进度/排名;
-        # stdio 协议下 stdout 必须只有 JSON-RPC, 全部重定向到 stderr
+        # Foundation modules (e.g. the range_trading scanner) print progress/rankings;
+        # under the stdio protocol stdout must carry JSON-RPC only, so redirect all of it to stderr
         import contextlib
         with contextlib.redirect_stdout(sys.stderr):
             envelope = REGISTRY.call(name, arguments)
         text = json.dumps(envelope, ensure_ascii=False, default=str)
-        # ok=False 用 isError 标记, 消息体仍在 content 里 (LLM 可读原因)
+        # ok=False is flagged via isError; the message body stays in content (reason readable by the LLM)
         return _rpc_result(req_id, {
             "content": [{"type": "text", "text": text}],
             "isError": not envelope.get("ok", False),
@@ -100,7 +102,7 @@ def handle(msg: Any) -> Optional[str]:
 
 
 def main() -> None:
-    # Windows 控制台缺省 GBK, 强制 UTF-8 读写 (MCP 传输层是 UTF-8)
+    # Windows console defaults to GBK; force UTF-8 for stdin/stdout (the MCP transport is UTF-8)
     try:
         sys.stdin.reconfigure(encoding="utf-8")
         sys.stdout.reconfigure(encoding="utf-8")
