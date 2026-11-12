@@ -19,6 +19,7 @@ web/src/
 ├── AgentChat.jsx       # Agent 问答 (chat.md)
 ├── Reports.jsx         # 研报中心 (reports.md)
 ├── ChainView.jsx       # 产业链页
+├── market/             # 股票看板/60F图表/局部样式 (stock_dashboard.md)
 ├── UserAdmin.jsx       # 用户管理 (仅超级管理员)
 ├── Monitor.jsx         # 实时监控 (adminOnly)
 ├── platformApi.js      # 平台 API 客户端 (JWT + SSE)
@@ -28,6 +29,8 @@ web/src/
 ### 1.2 页面路由
 
 hash 路由（`window.location.hash`）：`#chat`（默认）→ Agent 对话；`#reports` → 研报中心；产业链/实时监控/用户管理 各有对应 hash 入口。刷新保持当前页。
+
+2026-11-12新增 `#market` 股票看板，普通研究员可用。首次nav直接从合法hash初始化，避免挂载effect将看板跳回chat。
 
 ### 1.3 请求层约定
 

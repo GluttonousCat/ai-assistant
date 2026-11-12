@@ -5,11 +5,13 @@ import Reports from './Reports'
 import ChainView from './ChainView'
 import UserAdmin from './UserAdmin' // user management (admin only)
 import Monitor from './Monitor' // real-time monitor (agent sessions/tools/LLM, admin only)
+import StockDashboard from './market/StockDashboard'
 
 // Navigation definition: items with adminOnly are greyed out and unclickable for non-admins
 
 const NAV = [
   { key: 'chat', label: 'Agent', icon: '✦' },
+  { key: 'market', label: '股票看板', icon: '▥' },
   { key: 'chain', label: '产业链', icon: '⛓' },
   { key: 'reports', label: '研报中心', icon: '▤' },
   { key: 'monitor', label: '实时监控', icon: '◉', adminOnly: true },
@@ -18,9 +20,12 @@ const NAV = [
 
 // Platform shell: sidebar nav + top bar (user info/logout) + role gating
 export default function Platform({ user, onLogout }) {
-  const [nav, setNav] = useState('chat')
   const isAdmin = user?.role === 'admin'
   const isSuper = isAdmin && user?.is_super_admin === true
+  const [nav, setNav] = useState(() => {
+    const target = NAV.find((n) => n.key === window.location.hash.slice(1))
+    return target && !(target.adminOnly && !isAdmin) && !(target.superOnly && !isSuper) ? target.key : 'chat'
+  })
 
   useEffect(() => {
     const onExpired = () => onLogout()
@@ -86,6 +91,7 @@ export default function Platform({ user, onLogout }) {
 
       <main className="main">
         {nav === 'chat' && <AgentChat />}
+        {nav === 'market' && <StockDashboard key={user.username} user={user} />}
         {nav === 'chain' && <ChainView />}
         {nav === 'reports' && <Reports />}
         {nav === 'monitor' && isAdmin && <Monitor />}

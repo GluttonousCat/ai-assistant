@@ -192,3 +192,12 @@ BaoStock已加入`pyproject.toml`的可选依赖`market`组；AKShare沿用项�
 - 详细采集清单与最终审计在 `output/market/intraday_import/`；不把数百万行原始行情提交进Git。
 
 本轮最终代码验收：382项Python测试通过，分层检查无新增违规；真实stdio MCP调用query_intraday读取BJ分钟数据通过。人工可读验收清单在 `output/market/intraday_import/VERIFICATION.md`。
+
+### 5.3 2026-11-12股票看板与因子完整性补齐
+
+分钟数据保持原始价格；趋势计算按交易日精确匹配 `stock.adj_factor` 后复权，不能只检查因子最大日期。
+本次真实检查发现旧库9月11个交易日的公共缺口以及BJ覆盖缺失；
+`python -m jobs.repair_trend_factors` 从Tushare真实补入74852条因子，已导入分钟对应的缺失股票数降至0。
+修复任务不推进日线同步水位线，不推定除权日、也不填充因子。
+随后真实扫描3800只，策略截止2026-11-12收盘，5只回踩候选、36只观察；结果是横截面筛选，非收益回测。
+看板/公式/边界与验证见 [股票看板与60F策略](../frontend/stock_dashboard.md)。

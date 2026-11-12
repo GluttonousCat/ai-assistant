@@ -39,6 +39,7 @@ docs/
 | 数据库命名与兼容迁移 | [ops/schema_naming.md](ops/schema_naming.md) |
 | 模块拆分、合并与依赖收敛 | [ops/module_boundaries.md](ops/module_boundaries.md) |
 | 分钟行情、新闻快照和指数成分股池 | [ops/data_sources.md](ops/data_sources.md) |
+| 股票看板、60F趋势筛选与参数定义 | [frontend/stock_dashboard.md](frontend/stock_dashboard.md) |
 | 改登录/注册逻辑 | [frontend/login.md](frontend/login.md) |
 | 改问答链路/加流式 | [frontend/chat.md](frontend/chat.md) |
 | 改研报展示/提取 | [frontend/reports.md](frontend/reports.md) |

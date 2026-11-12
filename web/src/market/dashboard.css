@@ -1,0 +1,77 @@
+.trend-board { max-width: 1720px; margin: 0 auto; padding: 30px 34px 48px; --trend-gold: #dfb671; }
+.trend-header { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 25px; }
+.trend-eyebrow { font-size: 10px; color: #95816a; letter-spacing: 2.4px; margin-bottom: 10px; }
+.trend-header h1 { margin: 0; font-size: 29px; font-weight: 600; letter-spacing: 1px; }
+.trend-header h1 span { font-size: 14px; vertical-align: middle; color: var(--trend-gold); border: 1px solid #655037; padding: 3px 9px; border-radius: 5px; margin-left: 10px; letter-spacing: 0; }
+.trend-header p { color: var(--text-dim); font-size: 12px; margin: 10px 0 0; }
+.trend-header-actions { display: flex; align-items: center; gap: 20px; }
+.trend-offline { color: #a29b8d; font-size: 12px; white-space: nowrap; }
+.trend-cards { display: grid; grid-template-columns: 1fr 1fr 1fr 1.5fr; gap: 12px; margin-bottom: 18px; }
+.trend-cards > div { padding: 18px 21px; border: 1px solid var(--border); border-radius: 10px; background: linear-gradient(125deg, #161410, #111110); }
+.trend-cards span { display: block; font-size: 11px; color: #a09b91; }
+.trend-cards strong { display: block; font-size: 30px; margin: 8px 0 5px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.trend-cards small { font-size: 11px; margin-left: 8px; color: #8e887e; }
+.trend-cards p { margin: 0; font-size: 11px; color: #77766d; }
+.trend-cards .trend-card-gold { border-color: #51422c; background: linear-gradient(125deg, #211c13, #14130f); }
+.trend-card-gold strong, .trend-gold { color: var(--trend-gold); }
+.trend-cards .trend-date { font-size: 20px; line-height: 36px; }
+.trend-notice { font-size: 12px; color: #c3ad8d; background: #211c13; border: 1px solid #453a29; border-radius: 7px; padding: 12px 15px; line-height: 1.7; margin-bottom: 16px; }
+.trend-notice .btn { margin-left: 20px; }
+.trend-board .error { color: #ec9c8d; }
+.trend-workspace { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 18px; align-items: start; }
+.trend-stock-panel, .trend-detail-panel { background: #111110; border: 1px solid var(--border); border-radius: 10px; min-width: 0; overflow: hidden; }
+.trend-stock-panel { padding: 16px 12px 0; position: sticky; top: 18px; }
+.trend-board input, .trend-board select { background: #181714; color: #cec9bf; border: 1px solid #343029; border-radius: 6px; padding: 9px 10px; outline: none; font: inherit; font-size: 12px; }
+.trend-board input:focus, .trend-board select:focus { border-color: #b79963; }
+.trend-stock-panel > select { width: 100%; margin: 10px 0 15px; }
+.trend-search { display: flex; align-items: center; background: #181714; border: 1px solid #343029; border-radius: 6px; padding-left: 12px; color: #a39b8b; }
+.trend-search input { border: 0; width: 100%; background: transparent; }
+.trend-tabs { display: flex; border-bottom: 1px solid #302b23; padding-bottom: 10px; gap: 4px; }
+.trend-tabs button { flex: 1; background: transparent; border: 0; color: #969084; padding: 7px 0; cursor: pointer; font-size: 12px; border-radius: 5px; }
+.trend-tabs button.active { background: #382d1e; color: var(--trend-gold); }
+.trend-list-heading { display: flex; align-items: center; padding: 10px 0; gap: 6px; font-size: 10px; color: #8d877d; }
+.trend-list-heading > select { margin-left: auto; border: 0; font-size: 10px; padding: 4px; background: transparent; }
+.trend-list-heading > button { border: 1px solid #3d3324; background: transparent; color: #bcb1a0; cursor: pointer; border-radius: 4px; }
+.trend-stock-list { height: 694px; overflow-y: auto; margin: 0 -12px; }
+.trend-stock-row { display: flex; align-items: center; border-left: 2px solid transparent; padding: 2px 6px; border-bottom: 1px solid #1e1d18; }
+.trend-stock-row.selected { border-left-color: var(--trend-gold); background: #262117; }
+.trend-stock-row:hover { background: #201d16; }
+.trend-star { background: transparent; color: #bc995f; border: 0; cursor: pointer; font-size: 17px; padding: 7px; }
+.trend-stock-select { min-width: 0; flex: 1; background: transparent; border: 0; display: flex; justify-content: space-between; gap: 6px; color: #ddd9d0; text-align: left; padding: 12px 5px; cursor: pointer; }
+.trend-stock-select > span { min-width: 0; }
+.trend-stock-select > span:last-child { text-align: right; flex-shrink: 0; }
+.trend-stock-select b { font-size: 12px; font-weight: 500; }
+.trend-stock-select small { display: block; color: #837f74; font-size: 10px; margin-top: 6px; max-width: 150px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.trend-stock-select small.trend-gold { color: var(--trend-gold); }
+.trend-list-note, .trend-empty { color: #a09b91; font-size: 12px; padding: 25px 18px; line-height: 1.8; }
+.trend-detail-panel { padding: 22px 24px; }
+.trend-stock-title { display: flex; justify-content: space-between; align-items: center; gap: 15px; }
+.trend-stock-title h2 { font-size: 21px; font-weight: 500; margin: 0; }
+.trend-stock-title h2 small { font-family: 'Consolas', monospace; font-size: 12px; color: #999384; margin-left: 10px; }
+.trend-stock-title p { color: #ab956f; font-size: 11px; line-height: 1.8; margin: 8px 0 0; }
+.trend-stock-title p span { color: #7c786d; }
+.trend-state { font-size: 11px; border: 1px solid #494134; color: #aca393; padding: 6px 12px; border-radius: 5px; white-space: nowrap; }
+.trend-state.passed { color: var(--trend-gold); border-color: #655035; background: #2a2215; }
+.trend-metrics { display: grid; grid-template-columns: .8fr .9fr 1fr 1.2fr 1.3fr; gap: 12px; padding: 22px 0; }
+.trend-metrics span { display: block; color: #938b7d; font-size: 10px; }
+.trend-metrics b { display: block; font-size: 17px; font-weight: 500; margin-top: 9px; font-variant-numeric: tabular-nums; }
+.trend-metrics small { font-size: 10px; color: #a8987f; }
+.trend-chart-shell { min-height: 474px; border-top: 1px solid #2c271f; }
+.trend-chart-legend { min-height: 35px; display: flex; flex-wrap: wrap; align-items: center; gap: 14px; font-size: 10px; padding: 10px 0; }
+.trend-legend-fast { color: #dfb671; }.trend-legend-slow { color: #98a9cb; }.trend-ohlc { color: #9a9489; font-variant-numeric: tabular-nums; }
+.trend-chart { width: 100%; }
+.trend-chart-foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; padding: 10px 0 15px; border-bottom: 1px solid #2c271f; font-size: 10px; color: #79766b; }
+.trend-check-title { display: flex; justify-content: space-between; align-items: center; margin: 20px 0 13px; gap: 12px; }
+.trend-check-title h3 { font-size: 13px; font-weight: 500; margin: 0; }.trend-check-title > span { color: #81786a; font-size: 10px; }
+.trend-checks { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.trend-checks > div { display: flex; gap: 10px; padding: 11px; border-radius: 6px; background: #181612; border: 1px solid #302920; }
+.trend-checks > div > span { color: #9a8061; font-size: 14px; }.trend-checks > div.passed > span { color: #73ac88; }
+.trend-checks b { font-size: 11px; font-weight: 500; color: #b5ad9f; }.trend-checks small { display: block; color: #857e71; font-size: 10px; line-height: 1.7; margin-top: 4px; }
+.trend-placeholder { min-height: 440px; display: grid; place-items: center; color: #9d9689; font-size: 13px; padding: 25px; }
+.trend-method { border: 1px solid #322b22; border-radius: 8px; margin-top: 20px; background: #13120f; }
+.trend-method > button { display: flex; justify-content: space-between; padding: 17px 20px; width: 100%; border: 0; background: transparent; color: #b9af9d; cursor: pointer; font-size: 12px; text-align: left; }.trend-method small { margin-left: 14px; color: #7f7767; font-size: 10px; }
+.trend-method > div { padding: 0 20px 12px; color: #a39b8d; line-height: 1.9; font-size: 12px; }
+.trend-board button:focus-visible { outline: 2px solid var(--trend-gold); outline-offset: 2px; }
+@media (min-width: 1650px) { .trend-workspace { grid-template-columns: 330px minmax(0, 1fr); } }
+@media (max-width: 1200px) { .trend-board { padding: 24px 20px; }.trend-workspace { grid-template-columns: 255px minmax(0, 1fr); }.trend-detail-panel { padding: 20px 16px; }.trend-metrics { grid-template-columns: repeat(3, 1fr); }.trend-cards { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 800px) { .trend-board { padding: 20px 12px; }.trend-header { align-items: flex-start; }.trend-header-actions { flex-direction: column; gap: 10px; align-items: flex-end; }.trend-header h1 { font-size: 24px; }.trend-workspace { grid-template-columns: 1fr; }.trend-stock-panel { position: static; }.trend-stock-list { height: 260px; }.trend-checks { grid-template-columns: 1fr; }.trend-cards > div { padding: 14px; }.trend-cards .trend-date { font-size: 15px; }.trend-stock-title { align-items: flex-start; }.trend-stock-title h2 small { display: block; margin: 6px 0 0; }.trend-method small { display: block; margin: 8px 0 0; } }

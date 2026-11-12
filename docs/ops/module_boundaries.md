@@ -67,3 +67,8 @@ MCP 与 HTTP 只做协议、校验、鉴权和结果转换，不能成为另一�
 
 验收：382项Python测试通过，分层检查无新增违规；真实MCP stdio握手、30只读工具清单和BJ分钟查询通过。
 独立MCP启动显式初始化配置，不再依赖行情模块导入的副作用。
+
+2026-11-12股票看板：新增 `web/src/market/` 功能目录，局部图表/样式与页面拆分；
+`skills/trend` 只负责纯策略与领域组合，`tools/market/trend_data` 隔离仓储，
+`jobs.scan_trend` 离线发布快照，HTTP只读取。新增DDL归 `storage/schema/trend.py`。
+分层检查仍无新增违规，既有50项依赖债务未扩大。详情见 [股票看板](../frontend/stock_dashboard.md)。
