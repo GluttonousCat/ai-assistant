@@ -5,7 +5,7 @@ const stamp = (s) => Date.parse(s.replace(/Z$/, '').slice(0, 19) + '+08:00') / 1
 const timeLabel = (time) => typeof time === 'number'
   ? new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(time * 1000)) : ''
 
-export default function TrendChart({ data, stop, config, timeframe = '60F' }) {
+export default function TrendChart({ data, stop, stopLabel = '参考止损', config, timeframe = '60F' }) {
   const host = useRef(null)
   const [hover, setHover] = useState(null)
   useEffect(() => {
@@ -33,7 +33,7 @@ export default function TrendChart({ data, stop, config, timeframe = '60F' }) {
     volume.setData(rows.map((r) => ({ time: r.time, value: r.volume, color: r.close >= r.open ? '#e8776866' : '#55ad9266' })))
     chart.panes()[0].setStretchFactor(4)
     chart.panes()[1].setStretchFactor(1)
-    if (stop > 0) candles.createPriceLine({ price: stop, color: '#c68979', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '参考止损' })
+    if (stop > 0) candles.createPriceLine({ price: stop, color: '#c68979', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: stopLabel })
     chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, rows.length - 120), to: rows.length + 4 })
     const byTime = new Map(rows.map((r) => [r.time, r]))
     setHover(rows.at(-1))
@@ -41,7 +41,7 @@ export default function TrendChart({ data, stop, config, timeframe = '60F' }) {
     const observer = new ResizeObserver(([entry]) => chart.applyOptions({ width: entry.contentRect.width }))
     observer.observe(host.current)
     return () => { observer.disconnect(); chart.remove() }
-  }, [data, stop, config?.selection_mode, timeframe])
+  }, [data, stop, stopLabel, config?.selection_mode, timeframe])
   return <>
     <div className="trend-chart-legend">
       <span className="trend-legend-fast">EMA {config?.fast || 20}</span><span className="trend-legend-slow">EMA {config?.slow || 60}</span>

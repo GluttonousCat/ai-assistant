@@ -7,6 +7,7 @@ const INDICES = { '000016.SH': '上证50', '000300.SH': '沪深300', '000905.SH'
 const number = (v, digits = 2) => v == null ? '—' : Number(v).toFixed(digits)
 const money = (v) => v == null ? '—' : v >= 1e8 ? `${(v / 1e8).toFixed(2)}亿` : `${(v / 1e4).toFixed(0)}万`
 const dateLabel = (v) => String(v || '—').replace('T', ' ').slice(0, 16)
+const SCREEN_TIMEFRAME = '60F'
 
 export default function StockDashboard({ user }) {
   const [snapshot, setSnapshot] = useState(null)
@@ -14,8 +15,8 @@ export default function StockDashboard({ user }) {
   const [error, setError] = useState('')
   const [query, setQuery] = useState('')
   const [index, setIndex] = useState('')
-  const [selectedTimeframe, setTimeframe] = useState('1D')
-  const timeframe = snapshot && !snapshot.metadata?.timeframes?.['1D'] ? '60F' : selectedTimeframe
+  const [selectedChartTimeframe, setChartTimeframe] = useState('1D')
+  const chartTimeframe = snapshot && !snapshot.metadata?.timeframes?.['1D'] ? '60F' : selectedChartTimeframe
   const [pattern, setPattern] = useState('')
   const [mode, setMode] = useState('candidate')
   const [sort, setSort] = useState('score')
@@ -37,13 +38,12 @@ export default function StockDashboard({ user }) {
   useEffect(() => { let active = true; platformApi.marketDashboard().then((r) => { if (active) setSnapshot(r) }).catch((e) => { if (active) setError(e.message) }).finally(() => { if (active) setBusy(false) }); return () => { active = false } }, [])
   const rows = useMemo(() => {
     const search = query.trim().toUpperCase()
-    const records=(snapshot?.data || []).map((r) => timeframe === '1D' ? {ts_code:r.ts_code,name:r.name,industry:r.industry,indices:r.indices,membership_date:r.membership_date,...(r.daily || {state:'数据待补',eligible:false,score:0,checks:[],reason:'该快照未计算日K'})} : r)
-    return records.filter((r) => (!search || `${r.name}${r.ts_code}`.toUpperCase().includes(search))
+    return (snapshot?.data || []).filter((r) => (!search || `${r.name}${r.ts_code}`.toUpperCase().includes(search))
       && (!index || r.indices.includes(index))
       && (!pattern || r.pattern === pattern)
       && (mode === 'all' || mode === 'star' && stars.includes(r.ts_code) || mode === 'candidate' && r.eligible || mode === 'first' && r.state === '首阳观察' || mode === 'observe' && ['趋势观察', '等待启动', '等待形态', '启动已过'].includes(r.state)))
       .sort((a, b) => sort === 'efficiency' ? (b.startup?.efficiency ?? b.metrics?.efficiency ?? 0) - (a.startup?.efficiency ?? a.metrics?.efficiency ?? 0) : sort === 'risk' ? (a.risk_pct ?? 1e9) - (b.risk_pct ?? 1e9) : b.score - a.score || a.ts_code.localeCompare(b.ts_code))
-  }, [snapshot, query, index, mode, sort, stars, timeframe, pattern])
+  }, [snapshot, query, index, mode, sort, stars, pattern])
   const selected = rows.find((r) => r.ts_code === code)
   useEffect(() => {
     if (rows.length && !rows.some((r) => r.ts_code === code)) setCode(rows[0].ts_code)
@@ -53,9 +53,9 @@ export default function StockDashboard({ user }) {
     if (!code) { setDetail(null); return }
     let active = true
     setChartBusy(true); setDetail(null); setChartError('')
-    platformApi.marketStock(code, snapshot?.run_id, timeframe).then((r) => { if (active) setDetail(r) }).catch((e) => { if (active) setChartError(e.message) }).finally(() => { if (active) setChartBusy(false) })
+    platformApi.marketStock(code, snapshot?.run_id, chartTimeframe).then((r) => { if (active) setDetail(r) }).catch((e) => { if (active) setChartError(e.message) }).finally(() => { if (active) setChartBusy(false) })
     return () => { active = false }
-  }, [code, snapshot?.run_id, timeframe])
+  }, [code, snapshot?.run_id, chartTimeframe])
   function toggleStar(value) {
     const next = stars.includes(value) ? stars.filter((s) => s !== value) : [...stars, value]
     setStars(next)
@@ -63,22 +63,23 @@ export default function StockDashboard({ user }) {
   }
   function exportCsv() {
     const escape = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`
-    const csv = [['代码', '名称', '周期', '机会类型', '状态', '质量分', '本段首阳时间', '结构证据', '收复位', '推进阳线数', '启动总根数', '本段效率', 'ER20', 'ADX', '参考止损', '风险距离%', '筛选解释', '策略截止'], ...rows.map((r) => [r.ts_code, r.name, timeframe, r.pattern_label, r.state, r.score, r.startup?.start, r.startup?.evidence, r.startup?.neckline, r.startup?.bullish_count, r.startup?.age_bars, r.startup?.efficiency, r.metrics?.efficiency, r.metrics?.adx, r.stop_price, r.risk_pct, r.reason, viewAsOf])].map((r) => r.map(escape).join(',')).join('\r\n')
+    const csv = [['代码', '名称', '周期', '机会类型', '状态', '质量分', '本段首阳时间', '结构证据', '收复位', '推进阳线数', '启动总根数', '本段效率', 'ER20', 'ADX', '参考止损', '风险距离%', '筛选解释', '策略截止'], ...rows.map((r) => [r.ts_code, r.name, SCREEN_TIMEFRAME, r.pattern_label, r.state, r.score, r.startup?.start, r.startup?.evidence, r.startup?.neckline, r.startup?.bullish_count, r.startup?.age_bars, r.startup?.efficiency, r.metrics?.efficiency, r.metrics?.adx, r.stop_price, r.risk_pct, r.reason, viewAsOf])].map((r) => r.map(escape).join(',')).join('\r\n')
     const url = URL.createObjectURL(new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' }))
-    const a = document.createElement('a'); a.href = url; a.download = `${timeframe}筛选_${viewAsOf.slice(0, 10)}.csv`; a.click(); URL.revokeObjectURL(url)
+    const a = document.createElement('a'); a.href = url; a.download = `${SCREEN_TIMEFRAME}筛选_${viewAsOf.slice(0, 10)}.csv`; a.click(); URL.revokeObjectURL(url)
   }
   const meta = snapshot?.metadata
   const dualMode = meta?.config?.selection_mode === 'dual'
   const earlyMode = dualMode || meta?.config?.selection_mode === 'early'
-  const viewMeta=meta?.timeframes?.[timeframe] || meta
+  const viewMeta=meta?.timeframes?.[SCREEN_TIMEFRAME] || meta
   const viewAsOf=viewMeta?.as_of || snapshot?.as_of
+  const chartAsOf=meta?.timeframes?.[chartTimeframe]?.as_of || snapshot?.as_of
   const metrics = selected?.metrics
   const stale = snapshot && (new Date().getTime() - Date.parse(viewAsOf.replace(' ', 'T') + '+08:00')) > 4 * 86400e3
 
   return <div className="trend-board">
     <header className="trend-header">
-      <div><div className="trend-eyebrow">ALPHA FINANCE RADAR / MARKET</div><h1>股票行情 <span>{timeframe === '1D' ? '日K' : '60F'}</span></h1><p>{dualMode ? '趋势筛选 · 趋势回调 · 阴跌与砸坑反弹' : '以主趋势筛选机会，让每一次关注都有依据。'}</p></div>
-      <div className="trend-header-actions"><div className="seg" role="group" aria-label="行情周期">{[['1D','日K'],['60F','60F']].map(([key,label])=><button key={key} className={timeframe===key?'on':''} aria-pressed={timeframe===key} disabled={busy || (key==='1D' && !meta?.timeframes?.['1D'])} title={key==='1D' && snapshot && !meta?.timeframes?.['1D'] ? '当前快照暂无日K数据' : `显示${label}`} onClick={()=>setTimeframe(key)}>{label}</button>)}</div><span className="trend-offline">● 盘后研究</span><button className="btn ghost" disabled={busy} onClick={load}>{busy ? '读取中…' : '刷新快照'}</button></div>
+      <div><div className="trend-eyebrow">ALPHA FINANCE RADAR / MARKET</div><h1>股票行情</h1><p>{dualMode ? '60F趋势筛选 · 趋势回调 · 阴跌与砸坑反弹' : '以主趋势筛选机会，让每一次关注都有依据。'}</p></div>
+      <div className="trend-header-actions"><span className="trend-offline">● 盘后研究</span><button className="btn ghost" disabled={busy} onClick={load}>{busy ? '读取中…' : '刷新快照'}</button></div>
     </header>
     {error && <div className="trend-notice error" role="alert">{error}<button className="btn ghost" onClick={load}>重试</button></div>}
     {busy && !snapshot && <div className="trend-placeholder">正在读取行情与筛选结果…</div>}
@@ -87,7 +88,7 @@ export default function StockDashboard({ user }) {
         <div><span>扫描股票池</span><strong>{meta.universe.toLocaleString()}<small>只</small></strong><p>五指数成分去重</p></div>
         <div className="trend-card-gold"><span>{dualMode ? '两类机会确认' : earlyMode ? '启动第2—4阳候选' : '规则通过'}</span><strong>{viewMeta.eligible}<small>只</small></strong><p>{dualMode ? `趋势回调 ${viewMeta.patterns?.['趋势回调'] || 0} · 反弹 ${viewMeta.patterns?.['阴跌/砸坑反弹'] || 0}` : earlyMode ? `2阳 ${viewMeta.states['启动第2阳'] || 0} · 3阳 ${viewMeta.states['启动第3阳'] || 0} · 4阳 ${viewMeta.states['启动第4阳'] || 0}` : `突破 ${viewMeta.states['突破候选'] || 0} · 回踩 ${viewMeta.states['回踩候选'] || 0}`}</p></div>
         <div><span>{earlyMode ? '首阳观察' : '趋势观察'}</span><strong>{viewMeta.states[earlyMode ? '首阳观察' : '趋势观察'] || 0}<small>只</small></strong><p>{earlyMode ? '启动待确认，不预判后续连阳' : '保留趋势，等待确认'}</p></div>
-        <div><span>{timeframe === '1D' ? '日K' : '60F'}策略截止 · 上海时间</span><strong className="trend-date">{dateLabel(viewAsOf)}</strong><p>行情最新 {dateLabel(viewMeta.data_latest)}</p></div>
+        <div><span>{SCREEN_TIMEFRAME}策略截止 · 上海时间</span><strong className="trend-date">{dateLabel(viewAsOf)}</strong><p>行情最新 {dateLabel(viewMeta.data_latest)}</p></div>
       </div>
       {(stale || viewMeta.data_latest.slice(0, 10) !== viewAsOf.slice(0, 10)) && <div className="trend-notice">{stale ? '当前为历史快照。' : ''} 复权因子截至 {meta.factor_latest}，策略只使用已完整验证的数据。刷新读取已发布结果；全池计算由离线任务完成。</div>}
       <section className="trend-workspace">
@@ -109,16 +110,22 @@ export default function StockDashboard({ user }) {
         <div className="trend-detail-panel">
           {selected ? <>
             <div className="trend-stock-title"><div><h2>{selected.name} <small>{selected.ts_code}</small></h2><p>{selected.indices.map((i) => INDICES[i] || i).join(' / ')} <span>· 成分快照 {selected.membership_date}</span></p></div><span className={`trend-state ${selected.eligible ? 'passed' : ''}`}>{selected.state}</span></div>
-            {dualMode && <p className="trend-startup-info">机会类型：{selected.pattern_label || '等待有效形态'} · 周期：{timeframe === '1D' ? '日K' : '60F'}</p>}
+            {dualMode && <p className="trend-startup-info">机会类型：{selected.pattern_label || '等待有效形态'} · 筛选周期：{SCREEN_TIMEFRAME}</p>}
             {earlyMode && selected.startup?.start && <p className="trend-startup-info">本段首阳 {dateLabel(selected.startup.start)} · 已推进 {selected.startup.bullish_count} 根阳线 / 共 {selected.startup.age_bars} 根K线</p>}
             {earlyMode && meta.config.require_precursor && selected.startup?.start && <p className="trend-startup-info">首阳前证据：{selected.startup.evidence || '无有效结构'} · 当时收复位 {number(selected.startup.neckline)}</p>}
             <div className="trend-metrics"><div><span>截止价</span><b>{number(metrics?.close)}</b></div><div><span>{earlyMode ? '本段推进效率' : '趋势效率 ER'}</span><b>{number(earlyMode ? selected.startup?.efficiency : metrics?.efficiency)}</b></div><div><span>{earlyMode ? '启动进度' : '趋势强度 ADX'}</span><b>{earlyMode ? selected.startup?.bullish_count ? `第 ${selected.startup.bullish_count} 阳` : '等待启动' : number(metrics?.adx, 1)}</b></div><div><span>20日日均成交额</span><b>{money(metrics?.daily_amount)}</b></div><div><span>参考止损 / 距离</span><b>{number(selected.stop_price)} <small>{number(selected.risk_pct)}%</small></b></div></div>
             <div className="trend-chart-shell">
-              {chartBusy ? <div className="trend-placeholder">加载 {selected.name} 的{timeframe === '1D' ? '日K' : '60F'} K线…</div> : chartError ? <div className="trend-placeholder error" role="alert">{chartError}</div> : detail?.data.length ? <TrendChart data={detail.data} stop={selected.stop_price} config={meta.config} timeframe={timeframe} /> : <div className="trend-placeholder">没有可用的{timeframe} K线</div>}
+              <div className="trend-chart-toolbar">
+                <div className="trend-chart-period" role="group" aria-label="K线图周期">
+                  {[['1D', '日K'], ['60F', '60F']].map(([key, label]) => <button key={key} className={chartTimeframe === key ? 'on' : ''} aria-pressed={chartTimeframe === key} disabled={key === '1D' && !meta?.timeframes?.['1D']} title={key === '1D' && !meta?.timeframes?.['1D'] ? '当前快照暂无日K数据' : `显示${key === '1D' ? '日K' : '60F K线'}`} onClick={() => setChartTimeframe(key)}>{label}</button>)}
+                </div>
+                <span>截至 {dateLabel(chartAsOf)}</span>
+              </div>
+              {chartBusy ? <div className="trend-placeholder">加载 {selected.name} 的{chartTimeframe === '1D' ? '日K' : '60F K线'}…</div> : chartError ? <div className="trend-placeholder error" role="alert">{chartError}</div> : detail?.data.length ? <TrendChart data={detail.data} stop={detail.price_basis === 'forward_asof' && chartAsOf?.slice(0, 10) === viewAsOf?.slice(0, 10) ? selected.stop_price : null} stopLabel="60F策略参考止损" config={meta.config} timeframe={chartTimeframe} /> : <div className="trend-placeholder">没有可用的{chartTimeframe === '1D' ? '日K' : '60F K线'}</div>}
             </div>
-            <div className="trend-chart-foot"><span>{timeframe === '1D' ? '原生日K' : '60分钟'} · {detail?.price_basis === 'forward_asof' ? '按截止日复权' : '原始价格'} · 成交量：股</span><span>滚轮缩放 · 拖动平移 · 十字光标查看</span></div>
+            <div className="trend-chart-foot"><span>{chartTimeframe === '1D' ? '原生日K' : '60分钟'} · {detail?.price_basis === 'forward_asof' ? '按截止日复权' : '原始价格'} · 成交量：股</span><span>图中信号按当前K线周期标记 · 滚轮缩放</span></div>
             {detail?.issue && <div className="trend-notice">{detail.issue}，展示原始行情，不据此生成趋势候选。</div>}
-            <div className="trend-check-title"><h3>为什么{selected.eligible ? '入选' : '未入选'}</h3><span>质量分用于排序，不代表胜率</span></div>
+            <div className="trend-check-title"><h3>{SCREEN_TIMEFRAME} · 为什么{selected.eligible ? '入选' : '未入选'}</h3><span>质量分用于排序，不代表胜率</span></div>
             {selected.checks?.length ? <div className="trend-checks">{selected.checks.map((c) => <div key={c.key} className={c.passed ? 'passed' : ''}><span>{c.passed ? '✓' : '−'}</span><div><b>{c.label}</b><small>{c.rule}</small></div></div>)}</div> : <div className="trend-notice">{selected.reason}</div>}
           </> : <div className="trend-placeholder">从左侧选择一只股票，查看趋势与筛选依据。</div>}
         </div>

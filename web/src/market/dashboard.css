@@ -2,7 +2,6 @@
 .trend-header { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 25px; }
 .trend-eyebrow { font-size: 10px; color: #95816a; letter-spacing: 2.4px; margin-bottom: 10px; }
 .trend-header h1 { margin: 0; font-size: 29px; font-weight: 600; letter-spacing: 1px; }
-.trend-header h1 span { font-size: 14px; vertical-align: middle; color: var(--trend-gold); border: 1px solid #655037; padding: 3px 9px; border-radius: 5px; margin-left: 10px; letter-spacing: 0; }
 .trend-header p { color: var(--text-dim); font-size: 12px; margin: 10px 0 0; }
 .trend-header-actions { display: flex; align-items: center; gap: 20px; }
 .trend-offline { color: #a29b8d; font-size: 12px; white-space: nowrap; }
@@ -58,6 +57,12 @@
 .trend-metrics b { display: block; font-size: 17px; font-weight: 500; margin-top: 9px; font-variant-numeric: tabular-nums; }
 .trend-metrics small { font-size: 10px; color: #a8987f; }
 .trend-chart-shell { min-height: 474px; border-top: 1px solid #2c271f; }
+.trend-chart-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding: 10px 0 0; }
+.trend-chart-toolbar > span { color: #817b70; font-size: 10px; }
+.trend-chart-period { display: inline-flex; gap: 3px; padding: 3px; border: 1px solid #3d3326; border-radius: 6px; background: #181612; }
+.trend-chart-period button { background: transparent; border: 0; border-radius: 4px; padding: 5px 13px; color: #a49b8c; font-size: 11px; cursor: pointer; }
+.trend-chart-period button.on { background: #382d1e; color: var(--trend-gold); }
+.trend-chart-period button:disabled { opacity: .45; cursor: not-allowed; }
 .trend-chart-legend { min-height: 35px; display: flex; flex-wrap: wrap; align-items: center; gap: 14px; font-size: 10px; padding: 10px 0; }
 .trend-legend-fast { color: #dfb671; }.trend-legend-slow { color: #98a9cb; }.trend-ohlc { color: #9a9489; font-variant-numeric: tabular-nums; }
 .trend-chart { width: 100%; }
@@ -76,4 +81,3 @@
 @media (min-width: 1650px) { .trend-workspace { grid-template-columns: 330px minmax(0, 1fr); } }
 @media (max-width: 1200px) { .trend-board { padding: 24px 20px; }.trend-workspace { grid-template-columns: 255px minmax(0, 1fr); }.trend-detail-panel { padding: 20px 16px; }.trend-metrics { grid-template-columns: repeat(3, 1fr); }.trend-cards { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 800px) { .trend-board { padding: 20px 12px; }.trend-header { align-items: flex-start; }.trend-header-actions { flex-direction: column; gap: 10px; align-items: flex-end; }.trend-header h1 { font-size: 24px; }.trend-workspace { grid-template-columns: 1fr; }.trend-stock-panel { position: static; }.trend-stock-list { height: 260px; }.trend-checks { grid-template-columns: 1fr; }.trend-cards > div { padding: 14px; }.trend-cards .trend-date { font-size: 15px; }.trend-stock-title { align-items: flex-start; }.trend-stock-title h2 small { display: block; margin: 6px 0 0; }.trend-method small { display: block; margin: 8px 0 0; } }
-.trend-header-actions .seg button:disabled { opacity: .45; cursor: not-allowed; }
