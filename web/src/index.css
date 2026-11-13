@@ -260,42 +260,68 @@ table.grid tbody td:last-child { border-right: 1px solid var(--border); border-r
 .login-foot { text-align: center; color: var(--text-dim); font-size: 11px; margin-top: 20px; }
 
 /* ---------- 平台主框架 ---------- */
-.platform { display: flex; height: 100vh; overflow: hidden; }
+.platform { display: flex; height: 100vh; height: 100dvh; overflow: hidden; }
 .sidebar {
   width: 216px; flex-shrink: 0;
   display: flex; flex-direction: column;
   background: linear-gradient(180deg, #131a24, #0e1117);
   border-right: 1px solid var(--border);
+  overflow-x: hidden; transition: width 160ms ease;
 }
 .side-brand {
-  display: flex; align-items: center; gap: 10px;
-  padding: 20px 18px 18px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 8px; min-height: 82px; flex-shrink: 0;
+  padding: 16px 10px 16px 14px; border-bottom: 1px solid var(--border);
 }
-.side-brand .logo-mark { color: var(--accent); font-size: 20px; }
+.side-brand .logo-mark { color: var(--accent); font-size: 20px; flex-shrink: 0; }
+.brand-copy { flex: 1; min-width: 0; }
 .side-brand .brand-name { font-weight: 700; font-size: 15px; }
 .side-brand .brand-sub { font-size: 11px; color: var(--text-dim); }
-.side-nav { display: flex; flex-direction: column; gap: 4px; padding: 14px 10px; flex: 1; }
+.sidebar-toggle { width: 32px; height: 32px; flex-shrink: 0; display: grid; place-items: center; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--text-dim); cursor: pointer; }
+.sidebar-toggle:hover { color: var(--text); background: var(--bg-3); }
+.sidebar button:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: -2px; }
+.side-nav { display: flex; flex-direction: column; gap: 4px; padding: 14px 10px; flex: 1; min-height: 0; overflow-y: auto; }
 .side-nav button {
-  display: flex; align-items: center; gap: 10px;
+  display: flex; align-items: center; gap: 10px; flex-shrink: 0; min-height: 42px; white-space: nowrap;
   background: transparent; border: none; color: var(--text-dim);
   padding: 11px 14px; font-size: 14px; border-radius: 10px; cursor: pointer;
   transition: background 0.15s, color 0.15s;
 }
 .side-nav button:hover { background: var(--bg-3); color: var(--text); }
 .side-nav button.on { background: rgba(74, 163, 255, 0.14); color: var(--accent); font-weight: 600; }
-.nav-icon { width: 18px; text-align: center; }
+.nav-icon { width: 18px; flex-shrink: 0; text-align: center; }
 .side-foot { padding: 14px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 10px; }
 .user-chip { display: flex; align-items: center; gap: 10px; }
+.user-meta { min-width: 0; }
 .avatar {
   width: 34px; height: 34px; border-radius: 10px; flex-shrink: 0;
   background: linear-gradient(135deg, #d99178, #ad5e48);
   display: flex; align-items: center; justify-content: center;
   font-weight: 700; font-size: 15px; color: #fff;
 }
-.user-name { font-size: 13px; font-weight: 600; }
+.user-name { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .user-role { font-size: 11px; color: var(--text-dim); }
-.logout-btn { width: 100%; padding: 8px; font-size: 12px; }
-.main { flex: 1; overflow: auto; }
+.logout-btn { width: 100%; min-height: 36px; padding: 8px; font-size: 12px; display: flex; align-items: center; justify-content: center; gap: 8px; }
+.logout-icon { flex-shrink: 0; }
+.main { flex: 1; min-width: 0; overflow: auto; }
+.sidebar-backdrop { display: none; }
+.sidebar.is-collapsed { width: 64px; }
+.sidebar.is-collapsed .brand-copy, .sidebar.is-collapsed .side-brand .logo-mark,
+.sidebar.is-collapsed .nav-label, .sidebar.is-collapsed .user-meta { display: none; }
+.sidebar.is-collapsed .side-brand { justify-content: center; padding: 16px 8px; }
+.sidebar.is-collapsed .side-nav { padding: 14px 8px; }
+.sidebar.is-collapsed .side-nav button { justify-content: center; padding: 11px 0; }
+.sidebar.is-collapsed .nav-icon { font-size: 18px; }
+.sidebar.is-collapsed .side-foot { padding: 14px 8px; }
+.sidebar.is-collapsed .user-chip { justify-content: center; }
+.sidebar.is-collapsed .logout-btn { padding: 8px 0; }
+@media (max-width: 700px) {
+  .platform.sidebar-expanded .sidebar { position: fixed; inset: 0 auto 0 0; z-index: 40; box-shadow: 12px 0 32px #0008; }
+  .platform.sidebar-expanded .main { margin-left: 64px; }
+  .sidebar-backdrop { display: block; position: fixed; inset: 0; z-index: 39; border: 0; padding: 0; background: #0008; cursor: pointer; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sidebar { transition: none; }
+}
 
 /* ---------- 通用页面头 ---------- */
 .page { min-height: 100%; display: flex; flex-direction: column; }

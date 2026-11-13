@@ -1,6 +1,4 @@
 /* Research workspace: quiet surfaces, a readable transcript and a stable composer. */
-.main { min-width: 0; }
-.platform { height: 100dvh; }
 .chat-workspace { display: flex; height: 100%; min-width: 0; overflow: hidden; }
 .chat-history { width: 208px; flex: none; padding: 22px 12px; display: flex; flex-direction: column; border-right: 1px solid var(--border); background: #101010; }
 .history-heading { display: flex; align-items: center; justify-content: space-between; padding: 0 8px; font-size: 13px; font-weight: 600; }
@@ -67,17 +65,9 @@
   .history-toggle { display: inline-block; }
 }
 @media (max-width: 700px) {
-  .sidebar { width: 58px; }
-  .side-brand { padding: 20px 16px; }
-  .side-brand > div, .side-foot .user-meta { display: none; }
-  .side-foot .logout-btn { padding: 6px 0; font-size: 10px; }
-  .side-nav { padding: 12px 5px; }
-  .side-nav button { font-size: 0; padding: 12px; }
-  .side-nav .nav-icon { font-size: 18px; }
-  .side-foot { padding: 12px; }
   .chat-toolbar { padding: 14px 12px; }
   .chat-toolbar-sub { display: none; }
-  .chat-history.visible { position: absolute; z-index: 20; inset: 65px auto 0 58px; width: 230px; box-shadow: 16px 0 40px #0008; }
+  .chat-history.visible { position: absolute; z-index: 20; inset: 65px auto 0 64px; width: 230px; box-shadow: 16px 0 40px #0008; }
   .chat-workspace .chat-window { padding: 16px 14px; gap: 24px; }
   .chat-workspace .chat-inputbar { padding: 10px 12px max(12px, env(safe-area-inset-bottom)); }
   .chat-workspace .chat-examples { grid-template-columns: 1fr; gap: 8px; margin-top: 20px; }

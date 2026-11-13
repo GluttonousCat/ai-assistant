@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { platformApi, auth } from './platformApi'
 import AgentChat from './AgentChat'
 import Reports from './Reports'
@@ -18,10 +18,20 @@ const NAV = [
   { key: 'users', label: '用户管理', icon: '⚙', superOnly: true },       // rendered for super admin only
 ]
 
+const SIDEBAR_PREFERENCE = 'alpha:sidebar-collapsed'
+
 // Platform shell: sidebar nav + top bar (user info/logout) + role gating
 export default function Platform({ user, onLogout }) {
   const isAdmin = user?.role === 'admin'
   const isSuper = isAdmin && user?.is_super_admin === true
+  const sidebarToggle = useRef(null)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try {
+      const saved = localStorage.getItem(SIDEBAR_PREFERENCE)
+      if (saved === 'true' || saved === 'false') return saved === 'true'
+    } catch { /* Storage restrictions must not prevent navigation. */ }
+    return window.matchMedia('(max-width: 700px)').matches
+  })
   const [nav, setNav] = useState(() => {
     const target = NAV.find((n) => n.key === window.location.hash.slice(1))
     return target && !(target.adminOnly && !isAdmin) && !(target.superOnly && !isSuper) ? target.key : 'chat'
@@ -51,17 +61,31 @@ export default function Platform({ user, onLogout }) {
     window.location.hash = nav
   }, [nav])
 
+  useEffect(() => {
+    try { localStorage.setItem(SIDEBAR_PREFERENCE, String(sidebarCollapsed)) }
+    catch { /* Keep the current layout usable without persistent storage. */ }
+  }, [sidebarCollapsed])
+
+  function collapseSidebar() {
+    setSidebarCollapsed(true)
+    sidebarToggle.current?.focus()
+  }
+
   return (
-    <div className="platform">
-      <aside className="sidebar">
+    <div className={`platform ${sidebarCollapsed ? 'sidebar-collapsed' : 'sidebar-expanded'}`}>
+      {!sidebarCollapsed && <button className="sidebar-backdrop" aria-label="收起侧边栏" onClick={collapseSidebar} />}
+      <aside className={`sidebar ${sidebarCollapsed ? 'is-collapsed' : ''}`} aria-label="Alpha Finance Radar 导航" onKeyDown={(e) => { if (e.key === 'Escape') collapseSidebar() }}>
         <div className="side-brand">
-          <span className="logo-mark">◆</span>
-          <div>
+          <span className="logo-mark" aria-hidden="true">◆</span>
+          <div className="brand-copy">
             <div className="brand-name">Alpha Finance Radar</div>
             <div className="brand-sub">Insight Engine</div>
           </div>
+          <button ref={sidebarToggle} type="button" className="sidebar-toggle" onClick={() => setSidebarCollapsed((value) => !value)} aria-label={sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'} title={sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'} aria-expanded={!sidebarCollapsed} aria-controls="platform-navigation">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M9 4v16" /><path d={sidebarCollapsed ? 'm13 9 3 3-3 3' : 'm16 9-3 3 3 3'} /></svg>
+          </button>
         </div>
-        <nav className="side-nav">
+        <nav className="side-nav" id="platform-navigation" aria-label="主导航">
           {NAV.filter((n) => !n.superOnly || isSuper).map((n) => {
             const locked = n.adminOnly && !isAdmin
             return (
@@ -69,23 +93,25 @@ export default function Platform({ user, onLogout }) {
                 key={n.key}
                 className={nav === n.key ? 'on' : ''}
                 disabled={locked}
-                title={locked ? '仅管理员可用' : undefined}
-                onClick={() => setNav(n.key)}
+                title={locked ? `${n.label}（仅管理员可用）` : n.label}
+                aria-label={locked ? `${n.label}（仅管理员可用）` : n.label}
+                aria-current={nav === n.key ? 'page' : undefined}
+                onClick={() => { setNav(n.key); if (window.matchMedia('(max-width: 700px)').matches) collapseSidebar() }}
               >
-                <span className="nav-icon">{locked ? '🔒' : n.icon}</span>{n.label}
+                <span className="nav-icon" aria-hidden="true">{locked ? '🔒' : n.icon}</span><span className="nav-label">{n.label}</span>
               </button>
             )
           })}
         </nav>
         <div className="side-foot">
-          <div className="user-chip">
+          <div className="user-chip" title={`${user.display_name || user.username} · ${isAdmin ? '管理员' : '研究员'}`}>
             <span className="avatar">{(user.display_name || user.username || '?').slice(0, 1).toUpperCase()}</span>
             <div className="user-meta">
               <div className="user-name">{user.display_name || user.username}</div>
               <div className="user-role">{isAdmin ? '管理员' : '研究员'}</div>
             </div>
           </div>
-          <button className="btn ghost logout-btn" onClick={onLogout}>退出登录</button>
+          <button className="btn ghost logout-btn" onClick={onLogout} aria-label="退出登录" title="退出登录"><svg className="logout-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 5H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h4M9 12h12m-4-4 4 4-4 4" /></svg><span className="nav-label">退出登录</span></button>
         </div>
       </aside>
 
