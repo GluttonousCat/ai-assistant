@@ -10,9 +10,9 @@ import StockDashboard from './market/StockDashboard'
 // Navigation definition: items with adminOnly are greyed out and unclickable for non-admins
 
 const NAV = [
-  { key: 'chat', label: 'Agent', icon: '✦' },
-  { key: 'market', label: '股票看板', icon: '▥' },
-  { key: 'chain', label: '产业链', icon: '⛓' },
+  { key: 'chat', label: '智能对话', icon: '✦' },
+  { key: 'market', label: '股票行情', icon: '▥' },
+  { key: 'chain', label: '行业挖掘', icon: '⛓' },
   { key: 'reports', label: '研报中心', icon: '▤' },
   { key: 'monitor', label: '实时监控', icon: '◉', adminOnly: true },
   { key: 'users', label: '用户管理', icon: '⚙', superOnly: true },       // rendered for super admin only

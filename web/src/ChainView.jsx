@@ -197,6 +197,7 @@ export default function ChainView() {
   return (
     <div className="chain-page">
       <div className="chain-head">
+        <h1>行业挖掘</h1>
         <div className="chain-chips">
           {chains.map((c) => (
             <button

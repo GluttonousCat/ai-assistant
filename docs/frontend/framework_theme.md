@@ -1,7 +1,7 @@
 # 前端框架与主题设计文档
 
 > Alpha Finance Radar 平台 · 整体前端架构 / 品牌 / 视觉主题
-> 更新：2026-08-30
+> 更新：2026-11-13
 
 ## 一、系统设计
 
@@ -28,7 +28,7 @@ web/src/
 
 ### 1.2 页面路由
 
-hash 路由（`window.location.hash`）：`#chat`（默认）→ Agent 对话；`#reports` → 研报中心；产业链/实时监控/用户管理 各有对应 hash 入口。刷新保持当前页。
+hash 路由（`window.location.hash`）：`#chat`（默认）→ 智能对话；`#market` → 股票行情；`#chain` → 行业挖掘；`#reports` → 研报中心；实时监控/用户管理各有对应 hash 入口。刷新保持当前页。
 
 2026-11-12新增 `#market` 股票看板，普通研究员可用。首次nav直接从合法hash初始化，避免挂载effect将看板跳回chat。
 
@@ -46,7 +46,10 @@ hash 路由（`window.location.hash`）：`#chat`（默认）→ Agent 对话；
 | 登录页主标题 | Alpha Finance Radar |
 | 登录页副标题 | 上市公司财务与研报智能分析平台 |
 | 侧边栏品牌名 / 副名 | Alpha Finance Radar / Insight Engine |
-| 问答页标题 | Alpha Radar · 投研 Agent |
+| 问答页标题 | Alpha Radar · 智能对话 |
+| 侧边栏三个研究入口 | 智能对话 / 股票行情 / 行业挖掘 |
+| 行情页标题 | 股票行情（当前提供趋势筛选） |
+| 行业页标题 | 行业挖掘（当前以产业链分析为核心） |
 
 命名逻辑：**Alpha**（超额收益）+ **Finance**（财务/金融域）+ **Radar**（雷达，呼应 Radar 扫描/发现意象）；副名 Insight Engine 表「洞察引擎」。改文案只需 grep 这几处字符串。
 
@@ -85,6 +88,7 @@ hash 路由（`window.location.hash`）：`#chat`（默认）→ Agent 对话；
 
 | 问题 | 根因 | 处理方案 | 状态 |
 |------|------|---------|------|
+| 入口名称与用户使用习惯不一致 | Agent偏技术命名，股票看板/产业链限制模块表达范围 | 2026-11-13统一导航及页面标题为智能对话/股票行情/行业挖掘，保留原hash与领域业务名 | ✅ 已修复 |
 | 区间看板「加载失败: 未登录」 | 看板用旧 `api.js` 裸 fetch 不带 token，被全局鉴权中间件 401 | `api.js` 重写为带 JWT + 401 跳登录 | ✅ 已修复 |
 | 品牌名「智能投研助手/财务 Agent 平台」过时 | 初版命名 | 全站更名 Alpha Finance Radar（本节二） | ✅ 本轮 |
 | 蓝灰暗色主题与新品牌调性不符 | 初版默认配色 | 深黑+暗棕主题（本节三） | ✅ 本轮 |
@@ -94,6 +98,8 @@ hash 路由（`window.location.hash`）：`#chat`（默认）→ Agent 对话；
 | 用户管理仅 Gluttonouscat 可见 | 所有 admin 均可管理用户过宽 | NAV 加 `superOnly`（非超管不渲染该项）+ API `_require_super`；区间看板维持 admin 可见 | ✅ 本轮 |
 
 ## 五、构建与部署
+
+2026-11-13：三个研究入口及对应页面名称已统一；前端构建、lint（保留6项既有告警）、分层检查及边界测试通过。
 
 ```bash
 cd web && npm run build     # 产物 → web/dist

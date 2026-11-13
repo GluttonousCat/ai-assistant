@@ -659,6 +659,7 @@ table.grid tbody td:last-child { border-right: 1px solid var(--border); border-r
   overflow-y: auto;
 }
 .chain-head { flex: none; margin-bottom: 14px; }
+.chain-head h1 { margin: 0 0 16px; font-size: 24px; }
 .chain-chips { display: flex; flex-wrap: wrap; gap: 8px; }
 .chain-chip {
   border: 1px solid var(--border); background: var(--bg-2);

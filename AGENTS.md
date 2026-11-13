@@ -43,8 +43,8 @@ storage/     pg.py(连接池) / sqlite(爬虫) / schema/(领域DDL) / repositori
              pg_schema.py保留旧导入兼容；新增DDL按域归档，独立连接部署
 api/         路由+鉴权中间件(JWT) / agent_api(SSE) / chains_api / schema_api / market_api / reports / auth
              finance.py仅保留兼容路由聚合；events.py统一SSE编码
-web/src/     Login / Platform(侧边栏壳+角色门控) / AgentChat(SSE) / ChainView(产业链页)
-             market/(StockDashboard+TrendChart+dashboard.css,股票看板#market) /
+web/src/     Login / Platform(侧边栏壳+角色门控) / AgentChat(智能对话,SSE) / ChainView(行业挖掘页)
+             market/(StockDashboard+TrendChart+dashboard.css,股票行情#market) /
              Reports / UserAdmin / Monitor(实时监控SSE, adminOnly); Markdownish 共享渲染器
 ```
 

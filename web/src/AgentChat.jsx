@@ -14,7 +14,7 @@ const EXAMPLES = [
 
 // Answer type badge: SSE data events carry intent; frontend shows an icon per type
 const INTENT_META = {
-  agent: { icon: '🤖', label: 'Agent' },
+  agent: { icon: '🤖', label: '智能对话' },
   query: { icon: '📊', label: '财务数据' },
   compare: { icon: '⚖️', label: '对比分析' },
   report: { icon: '📄', label: '研报解读' },
@@ -268,7 +268,7 @@ export default function AgentChat() {
       </aside>
       <div className="chat-page">
       <header className="chat-toolbar">
-        <div><button className="history-toggle" aria-label="切换对话历史" aria-expanded={historyOpen} onClick={() => setHistoryOpen(!historyOpen)}>☰</button><span className="chat-product">Alpha Radar</span><span className="chat-toolbar-sub">研究助手</span></div>
+        <div><button className="history-toggle" aria-label="切换对话历史" aria-expanded={historyOpen} onClick={() => setHistoryOpen(!historyOpen)}>☰</button><span className="chat-product">Alpha Radar</span><span className="chat-toolbar-sub">智能对话</span></div>
         <button className="chat-new" disabled={busy} onClick={workspace.create}>＋ 新对话</button>
       </header>
       <div className="chat-window" ref={scrollRef} onScroll={onScroll}>

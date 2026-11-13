@@ -76,7 +76,7 @@ export default function StockDashboard({ user }) {
 
   return <div className="trend-board">
     <header className="trend-header">
-      <div><div className="trend-eyebrow">ALPHA FINANCE RADAR / MARKET</div><h1>趋势雷达 <span>{timeframe === '1D' ? '日K' : '60F'}</span></h1><p>{dualMode ? '趋势回调 · 阴跌与砸坑反弹' : '以主趋势筛选机会，让每一次关注都有依据。'}</p></div>
+      <div><div className="trend-eyebrow">ALPHA FINANCE RADAR / MARKET</div><h1>股票行情 <span>{timeframe === '1D' ? '日K' : '60F'}</span></h1><p>{dualMode ? '趋势筛选 · 趋势回调 · 阴跌与砸坑反弹' : '以主趋势筛选机会，让每一次关注都有依据。'}</p></div>
       <div className="trend-header-actions">{meta?.timeframes && <div className="seg">{[['60F','60F'],['1D','日K']].map(([key,label])=><button key={key} className={timeframe===key?'on':''} onClick={()=>setTimeframe(key)}>{label}</button>)}</div>}<span className="trend-offline">● 盘后研究</span><button className="btn ghost" disabled={busy} onClick={load}>{busy ? '读取中…' : '刷新快照'}</button></div>
     </header>
     {error && <div className="trend-notice error" role="alert">{error}<button className="btn ghost" onClick={load}>重试</button></div>}
