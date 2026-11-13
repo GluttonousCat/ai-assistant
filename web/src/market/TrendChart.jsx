@@ -71,14 +71,14 @@ const TrendChart = memo(function TrendChart({ data, instrumentKey, stop, stopLab
     const plan = seriesUpdate(previous, rows)
     if (plan.type === 'replace') {
       state.candles.setData(rows.map(candle))
-      state.fast.setData(rows.map((r) => average(r, 'ema_fast')))
-      state.slow.setData(rows.map((r) => average(r, 'ema_slow')))
+      state.fast.setData(rows.map((r) => average(r, 'ma13')))
+      state.slow.setData(rows.map((r) => average(r, 'ma21')))
       state.volume.setData(rows.map(turnover))
     } else if (plan.type === 'update') {
       for (const row of rows.slice(plan.from)) {
         state.candles.update(candle(row))
-        state.fast.update(average(row, 'ema_fast'))
-        state.slow.update(average(row, 'ema_slow'))
+        state.fast.update(average(row, 'ma13'))
+        state.slow.update(average(row, 'ma21'))
         state.volume.update(turnover(row))
       }
     }
@@ -124,7 +124,7 @@ const TrendChart = memo(function TrendChart({ data, instrumentKey, stop, stopLab
   const active = hover?.key === instrumentKey ? hover.row : rows.at(-1)
   return <>
     <div className="trend-chart-legend">
-      <span className="trend-legend-fast">EMA {config?.fast || 20}</span><span className="trend-legend-slow">EMA {config?.slow || 60}</span>
+      <span className="trend-legend-fast">MA 13{Number.isFinite(active?.ma13) ? ` · ${active.ma13.toFixed(2)}` : ''}</span><span className="trend-legend-slow">MA 21{Number.isFinite(active?.ma21) ? ` · ${active.ma21.toFixed(2)}` : ''}</span>
       {active && <span className="trend-ohlc">{timeLabel(active.time, timeframe)}　开 {active.open.toFixed(2)}　高 {active.high.toFixed(2)}　低 {active.low.toFixed(2)}　收 {active.close.toFixed(2)}</span>}
       {active?.startup_count > 0 && ['early', 'dual'].includes(config?.selection_mode) && <span className="trend-legend-fast">{active.pattern_label || ''} · {active.setup_phase === 'pullback_resume' ? '回调再起，本轮' : '本段'}第 {active.startup_count} 阳 / {active.startup_age} 根K线</span>}
     </div>

@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { boundedCache, captureView, chartRows, restoreView, seriesUpdate, signalMarkers } from './chartData.js'
 
-const bar = (time, close = 10) => ({ time, open: 10, high: 12, low: 9, close, volume: 100, ema_fast: 10, ema_slow: null })
+const bar = (time, close = 10) => ({ time, open: 10, high: 12, low: 9, close, volume: 100, ma13: 10, ma21: null })
 
 test('chart distinguishes non-tradable background, original first and pullback resumption', () => {
   const markers = signalMarkers([
@@ -30,7 +30,7 @@ test('tail changes and new bars are incremental; identical prices require no ser
   assert.deepEqual(seriesUpdate(before, [bar(1), bar(2, 11), bar(3)]), { type: 'update', from: 1 })
   assert.deepEqual(seriesUpdate(before, [...before, bar(3)]), { type: 'update', from: 2 })
   assert.equal(seriesUpdate(before, before.map((r) => ({ ...r }))).type, 'none')
-  assert.equal(seriesUpdate(before, [bar(1), { ...bar(2), ema_fast: null }]).type, 'update')
+  assert.equal(seriesUpdate(before, [bar(1), { ...bar(2), ma13: null }]).type, 'update')
 })
 
 test('timezone conversion preserves Shanghai dates and explicit UTC offsets', () => {

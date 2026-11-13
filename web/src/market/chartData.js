@@ -1,6 +1,6 @@
 // Only choose incremental updates when historical prices are unchanged.
 // A corrected/adjusted historical candle must replace the full series.
-const priceFields = ['open', 'high', 'low', 'close', 'volume', 'ema_fast', 'ema_slow']
+const priceFields = ['open', 'high', 'low', 'close', 'volume', 'ma13', 'ma21']
 const sameBar = (a, b) => a.time === b.time && priceFields.every((field) => a[field] === b[field])
 
 export function signalMarkers(rows) {

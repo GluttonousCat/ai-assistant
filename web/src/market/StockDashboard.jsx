@@ -126,7 +126,7 @@ export default function StockDashboard({ user }) {
               </div>
             </div>
             {chartError && !!detail?.data.length && <div className="trend-notice" role="alert">K线更新失败：{chartError}，当前保留上次数据。<button className="btn ghost" onClick={() => setChartRevision((v) => v + 1)}>重试</button></div>}
-            <div className="trend-chart-foot"><span>{chartTimeframe === '1D' ? '原生日K' : '60分钟'} · {detail?.price_basis === 'forward_asof' ? '按截止日复权' : '原始价格'} · 成交量：股</span><span>图中信号按当前K线周期标记 · 滚轮缩放</span></div>
+            <div className="trend-chart-foot"><span>{chartTimeframe === '1D' ? '原生日K' : '60分钟'} · {detail?.price_basis === 'forward_asof' ? '前复权（截至所选日期，含除权除息调整）' : '原始价格'} · 成交量：股</span><span>图表 MA13/21 · 策略 EMA{meta.config.fast}/{meta.config.slow} · 信号按图中周期标记</span></div>
             {detail?.issue && <div className="trend-notice">{detail.issue}，展示原始行情，不据此生成趋势候选。</div>}
             <div className="trend-check-title"><h3>{SCREEN_TIMEFRAME} · 为什么{selected.eligible ? '入选' : '未入选'}</h3><span>质量分用于排序，不代表胜率</span></div>
             {selected.checks?.length ? <div className="trend-checks">{selected.checks.map((c) => <div key={c.key} className={c.passed ? 'passed' : ''}><span>{c.passed ? '✓' : '−'}</span><div><b>{c.label}</b><small>{c.rule}</small></div></div>)}</div> : <div className="trend-notice">{selected.reason}</div>}

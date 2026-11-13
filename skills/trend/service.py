@@ -37,6 +37,10 @@ def stock_detail(
         settings.setdefault("require_precursor", False)
         settings.setdefault("track_swing_context", False)
     data = evaluated_bars(frame, TrendConfig(**settings), timeframe)
+    # Display averages are independent of the snapshot's strategy EMA settings.
+    # Compute before tail(1000) so the left edge keeps its full warm-up history.
+    for window in (13, 21):
+        data[f"ma{window}"] = data.close.rolling(window, min_periods=window).mean()
     if issue:
         data["eligible"] = False
         data["first_watch"] = False
@@ -53,6 +57,8 @@ def stock_detail(
         "amount",
         "ema_fast",
         "ema_slow",
+        "ma13",
+        "ma21",
         "atr",
         "adx",
         "efficiency",
@@ -94,4 +100,5 @@ def stock_detail(
         "time_zone": "Asia/Shanghai",
         "volume_unit": "share",
         "amount_unit": "CNY",
+        "chart_averages": {"type": "sma", "windows": [13, 21]},
     }

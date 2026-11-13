@@ -58,10 +58,15 @@ def adjust_prices(frame):
     ):
         return f, "价格或成交数据无效"
     factors = pd.to_numeric(f.adj_factor, errors="coerce")
-    if factors.isna().any() or (factors <= 0).any():
+    if factors.isna().any():
         return f, "复权因子缺失"
+    if not np.isfinite(factors).all() or (factors <= 0).any():
+        return f, "复权因子无效"
     ratio = factors / factors.iloc[-1]
+    prices = ["open", "high", "low", "close"]
+    rebased = f[prices].mul(ratio, axis=0)
+    if not np.isfinite(rebased).all().all() or (rebased <= 0).any().any():
+        return f, "复权价格无效"
     f["raw_close"] = pd.to_numeric(f.close)
-    for field in ("open", "high", "low", "close"):
-        f[field] = pd.to_numeric(f[field]) * ratio
+    f[prices] = rebased
     return f, None
