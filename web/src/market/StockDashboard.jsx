@@ -14,7 +14,8 @@ export default function StockDashboard({ user }) {
   const [error, setError] = useState('')
   const [query, setQuery] = useState('')
   const [index, setIndex] = useState('')
-  const [timeframe, setTimeframe] = useState('60F')
+  const [selectedTimeframe, setTimeframe] = useState('1D')
+  const timeframe = snapshot && !snapshot.metadata?.timeframes?.['1D'] ? '60F' : selectedTimeframe
   const [pattern, setPattern] = useState('')
   const [mode, setMode] = useState('candidate')
   const [sort, setSort] = useState('score')
@@ -77,7 +78,7 @@ export default function StockDashboard({ user }) {
   return <div className="trend-board">
     <header className="trend-header">
       <div><div className="trend-eyebrow">ALPHA FINANCE RADAR / MARKET</div><h1>股票行情 <span>{timeframe === '1D' ? '日K' : '60F'}</span></h1><p>{dualMode ? '趋势筛选 · 趋势回调 · 阴跌与砸坑反弹' : '以主趋势筛选机会，让每一次关注都有依据。'}</p></div>
-      <div className="trend-header-actions">{meta?.timeframes && <div className="seg">{[['60F','60F'],['1D','日K']].map(([key,label])=><button key={key} className={timeframe===key?'on':''} onClick={()=>setTimeframe(key)}>{label}</button>)}</div>}<span className="trend-offline">● 盘后研究</span><button className="btn ghost" disabled={busy} onClick={load}>{busy ? '读取中…' : '刷新快照'}</button></div>
+      <div className="trend-header-actions"><div className="seg" role="group" aria-label="行情周期">{[['1D','日K'],['60F','60F']].map(([key,label])=><button key={key} className={timeframe===key?'on':''} aria-pressed={timeframe===key} disabled={busy || (key==='1D' && !meta?.timeframes?.['1D'])} title={key==='1D' && snapshot && !meta?.timeframes?.['1D'] ? '当前快照暂无日K数据' : `显示${label}`} onClick={()=>setTimeframe(key)}>{label}</button>)}</div><span className="trend-offline">● 盘后研究</span><button className="btn ghost" disabled={busy} onClick={load}>{busy ? '读取中…' : '刷新快照'}</button></div>
     </header>
     {error && <div className="trend-notice error" role="alert">{error}<button className="btn ghost" onClick={load}>重试</button></div>}
     {busy && !snapshot && <div className="trend-placeholder">正在读取行情与筛选结果…</div>}
