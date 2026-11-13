@@ -26,7 +26,7 @@ core/        基础设施 (引擎与各层共用的地基, 不含业务):
              config(.env+yaml)/logger(按顶层包分桶)/security(JWT+bcrypt)/
              lifespan(调度器启停)/net/helpers·paths
 skills/      领域技能 (每技能一目录, 专业知识放 prompt):
-             trend(60F结构反转:先有止跌与至少两项前兆，再观察首阳/第2—4推进阳线确认; 见 docs/frontend/stock_dashboard.md) /
+             trend(60F/原生日K两类机会:趋势回调、阴跌/砸坑反弹; 首阳观察/第2—4推进确认; 见 docs/frontend/stock_dashboard.md) /
              fin_query(Text-to-SQL) / report(研报) / scanned_report(OCR) /
              beta_alpha(产业链Beta+个股Alpha: chains种子链/analysis/tests) /
              content(内容资产管线: 画像/公众号文章/PPT/年报解读) /
@@ -151,7 +151,7 @@ vision=qwen3.8-flash（deepseek 不收图片）。**思考开关由 `llm.enable_
 |------|------|--------|
 | 前端登录 | [docs/frontend/login.md](docs/frontend/login.md) | JWT/邀请码/三级角色/校验规则 |
 | 前端问答 | [docs/frontend/chat.md](docs/frontend/chat.md) | SSE 协议/意图路由 |
-| 股票看板与60F筛票 | [docs/frontend/stock_dashboard.md](docs/frontend/stock_dashboard.md) | 视频理念→量化代理/全池离线快照/复权完整性/可解释条件；不宣称已验证收益 |
+| 股票看板与趋势筛票 | [docs/frontend/stock_dashboard.md](docs/frontend/stock_dashboard.md) | 60F/日K趋势回调与阴跌砸坑反弹/独立截止/全池快照/可解释条件；不宣称已验证收益 |
 | 前端研报 | [docs/frontend/reports.md](docs/frontend/reports.md) | 流水线/表结构/去重/LLM Analysis/AI分析流式弹窗 |
 | 前端框架 | [docs/frontend/framework_theme.md](docs/frontend/framework_theme.md) | 品牌/深黑暗棕主题/桌面入口 |
 | 模型体系 | [docs/agents/llm_models.md](docs/agents/llm_models.md) | 用途路由/两个模型的坑 |

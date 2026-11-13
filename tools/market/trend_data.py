@@ -8,6 +8,10 @@ def scan_inputs(codes, start, end):
     return repository.inputs(codes, start, end)
 
 
+def scan_daily_inputs(codes, start, end):
+    return repository.daily_inputs(codes, start, end)
+
+
 def scan_universe(as_of):
     return repository.universe(as_of)
 
@@ -26,6 +30,11 @@ def adjusted_bars(code, start, end):
     return scan_inputs([code], start, end)
 
 
+def adjusted_daily_bars(code, start, end):
+    validate_intraday_request(code, start, end[:10], 60)
+    return scan_daily_inputs([code], start, end)
+
+
 def adjust_prices(frame):
     """Rebase to last observed factor; missing factors are never forward-filled.
 
@@ -35,7 +44,7 @@ def adjust_prices(frame):
     import pandas as pd
 
     if frame.empty:
-        return frame.copy(), "没有60F数据"
+        return frame.copy(), "没有行情数据"
     f = frame.sort_values("bar_end").copy()
     for field in ("open", "high", "low", "close", "volume", "amount"):
         f[field] = pd.to_numeric(f[field], errors="coerce")

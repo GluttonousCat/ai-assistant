@@ -59,3 +59,41 @@ def test_invalid_code_or_snapshot_is_rejected_before_access(monkeypatch):
     c = client()
     assert c.get("/api/v1/market/dashboard/bad").status_code == 422
     assert c.get("/api/v1/market/dashboard/600000.SH?run_id=bad").status_code == 422
+
+
+def test_daily_chart_uses_its_own_completed_cutoff(monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        "api.market_api.dashboard",
+        lambda *a: {
+            "as_of": "2026-11-13 15:00:00",
+            "metadata": {
+                "start": "2026-01-01",
+                "config": {},
+                "timeframes": {
+                    "1D": {"as_of": "2026-11-13 15:00:00"},
+                    "60F": {"as_of": "2026-11-12 15:00:00"},
+                },
+            },
+        },
+    )
+
+    def detail(*args):
+        seen.append(args)
+        return {"data": []}
+
+    monkeypatch.setattr("api.market_api.stock_detail", detail)
+    c = client()
+    assert c.get("/api/v1/market/dashboard/600000.SH?timeframe=1D").status_code == 200
+    assert seen[-1][2] == "2026-11-13 15:00:00" and seen[-1][-1] == "1D"
+    assert c.get("/api/v1/market/dashboard/600000.SH?timeframe=60F").status_code == 200
+    assert seen[-1][2] == "2026-11-12 15:00:00"
+    assert c.get("/api/v1/market/dashboard/600000.SH?timeframe=5F").status_code == 422
+
+
+def test_legacy_snapshot_does_not_invent_daily_results(monkeypatch):
+    monkeypatch.setattr("api.market_api.dashboard", lambda *a: {"metadata": {}})
+    assert (
+        client().get("/api/v1/market/dashboard/600000.SH?timeframe=1D").status_code
+        == 404
+    )

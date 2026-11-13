@@ -1,6 +1,20 @@
 import pandas as pd
-from skills.trend.strategy import TrendConfig, evaluated_bars, screen
+from skills.trend.strategy import (
+    TrendConfig,
+    evaluated_bars as evaluate,
+    screen as screen_latest,
+)
 from skills.trend.tests.test_strategy import sample
+
+LEGACY = TrendConfig(selection_mode="early")
+
+
+def evaluated_bars(frame, cfg=LEGACY):
+    return evaluate(frame, cfg)
+
+
+def screen(frame):
+    return screen_latest(frame, LEGACY)
 
 
 def v2_rebound_sample():
@@ -147,7 +161,7 @@ def test_giant_chasing_candle_and_weak_volume_do_not_pass():
 
 def test_exhausted_pause_window_cannot_restart_without_new_setup():
     f, seed = startup_sample()
-    cfg = TrendConfig(startup_pause_bars=0)
+    cfg = TrendConfig(selection_mode="early", startup_pause_bars=0)
     row = seed + 1
     prev = f.close.iloc[row - 1]
     f.loc[row, ["open", "high", "low", "close"]] = [
@@ -163,7 +177,9 @@ def test_exhausted_pause_window_cannot_restart_without_new_setup():
 def test_accelerating_decline_with_one_strong_rebound_is_rejected():
     f, seed = v2_rebound_sample()
     assert (
-        evaluated_bars(f, TrendConfig(require_precursor=False)).iloc[seed].first_watch
+        evaluated_bars(f, TrendConfig(selection_mode="early", require_precursor=False))
+        .iloc[seed]
+        .first_watch
     )
     x = evaluated_bars(f)
     assert not x.iloc[seed].precursor_support

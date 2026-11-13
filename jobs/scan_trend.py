@@ -22,6 +22,7 @@ from storage.repositories.trend import publish
 from tools.market.trend_data import (
     scan_cutoffs,
     scan_inputs,
+    scan_daily_inputs,
     scan_universe,
     adjust_prices,
 )
@@ -29,31 +30,52 @@ from tools.market.trend_data import (
 logger = get_logger(__name__)
 
 
-def _scan_batch(batch, start, cutoff, cfg):
+def _scan_batch(batch, start, cutoff, cfg, daily_cutoff=None):
     rows = []
     inputs = scan_inputs([m["ts_code"] for m in batch], start, cutoff)
     groups = dict(tuple(inputs.groupby("ts_code"))) if not inputs.empty else {}
-    for m in batch:
-        frame, issue = adjust_prices(groups.get(m["ts_code"], pd.DataFrame()))
-        if not issue and pd.Timestamp(frame.bar_end.max()) != pd.Timestamp(cutoff):
+    daily = (
+        scan_daily_inputs([m["ts_code"] for m in batch], start, daily_cutoff)
+        if daily_cutoff
+        else pd.DataFrame()
+    )
+    daily_groups = dict(tuple(daily.groupby("ts_code"))) if not daily.empty else {}
+
+    def evaluate(frame, expected, period):
+        frame, issue = adjust_prices(frame)
+        if not issue and pd.Timestamp(frame.bar_end.max()) != pd.Timestamp(expected):
             issue = "末根K线滞后（停牌或数据未更新）"
         if issue:
-            result = {
+            return {
                 "state": "数据待补",
                 "eligible": False,
                 "score": 0,
-                "reason": issue,
+                "reason": issue if not frame.empty else f"没有{period}原生行情",
                 "checks": [],
+                "timeframe": period,
             }
-        else:
-            result = screen(frame, cfg)
+        result = screen(frame, cfg, period)
         result.pop("config", None)
+        return result
+
+    for m in batch:
+        result = evaluate(groups.get(m["ts_code"], pd.DataFrame()), cutoff, "60F")
+        if cfg.selection_mode == "dual":
+            result["daily"] = evaluate(
+                daily_groups.get(m["ts_code"], pd.DataFrame()), daily_cutoff, "1D"
+            )
         if "ST" in m["name"].upper() or "退" in m["name"]:
             result.update(
                 eligible=False,
                 state="风险标的过滤",
                 reason="当前简称含ST或退市标记",
             )
+            if "daily" in result:
+                result["daily"].update(
+                    eligible=False,
+                    state="风险标的过滤",
+                    reason="当前简称含ST或退市标记",
+                )
         rows.append({**m, "membership_date": str(m["membership_date"]), **result})
     return rows
 
@@ -77,6 +99,19 @@ def scan(as_of: str | None = None, cfg: TrendConfig = TrendConfig(), workers: in
     if not members:
         raise ValueError("该日期之前没有成分股快照，不能用未来成分冒充历史股票池")
     start = "2026-01-01"
+    daily_cutoff = None
+    if cfg.selection_mode == "dual" and available.get("daily_end"):
+        daily_latest = min(
+            datetime.combine(available["daily_end"], time(15)),
+            datetime.combine(available["factor_date"], time(15)),
+        )
+        daily_cutoff = (
+            datetime.combine(datetime.fromisoformat(as_of).date(), time(15))
+            if as_of
+            else daily_latest
+        )
+        if daily_cutoff > daily_latest:
+            raise ValueError(f"日K可验证截止为{daily_latest}")
     if not 1 <= workers <= 4:
         raise ValueError("workers必须在1到4之间")
     rows = []
@@ -84,7 +119,12 @@ def scan(as_of: str | None = None, cfg: TrendConfig = TrendConfig(), workers: in
     try:
         futures = [
             pool.submit(
-                _scan_batch, members[i : i + 100], start, cutoff.isoformat(), cfg
+                _scan_batch,
+                members[i : i + 100],
+                start,
+                cutoff.isoformat(),
+                cfg,
+                daily_cutoff.isoformat() if daily_cutoff else None,
             )
             for i in range(0, len(members), 100)
         ]
@@ -104,13 +144,34 @@ def scan(as_of: str | None = None, cfg: TrendConfig = TrendConfig(), workers: in
         "start": start,
         "price_basis": "forward_asof",
         "universe_basis": "当时可用的最近成分快照；不是逐日历史成员回放",
-        "method": "60F结构反转：先有止跌与至少两项前兆，再突破阻力首阳观察、第2—4推进阳线确认；v3研究假设，尚未验证超额收益",
+        "method": "两类机会：趋势回调 / 阴跌与砸坑反弹；60F与原生日K分开筛选，反弹不要求日线多头；尚未验证超额收益",
     }
-    if all(r["state"] == "数据待补" for r in rows):
+    period_results = rows + [r["daily"] for r in rows if "daily" in r]
+    if all(r["state"] == "数据待补" for r in period_results):
         raise ValueError(
             "全池数据检查未通过；请先运行 python -m jobs.repair_trend_factors，未发布本轮快照"
         )
-    return cutoff.isoformat(), metadata, rows
+    if cfg.selection_mode == "dual":
+
+        def stats(records, end, latest):
+            return {
+                "as_of": str(end or cutoff),
+                "data_latest": str(latest or end or cutoff),
+                "universe": len(records),
+                "eligible": sum(r["eligible"] for r in records),
+                "states": dict(Counter(r["state"] for r in records)),
+                "patterns": dict(
+                    Counter(
+                        r.get("pattern_label", "") for r in records if r["eligible"]
+                    )
+                ),
+            }
+
+        metadata["timeframes"] = {
+            "60F": stats(rows, cutoff, available["bar_end"]),
+            "1D": stats([r["daily"] for r in rows], daily_cutoff, daily_cutoff),
+        }
+    return max(cutoff, daily_cutoff or cutoff).isoformat(), metadata, rows
 
 
 def main():

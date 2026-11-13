@@ -5,7 +5,7 @@ const stamp = (s) => Date.parse(s.replace(/Z$/, '').slice(0, 19) + '+08:00') / 1
 const timeLabel = (time) => typeof time === 'number'
   ? new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(time * 1000)) : ''
 
-export default function TrendChart({ data, stop, config }) {
+export default function TrendChart({ data, stop, config, timeframe = '60F' }) {
   const host = useRef(null)
   const [hover, setHover] = useState(null)
   useEffect(() => {
@@ -24,7 +24,7 @@ export default function TrendChart({ data, stop, config }) {
     const volume = chart.addSeries(HistogramSeries, { priceFormat: { type: 'volume' }, priceLineVisible: false, lastValueVisible: false }, 1)
     const rows = data.map((r) => ({ ...r, time: stamp(r.bar_end) })).filter((r) => Number.isFinite(r.time))
     candles.setData(rows.map(({ time, open, high, low, close }) => ({ time, open, high, low, close })))
-    if (config?.selection_mode === 'early') createSeriesMarkers(candles, rows.filter((r) => r.eligible || r.first_watch).map((r) => ({
+    if (['early','dual'].includes(config?.selection_mode)) createSeriesMarkers(candles, rows.filter((r) => r.eligible || r.first_watch).map((r) => ({
       time: r.time, position: 'belowBar', color: r.first_watch ? '#dfb671' : '#68bea2',
       shape: r.first_watch ? 'circle' : 'arrowUp', text: r.first_watch ? '首阳观察' : `${r.startup_count}阳确认`,
     })))
@@ -41,13 +41,13 @@ export default function TrendChart({ data, stop, config }) {
     const observer = new ResizeObserver(([entry]) => chart.applyOptions({ width: entry.contentRect.width }))
     observer.observe(host.current)
     return () => { observer.disconnect(); chart.remove() }
-  }, [data, stop, config?.selection_mode])
+  }, [data, stop, config?.selection_mode, timeframe])
   return <>
     <div className="trend-chart-legend">
       <span className="trend-legend-fast">EMA {config?.fast || 20}</span><span className="trend-legend-slow">EMA {config?.slow || 60}</span>
       {hover && <span className="trend-ohlc">{timeLabel(hover.time)}　开 {hover.open.toFixed(2)}　高 {hover.high.toFixed(2)}　低 {hover.low.toFixed(2)}　收 {hover.close.toFixed(2)}</span>}
-      {hover?.startup_count > 0 && config?.selection_mode === 'early' && <span className="trend-legend-fast">本段第 {hover.startup_count} 阳 / {hover.startup_age} 根K线</span>}
+      {hover?.startup_count > 0 && ['early','dual'].includes(config?.selection_mode) && <span className="trend-legend-fast">{hover.pattern_label || ''} 本段第 {hover.startup_count} 阳 / {hover.startup_age} 根K线</span>}
     </div>
-    <div ref={host} className="trend-chart" aria-label="60分钟K线、均线及成交量，可拖动缩放" />
+    <div ref={host} className="trend-chart" aria-label={`${timeframe === '1D' ? '日K' : '60分钟K线'}、均线及成交量，可拖动缩放`} />
   </>
 }

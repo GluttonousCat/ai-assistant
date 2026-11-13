@@ -17,7 +17,11 @@ def cutoffs(now: datetime) -> dict:
         factor = pg.fetch_one(
             "SELECT max(trade_date) AS factor_date FROM stock.adj_factor"
         )
-    return {**bars, **factor}
+        daily = pg.fetch_one(
+            "SELECT max(trade_date) AS daily_end FROM stock.daily WHERE trade_date::timestamp+interval '15 hours'<=%s",
+            (now,),
+        )
+    return {**bars, **factor, **daily}
 
 
 def universe(as_of: str) -> list[dict]:
@@ -44,6 +48,19 @@ def inputs(codes: list[str], start: str, end: str):
             ON f.ts_code=b.ts_code AND f.trade_date=b.bar_end::date
             WHERE b.ts_code=ANY(%s) AND b.interval_minutes=60 AND b.source='akshare-sina' AND b.adjustment='none'
             AND b.bar_end>=%s::date AND b.bar_end<=%s::timestamp ORDER BY b.ts_code,b.bar_end""",
+            (codes, start, end),
+        )
+
+
+def daily_inputs(codes: list[str], start: str, end: str):
+    """Native daily bars; Tushare lots/thousand CNY become shares/CNY."""
+    with PgClient(read_only=True) as pg:
+        return pg.fetch_df(
+            """SELECT d.ts_code,d.trade_date::timestamp+interval '15 hours' AS bar_end,
+            d.open,d.high,d.low,d.close,d.vol*100 AS volume,d.amount*1000 AS amount,f.adj_factor
+            FROM stock.daily d LEFT JOIN stock.adj_factor f USING(ts_code,trade_date)
+            WHERE d.ts_code=ANY(%s) AND d.trade_date>=%s::date AND d.trade_date::timestamp+interval '15 hours'<=%s::timestamp
+            AND d.vol>0 ORDER BY d.ts_code,d.trade_date""",
             (codes, start, end),
         )
 

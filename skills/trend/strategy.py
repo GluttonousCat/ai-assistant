@@ -11,12 +11,12 @@ import numpy as np
 import pandas as pd
 from skills.trend.startup import add_startup_features
 
-VERSION = "60f-structure-v3"
+VERSION = "dual-setups-v4"
 
 
 @dataclass(frozen=True)
 class TrendConfig:
-    selection_mode: str = "early"
+    selection_mode: str = "dual"
     fast: int = 20
     slow: int = 60
     slope_bars: int = 8
@@ -46,8 +46,8 @@ class TrendConfig:
             or not 2 <= self.precursor_min_signs <= 4
         ):
             raise ValueError("结构开关必须为bool；前兆证据至少2项、最多4项")
-        if self.selection_mode not in ("early", "mature"):
-            raise ValueError("selection_mode只支持early/mature")
+        if self.selection_mode not in ("dual", "early", "mature"):
+            raise ValueError("selection_mode只支持dual/early/mature")
         if (
             not 4 <= self.startup_max_bars <= 40
             or not 0 <= self.startup_pause_bars <= 4
@@ -77,7 +77,9 @@ class TrendConfig:
             raise ValueError("策略阈值必须为有限正数")
 
 
-def indicators(bars: pd.DataFrame, cfg: TrendConfig = TrendConfig()) -> pd.DataFrame:
+def indicators(
+    bars: pd.DataFrame, cfg: TrendConfig = TrendConfig(), timeframe: str = "60F"
+) -> pd.DataFrame:
     """Ascending, deduplicated input; only past/current observations are used."""
     f = (
         bars.copy()
@@ -144,7 +146,7 @@ def indicators(bars: pd.DataFrame, cfg: TrendConfig = TrendConfig()) -> pd.DataF
             close=("close", "last"), amount=("amount", "sum"), count=("close", "count")
         )
     )
-    daily = daily[daily["count"] == 4].copy()
+    daily = daily[daily["count"] == (1 if timeframe == "1D" else 4)].copy()
     daily["daily_fast"] = daily.close.ewm(
         span=cfg.fast, adjust=False, min_periods=cfg.fast
     ).mean()
@@ -162,7 +164,7 @@ def indicators(bars: pd.DataFrame, cfg: TrendConfig = TrendConfig()) -> pd.DataF
         direction="backward",
     )
     f["daily_trend"] = (f.daily_fast > f.daily_slow) & (f.daily_slope > 0)
-    return add_startup_features(f, cfg)
+    return f if cfg.selection_mode == "dual" else add_startup_features(f, cfg)
 
 
 def _checks(f: pd.DataFrame, cfg: TrendConfig):
@@ -239,9 +241,17 @@ def _checks(f: pd.DataFrame, cfg: TrendConfig):
     return checks
 
 
-def evaluated_bars(bars: pd.DataFrame, cfg: TrendConfig = TrendConfig()):
+def evaluated_bars(
+    bars: pd.DataFrame, cfg: TrendConfig = TrendConfig(), timeframe: str = "60F"
+):
     """One causal decision path shared by latest screening and historical markers."""
-    f = indicators(bars, cfg)
+    if timeframe not in ("60F", "1D"):
+        raise ValueError("timeframe只支持60F/1D")
+    f = indicators(bars, cfg, timeframe)
+    if cfg.selection_mode == "dual":
+        from skills.trend.setups import evaluate_setups
+
+        return evaluate_setups(f, cfg, timeframe)
     low = f.startup_low if cfg.selection_mode == "early" else f.low.rolling(8).min()
     f["stop_price"] = np.minimum(low - 0.2 * f.atr, f.close - cfg.stop_atr * f.atr)
     f["risk_pct"] = (f.close - f.stop_price) / f.close * 100
@@ -271,7 +281,9 @@ def evaluated_bars(bars: pd.DataFrame, cfg: TrendConfig = TrendConfig()):
     return f
 
 
-def screen(bars: pd.DataFrame, cfg: TrendConfig = TrendConfig()) -> dict:
+def screen(
+    bars: pd.DataFrame, cfg: TrendConfig = TrendConfig(), timeframe: str = "60F"
+) -> dict:
     """Return explicit gates as well as a score; score cannot bypass a failed gate."""
     if bars.empty:
         return {
@@ -279,9 +291,13 @@ def screen(bars: pd.DataFrame, cfg: TrendConfig = TrendConfig()) -> dict:
             "eligible": False,
             "score": 0,
             "checks": [],
-            "reason": "没有60F数据",
+            "reason": f"没有{timeframe}数据",
         }
-    f = evaluated_bars(bars, cfg)
+    f = evaluated_bars(bars, cfg, timeframe)
+    if cfg.selection_mode == "dual":
+        from skills.trend.setups import setup_result
+
+        return setup_result(f, cfg, timeframe)
     r = f.iloc[-1]
     required = [
         "ema_fast",

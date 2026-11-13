@@ -3,6 +3,7 @@
 import asyncio
 from datetime import date
 from uuid import UUID
+from typing import Literal
 from fastapi import APIRouter, HTTPException, Query
 from tools.market.queries import query_intraday
 from skills.trend.service import dashboard, stock_detail
@@ -19,7 +20,9 @@ async def trend_dashboard():
 
 
 @market_router.get("/dashboard/{code}")
-async def trend_stock(code: str, run_id: UUID | None = None):
+async def trend_stock(
+    code: str, run_id: UUID | None = None, timeframe: Literal["60F", "1D"] = "60F"
+):
     import re
 
     if not re.fullmatch(r"\d{6}\.(SH|SZ|BJ)", code):
@@ -29,12 +32,21 @@ async def trend_stock(code: str, run_id: UUID | None = None):
     )
     if snapshot is None:
         raise HTTPException(503, "尚未生成趋势快照，请运行 python -m jobs.scan_trend")
+    if timeframe == "1D" and "1D" not in snapshot["metadata"].get("timeframes", {}):
+        raise HTTPException(404, "该历史快照尚未计算日K策略")
+    cutoff = (
+        snapshot["metadata"]
+        .get("timeframes", {})
+        .get(timeframe, {})
+        .get("as_of", snapshot["as_of"])
+    )
     return await asyncio.to_thread(
         stock_detail,
         code,
         snapshot["metadata"]["start"],
-        snapshot["as_of"],
+        cutoff,
         snapshot["metadata"]["config"],
+        timeframe,
     )
 
 

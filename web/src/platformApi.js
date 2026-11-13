@@ -82,7 +82,7 @@ function sseStream(path, body, onEvent) {
 
 export const platformApi = {
   marketDashboard: () => request('GET', '/api/v1/market/dashboard'),
-  marketStock: (code, runId) => request('GET', `/api/v1/market/dashboard/${encodeURIComponent(code)}${runId ? `?run_id=${encodeURIComponent(runId)}` : ''}`),
+  marketStock: (code, runId, timeframe = '60F') => request('GET', `/api/v1/market/dashboard/${encodeURIComponent(code)}?${new URLSearchParams({timeframe, ...(runId ? {run_id: runId} : {})})}`),
   login: (username, password) =>
     request('POST', '/api/auth/login', { username, password }),
   register: (username, password, inviteCode) =>
