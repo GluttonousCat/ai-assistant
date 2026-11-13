@@ -72,3 +72,10 @@ test('bounded caches isolate snapshot/stock/period keys and evict the least rece
   assert.equal(cache.get('run-a:600000.SH:1D:1'), undefined)
   assert.equal(cache.get(a)[0].time, 1)
 })
+
+test('60F reversal observation is a non-executable circle distinct from daily entry', () => {
+  const markers = signalMarkers([{time: 1, reversal_ignition: true, eligible: false}]);
+  assert.equal(markers[0].shape, 'circle');
+  assert.equal(markers[0].text, '反转观察');
+  assert.equal(markers[0].position, 'aboveBar');
+});

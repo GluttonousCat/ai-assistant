@@ -32,7 +32,8 @@ skills/      领域技能 (每技能一目录, 专业知识放 prompt):
              beta_alpha(产业链Beta+个股Alpha: chains种子链/analysis/tests) /
              content(内容资产管线: 画像/公众号文章/PPT/年报解读) /
              research(研究生产线: 证据→十章草稿→成稿, 任务分派见 docs/research/tasks/)
-jobs/        sync_intraday(2026年60F入库/五指数成分并集/断点续传) / check_boundaries(分层检查) /
+jobs/        sync_remaining_market(沪深三板非ST剩余60F+原生日K/真实因子补齐,独立上市名单快照) / backtest_reversal(原池v6固定退出对照) /
+             sync_intraday(2026年60F入库/五指数成分并集/断点续传) / check_boundaries(分层检查) /
              backtest_mtf(双周期日K入场/三退出方案开发段选择与分段验证) / backtest_quant(旧v4两周期三策略对照) / sync_backtest_inputs(原生日K查缺/真实限价/基准,不推水位线) /
              scan_trend(全池离线筛票/原子发布) / repair_trend_factors(精确补缺真实复权因子,不推进日线水位线) /
              任务层一体: scheduler(Tushare 17:00 Asia/Shanghai,交易日) / zsxq_scheduler(爬虫 00:00/12:00) /

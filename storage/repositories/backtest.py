@@ -159,6 +159,17 @@ def annotate_replay_config(suite_id, config):
         )
 
 
+def annotate_diagnostics(run_id, diagnostics):
+    """Complete report context without changing returns, equity or trades."""
+    with PgClient() as pg:
+        pg.execute(
+            """UPDATE stock.backtest_run SET payload=jsonb_set(
+            payload,'{diagnostics}',coalesce(payload->'diagnostics','{}'::jsonb) || %s::jsonb)
+            WHERE run_id=%s::uuid""",
+            (Json(diagnostics), run_id),
+        )
+
+
 def load_run(run_id, offset=0, limit=100):
     with PgClient(read_only=True) as pg:
         if not pg.fetch_one("SELECT to_regclass('stock.backtest_run') AS name")["name"]:

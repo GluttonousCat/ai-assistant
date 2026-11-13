@@ -24,8 +24,21 @@ def cutoffs(now: datetime) -> dict:
     return {**bars, **factor, **daily}
 
 
-def universe(as_of: str) -> list[dict]:
+def universe(as_of: str, listed=False) -> list[dict]:
     with PgClient(read_only=True) as pg:
+        if listed and pg.table_exists("stock", "listed_universe_snapshot"):
+            # This is a current observed universe, not reconstructed historical
+            # membership. Allow an earlier quote cutoff, recording fetched_at.
+            rows = pg.fetch_all("""SELECT u.ts_code,u.name,u.industry,u.board,
+                u.snapshot_date AS membership_date,u.fetched_at AS observed_at,
+                ARRAY(SELECT DISTINCT m.index_code FROM stock.index_membership_snapshot m
+                    WHERE m.ts_code=u.ts_code AND m.as_of_date=(SELECT max(s.as_of_date)
+                    FROM stock.index_membership_snapshot s WHERE s.index_code=m.index_code)) AS indices
+                FROM stock.listed_universe_snapshot u
+                WHERE u.snapshot_date=(SELECT max(snapshot_date) FROM stock.listed_universe_snapshot)
+                ORDER BY u.ts_code""")
+            if rows:
+                return rows
         return pg.fetch_all(
             """WITH dates AS (
             SELECT index_code,max(as_of_date) AS as_of_date FROM stock.index_membership_snapshot

@@ -130,6 +130,9 @@ def _mtf_detail(code, start, end, config, timeframe):
         data = m if timeframe == "60F" else d
         if timeframe == "60F":
             data["eligible"] = False
+        elif "reversal_ignition" in data:
+            # Observation origins belong on 60F; daily arrows remain entries.
+            data["reversal_ignition"] = False
     data["first_watch"] = False
     data["resume_watch"] = False
     data["swing_ignition"] = False
@@ -158,6 +161,11 @@ def _mtf_detail(code, start, end, config, timeframe):
             "state",
             "context_end",
             "stop_price",
+            "reversal_start",
+            "reversal_age",
+            "reversal_bulls",
+            "reversal_ignition",
+            "reversal_fresh",
         ]
         if c in data
     ]

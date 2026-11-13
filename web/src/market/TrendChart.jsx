@@ -108,8 +108,8 @@ const TrendChart = memo(function TrendChart({ data, instrumentKey, stop, stopLab
 
   useEffect(() => {
     const mtf = config?.selection_mode === 'mtf'
-    api.current.markers.setMarkers((mtf ? timeframe === '1D' : ['early', 'dual'].includes(config?.selection_mode)) ? signalMarkers(rows, { dailyEntry: mtf }) : [])
-  }, [rows, config?.selection_mode, timeframe])
+    api.current.markers.setMarkers((mtf ? timeframe === '1D' || config?.fresh_reversal : ['early', 'dual'].includes(config?.selection_mode)) ? signalMarkers(rows, { dailyEntry: mtf }) : [])
+  }, [rows, config?.selection_mode, config?.fresh_reversal, timeframe])
 
   useEffect(() => {
     const state = api.current

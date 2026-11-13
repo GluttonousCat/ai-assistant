@@ -3,6 +3,12 @@
 from skills.trend.strategy import VERSION, TrendConfig
 
 STRATEGIES = {
+    "mtf_reversal_v6": {
+        "name": "60F低位早期反转",
+        "family": "base_rebound",
+        "generation": "v6",
+        "description": "阴跌或深坑后首阳观察，追踪原始起点；限早期12根/前4推进阳线，日K确认后次日开盘入场。低位不保证收益。",
+    },
     "mtf_dual_v5": {
         "name": "60F趋势·日K双机会",
         "family": None,
@@ -40,18 +46,31 @@ STRATEGIES = {
 
 
 def catalog():
-    from skills.trend.mtf import VERSION as MTF_VERSION, MtfConfig
+    from skills.trend.mtf import VERSION as MTF_VERSION, FRESH_VERSION, MtfConfig
 
     return [
         {
             **value,
             "id": key,
-            "version": MTF_VERSION if value.get("generation") == "v5" else VERSION,
-            "timeframes": ["1D"] if value.get("generation") == "v5" else ["60F", "1D"],
+            "version": FRESH_VERSION
+            if value.get("generation") == "v6"
+            else MTF_VERSION
+            if value.get("generation") == "v5"
+            else VERSION,
+            "timeframes": ["1D"]
+            if value.get("generation") in ("v5", "v6")
+            else ["60F", "1D"],
             "entry_config": (
-                MtfConfig() if value.get("generation") == "v5" else TrendConfig()
+                MtfConfig(
+                    fresh_reversal=value.get("generation") == "v6",
+                    reversal_cycle_reset=value.get("generation") == "v6",
+                )
+                if value.get("generation") in ("v5", "v6")
+                else TrendConfig()
             ).__dict__,
-            "trend_timeframe": "60F" if value.get("generation") == "v5" else None,
+            "trend_timeframe": "60F"
+            if value.get("generation") in ("v5", "v6")
+            else None,
         }
         for key, value in STRATEGIES.items()
     ]

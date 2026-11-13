@@ -101,7 +101,7 @@ def prepare_stock(raw, member, timeframe, cfg=TrendConfig()):
     ), None
 
 
-def prepare_mtf(minute, daily, member):
+def prepare_mtf(minute, daily, member, cfg=None):
     from skills.trend.mtf import evaluate, MtfConfig
 
     m, _, issue = _normalized(minute)
@@ -110,7 +110,8 @@ def prepare_mtf(minute, daily, member):
     d, data, issue = _normalized(daily)
     if issue:
         return None, "日K:" + issue
-    _, evaluated = evaluate(m, d)
+    cfg = cfg or MtfConfig()
+    _, evaluated = evaluate(m, d, cfg)
     signals = []
     for i in np.flatnonzero(evaluated.eligible.to_numpy()):
         row = evaluated.iloc[i]
@@ -125,7 +126,7 @@ def prepare_mtf(minute, daily, member):
                 "score": float(row.score),
             }
         )
-    data["trail_a"] = evaluated[f"ma{MtfConfig().slow}"].to_numpy(dtype=float)
+    data["trail_a"] = evaluated[f"ma{cfg.slow}"].to_numpy(dtype=float)
     data["trail_b"] = data["trail_a"].copy()
     data["atr"] = evaluated.atr.to_numpy(dtype=float)
     return MarketSeries(

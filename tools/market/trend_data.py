@@ -12,8 +12,8 @@ def scan_daily_inputs(codes, start, end):
     return repository.daily_inputs(codes, start, end)
 
 
-def scan_universe(as_of):
-    return repository.universe(as_of)
+def scan_universe(as_of, listed=False):
+    return repository.universe(as_of, listed=listed) if listed else repository.universe(as_of)
 
 
 def scan_cutoffs(now):

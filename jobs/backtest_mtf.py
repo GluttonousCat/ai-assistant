@@ -25,7 +25,7 @@ from skills.quant.prepare import MarketSeries, prepare_mtf, prepare_stock
 from skills.quant.report import write_result
 from skills.quant.research_report import write_research_report
 from skills.quant.registry import STRATEGIES
-from skills.trend.mtf import VERSION, MtfConfig
+from skills.trend.mtf import VERSION, version_for, MtfConfig
 from storage.repositories.backtest import input_dates, publish
 from storage.schema.quant import ensure_quant_schema
 from tools.market.backtest_data import benchmarks, observed_dates, quotes
@@ -49,19 +49,20 @@ WINDOWS = {
 }
 
 
-def prepare(folder, workers=2):
+def prepare(folder, workers=2, entry_cfg=None):
+    entry_cfg = entry_cfg or MtfConfig()
     folder.mkdir(parents=True, exist_ok=True)
     members = scan_universe(END)
     observed = observed_dates([m["ts_code"] for m in members], END)
     for m in members:
         m["observed_at"] = observed[m["ts_code"]]
     declaration = {
-        "calculation_version": VERSION,
+        "calculation_version": version_for(entry_cfg),
         "execution_version": EXECUTION_VERSION,
         "suite_id": str(uuid4()),
         "start": START,
         "end": END,
-        "strategy_config": asdict(MtfConfig()),
+        "strategy_config": asdict(entry_cfg),
         "profiles": {k: asdict(v) for k, v in PROFILES.items()},
         "windows": WINDOWS,
         "selection": "development only: >=30 closed trades, maximize return/max(drawdown,1); no later-window reselection",
@@ -92,6 +93,7 @@ def prepare(folder, workers=2):
                 mg.get(member["ts_code"], pd.DataFrame()),
                 dg.get(member["ts_code"], pd.DataFrame()),
                 member,
+                entry_cfg,
             )
             if issue:
                 excluded.append({"code": member["ts_code"], "reason": issue})
@@ -369,7 +371,9 @@ def main():
     if a.resume:
         with (a.folder / "prepared.pkl").open("rb") as source:
             payload = pickle.load(source)
-        if payload["declaration"]["strategy_config"] != asdict(MtfConfig()):
+        if asdict(MtfConfig(**payload["declaration"]["strategy_config"])) != asdict(
+            MtfConfig()
+        ):
             raise ValueError("缓存参数不符，请重新准备")
         payload["declaration"].setdefault(
             "calculation_version", "60f-trend-daily-entry-v5.1"

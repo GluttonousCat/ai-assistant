@@ -11,6 +11,8 @@ import numpy as np
 import pandas as pd
 
 VERSION = "60f-trend-daily-entry-v5.1"
+REVERSAL_VERSION = "60f-early-reversal-daily-entry-v6"
+FRESH_VERSION = "60f-early-reversal-daily-entry-v6.1"
 LABELS = {"trend_pullback": "趋势回调", "base_rebound": "止跌修复"}
 
 
@@ -30,8 +32,19 @@ class MtfConfig:
     max_extension_atr: float = 2.5
     cooldown_days: int = 5
     slope_epsilon_atr: float = 1e-8
+    # Opt in explicitly so persisted v5.1 configurations remain reproducible.
+    fresh_reversal: bool = False
+    reversal_cycle_reset: bool = False
 
     def __post_init__(self):
+        if type(self.fresh_reversal) is not bool:
+            raise ValueError("fresh_reversal必须为布尔值")
+        if type(self.reversal_cycle_reset) is not bool:
+            raise ValueError("reversal_cycle_reset必须为布尔值")
+        if self.reversal_cycle_reset and not self.fresh_reversal:
+            raise ValueError("新下降周期退役只适用于早期反转模式")
+        if self.fresh_reversal and (self.fast, self.mid, self.slow) != (8, 13, 21):
+            raise ValueError("早期反转模式使用固定M8/M13/M21")
         if self.selection_mode != "mtf":
             raise ValueError("MtfConfig只接受mtf模式")
         if any(
@@ -55,6 +68,14 @@ class MtfConfig:
                 raise ValueError("策略阈值必须为有限正数")
         if not math.isfinite(self.slope_epsilon_atr) or self.slope_epsilon_atr < 0:
             raise ValueError("斜率容差必须为有限非负数（0仅供旧版本回放）")
+
+
+def version_for(cfg):
+    return (
+        (FRESH_VERSION if cfg.reversal_cycle_reset else REVERSAL_VERSION)
+        if cfg.fresh_reversal
+        else VERSION
+    )
 
 
 def features(bars, cfg=MtfConfig()):
@@ -106,6 +127,18 @@ def evaluate(minute, daily, cfg=MtfConfig()):
     m["trend_state"] = np.select(
         [orderly, repair], ["趋势向上", "止跌修复"], default="趋势未确认"
     )
+    reversal_cols = []
+    if cfg.fresh_reversal:
+        from skills.trend.reversal import reversal_context
+
+        m = reversal_context(m, cycle_reset=cfg.reversal_cycle_reset)
+        reversal_cols = [c for c in m if c.startswith("reversal_")]
+        m["trend_ready"] = (
+            m.reversal_fresh
+            & m.close.ge(m[f"ma{cfg.fast}"])
+            & m[f"ma{cfg.fast}"].diff().gt(eps)
+        ).fillna(False)
+        m["trend_state"] = m.reversal_state
     # A stale previous-day context, or a day with a missing 60F bar, cannot trade.
     count = m.groupby(m.bar_end.dt.normalize()).bar_end.transform("size")
     complete = m.bar_end.dt.hour.eq(15) & m.bar_end.dt.minute.eq(0) & count.eq(4)
@@ -118,6 +151,7 @@ def evaluate(minute, daily, cfg=MtfConfig()):
             f"ma{cfg.fast}",
             f"ma{cfg.mid}",
             f"ma{cfg.slow}",
+            *reversal_cols,
         ],
     ].rename(
         columns={
@@ -129,6 +163,10 @@ def evaluate(minute, daily, cfg=MtfConfig()):
         d, context, left_on="bar_end", right_on="context_end", direction="backward"
     )
     d["context_complete"] = d.context_end.eq(d.bar_end)
+    if cfg.fresh_reversal:
+        d["reversal_fresh"] = (
+            d.reversal_fresh.fillna(False).astype(bool) & d.context_complete
+        )
     d["trend_ready"] = d.trend_ready.fillna(False).astype(bool) & d.context_complete
     d["trend_state"] = d.trend_state.fillna("60F数据不足").where(
         d.context_complete, "60F数据不足"
@@ -168,6 +206,11 @@ def evaluate(minute, daily, cfg=MtfConfig()):
     ) & er.fillna(0).le(0.45)
     near_floor = previous - d.low.shift().rolling(10).min() <= 3 * atr
     context_b = (drift | base) & near_floor
+    if cfg.fresh_reversal:
+        # The precondition is now the completed 60F decline/pit, rather than
+        # permitting a mature daily uptrend to supply an unrelated background.
+        context_a = pd.Series(False, index=d.index)
+        context_b = d.reversal_fresh.fillna(False)
     body = d.close - d.open
     location = (d.close - d.low) / (d.high - d.low).replace(0, np.nan)
     red = (d.close < d.open).shift().rolling(3).sum().ge(2)
@@ -225,6 +268,13 @@ def evaluate(minute, daily, cfg=MtfConfig()):
         ["日K入场候选", "数据不足", "等待日K确认"],
         default="60F趋势未确认",
     )
+    if cfg.fresh_reversal:
+        d.loc[~d.eligible & d.reversal_fresh.fillna(False), "state"] = "早期反转观察"
+        d.loc[~d.eligible & d.reversal_state.eq("反转已过早期"), "state"] = (
+            "反转已过早期"
+        )
+        d.loc[~d.context_complete, "state"] = "数据不足"
+        d["pattern_label"] = d.reversal_kind.fillna("").replace("", "等待低位反转")
     d["score"] = (
         40 * d.trend_ready.astype(int)
         + 20 * d.quality_candle.astype(int)
@@ -232,6 +282,8 @@ def evaluate(minute, daily, cfg=MtfConfig()):
         + 10 * d.liquidity_ok.astype(int)
         + 10 * (1 - d.risk_pct / cfg.max_risk_pct).clip(0, 1)
     ).round(1)
+    if cfg.fresh_reversal:
+        d.loc[~d.reversal_fresh.fillna(False), "score"] = 0
     return m, d
 
 
@@ -281,6 +333,19 @@ def result(d, cfg=MtfConfig()):
             f"日K收盘确认；同股至少间隔{cfg.cooldown_days}个交易日",
         ),
     ]
+    if cfg.fresh_reversal:
+        checks[0] = (
+            "trend60",
+            "60F早期反转",
+            r.trend_ready,
+            "阴跌/深坑后的有效首阳；M8转升并收复M8；限起点后12根、前4根推进阳线、距起点≤3ATR，距M21≤2ATR",
+        )
+        checks[1] = (
+            "structure",
+            "60F低位前置结构",
+            r.b_context,
+            "前16根下跌≥2ATR且至少半数下跌，或前8根回撤≥3ATR；处64根区间下45%，靠近16根低点且M13此前下降",
+        )
 
     def num(key):
         value = r.get(key, np.nan)
@@ -323,5 +388,22 @@ def result(d, cfg=MtfConfig()):
             "state": r.trend_state,
             "bar_end": r.context_end.isoformat() if pd.notna(r.context_end) else None,
             **{f"ma{n}": num(f"context_ma{n}") for n in [cfg.fast, cfg.mid, cfg.slow]},
+            **(
+                {
+                    "origin": r.reversal_start.isoformat()
+                    if pd.notna(r.reversal_start)
+                    else None,
+                    "age_bars": num("reversal_age"),
+                    "bullish_count": num("reversal_bulls"),
+                    "gain_atr": num("reversal_gain_atr"),
+                    "floor": num("reversal_floor"),
+                    "kind": r.reversal_kind if pd.notna(r.reversal_kind) else "",
+                    "fresh": bool(r.reversal_fresh)
+                    if pd.notna(r.reversal_fresh)
+                    else False,
+                }
+                if cfg.fresh_reversal
+                else {}
+            ),
         },
     }

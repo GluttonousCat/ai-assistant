@@ -16,12 +16,13 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 from core.config import get_config
 from core.logger import get_logger
+from tools.market.universe import board_of, risk_name
 from skills.trend.strategy import VERSION, TrendConfig, screen
 from skills.trend.mtf import (
     MtfConfig,
     evaluate as evaluate_mtf,
     result as mtf_result,
-    VERSION as MTF_VERSION,
+    version_for,
 )
 from storage.schema.trend import ensure_trend_schema
 from storage.repositories.trend import publish
@@ -109,7 +110,19 @@ def _scan_batch(batch, start, cutoff, cfg, daily_cutoff=None):
                     state="风险标的过滤",
                     reason="当前简称含ST或退市标记",
                 )
-        rows.append({**m, "membership_date": str(m["membership_date"]), **result})
+        rows.append(
+            {
+                **m,
+                "board": m.get("board") or board_of(m["ts_code"]),
+                "membership_date": str(m["membership_date"]),
+                **(
+                    {"observed_at": str(m["observed_at"])}
+                    if m.get("observed_at")
+                    else {}
+                ),
+                **result,
+            }
+        )
     return rows
 
 
@@ -141,7 +154,14 @@ def scan(as_of: str | None = None, cfg: TrendConfig = TrendConfig(), workers: in
     )
     if cutoff > latest:
         raise ValueError(f"可验证的策略截止时间为 {latest}; 不推定缺失的复权因子")
-    members = scan_universe(str(cutoff.date()))
+    fresh = cfg.selection_mode == "mtf" and cfg.fresh_reversal
+    members = (
+        scan_universe(str(cutoff.date()), listed=True)
+        if fresh
+        else scan_universe(str(cutoff.date()))
+    )
+    if fresh:
+        members = [m for m in members if not risk_name(m["name"])]
     if not members:
         raise ValueError("该日期之前没有成分股快照，不能用未来成分冒充历史股票池")
     start = "2026-01-01"
@@ -195,6 +215,12 @@ def scan(as_of: str | None = None, cfg: TrendConfig = TrendConfig(), workers: in
         "method": "两类机会：趋势回调 / 阴跌与砸坑反弹；60F与原生日K分开筛选；保留前次起势背景，回调再起不冒充首阳；尚未验证超额收益",
     }
     period_results = rows + [r["daily"] for r in rows if "daily" in r]
+    if fresh:
+        metadata.update(
+            universe_basis="当前非ST上市名单（沪深三板及原有北交所）；非历史逐日成员，存在幸存者偏差",
+            boards=dict(Counter(r["board"] for r in rows)),
+            reversal_watch=sum(r.get("trend60", {}).get("fresh", False) for r in rows),
+        )
     if all(r["state"] == "数据待补" for r in period_results):
         raise ValueError(
             "全池数据检查未通过；请先运行 python -m jobs.repair_trend_factors，未发布本轮快照"
@@ -229,6 +255,10 @@ def scan(as_of: str | None = None, cfg: TrendConfig = TrendConfig(), workers: in
                 trend_ready=sum(r.get("trend60", {}).get("ready", False) for r in rows),
                 method="60F M8/M13/M21确认趋势，原生日K转强确认入场；下一交易日开盘模型；参数仍需后续新样本验证",
             )
+            if fresh:
+                metadata["method"] = (
+                    "60F阴跌/深坑后的低位早期反转观察；起点不因局部回调重置，限12根/前4推进阳线；日K确认后次日开盘模型，低位不保证安全或收益"
+                )
             metadata["timeframes"] = {
                 "1D": stats(rows, daily_cutoff, daily_cutoff),
                 "60F": stats(trend_rows, cutoff, available["bar_end"]),
@@ -244,7 +274,7 @@ def scan(as_of: str | None = None, cfg: TrendConfig = TrendConfig(), workers: in
 def main():
     parser = argparse.ArgumentParser(description="60F主趋势离线筛票")
     parser.add_argument("--as-of", help="完整收盘日，默认行情与复权因子共有的最新日期")
-    parser.add_argument("--config", type=Path, help="TrendConfig字段的JSON文件")
+    parser.add_argument("--config", type=Path, help="TrendConfig/MtfConfig冻结参数的JSON文件")
     parser.add_argument(
         "--workers",
         type=int,
@@ -257,7 +287,11 @@ def main():
     settings = (
         json.loads(args.config.read_text(encoding="utf-8"))
         if args.config
-        else {"selection_mode": "mtf"}
+        else {
+            "selection_mode": "mtf",
+            "fresh_reversal": True,
+            "reversal_cycle_reset": True,
+        }
     )
     cfg = (MtfConfig if settings.get("selection_mode") == "mtf" else TrendConfig)(
         **settings
@@ -268,7 +302,7 @@ def main():
     publish(
         run_id,
         cutoff,
-        MTF_VERSION if cfg.selection_mode == "mtf" else VERSION,
+        version_for(cfg) if cfg.selection_mode == "mtf" else VERSION,
         metadata,
         rows,
     )

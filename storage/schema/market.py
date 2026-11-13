@@ -2,6 +2,16 @@
 from storage.schema.connection import ddl_cursor
 
 DDL = """
+CREATE TABLE IF NOT EXISTS stock.listed_universe_snapshot (
+    snapshot_date DATE NOT NULL,
+    ts_code VARCHAR(16) NOT NULL,
+    name TEXT NOT NULL,
+    industry TEXT NOT NULL,
+    board VARCHAR(16) NOT NULL,
+    list_date DATE,
+    fetched_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY(snapshot_date,ts_code)
+);
 CREATE TABLE IF NOT EXISTS stock.index_membership_snapshot (
     index_code VARCHAR(16) NOT NULL,
     as_of_date DATE NOT NULL,
@@ -43,6 +53,7 @@ CREATE TABLE IF NOT EXISTS stock.intraday_sync_state (
     PRIMARY KEY (ts_code, interval_minutes, source, adjustment, requested_start, requested_end)
 );
 COMMENT ON TABLE stock.intraday_bar IS '原生分钟K线; bar_end为Asia/Shanghai结束时间; volume股,amount元; 多源及复权隔离';
+COMMENT ON TABLE stock.listed_universe_snapshot IS '采集当日非ST上市名单与板块; fetched_at为真实获知时间; 不是历史指数成员或逐日ST状态';
 COMMENT ON TABLE stock.index_membership_snapshot IS '供应商成分权重日期快照; 不推定为历史调入调出日期';
 """
 
