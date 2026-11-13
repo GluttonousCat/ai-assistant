@@ -19,7 +19,7 @@ export const auth = {
   },
 }
 
-async function request(method, path, body) {
+async function request(method, path, body, options = {}) {
   const headers = { 'Content-Type': 'application/json' }
   const token = auth.getToken()
   if (token) headers['Authorization'] = `Bearer ${token}`
@@ -27,6 +27,7 @@ async function request(method, path, body) {
     method,
     headers,
     body: body === undefined ? undefined : JSON.stringify(body),
+    signal: options.signal,
   })
   // 401: on the login endpoint a 401 means "wrong password"; on other endpoints it means "session expired"
   if (res.status === 401 && !path.startsWith('/api/auth/login')) {
@@ -85,7 +86,7 @@ export const platformApi = {
   quantBacktests: () => request('GET', '/api/v1/quant/backtests'),
   quantBacktest: (runId, offset = 0, limit = 30) => request('GET', `/api/v1/quant/backtests/${encodeURIComponent(runId)}?${new URLSearchParams({offset, limit})}`),
   marketDashboard: () => request('GET', '/api/v1/market/dashboard'),
-  marketStock: (code, runId, timeframe = '60F') => request('GET', `/api/v1/market/dashboard/${encodeURIComponent(code)}?${new URLSearchParams({timeframe, ...(runId ? {run_id: runId} : {})})}`),
+  marketStock: (code, runId, timeframe = '60F', options = {}) => request('GET', `/api/v1/market/dashboard/${encodeURIComponent(code)}?${new URLSearchParams({timeframe, ...(runId ? {run_id: runId} : {})})}`, undefined, options),
   login: (username, password) =>
     request('POST', '/api/auth/login', { username, password }),
   register: (username, password, inviteCode) =>

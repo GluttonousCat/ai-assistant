@@ -28,6 +28,7 @@ MCP 与 HTTP 只做协议、校验、鉴权和结果转换，不能成为另一�
 | `api/finance.py` | 对话、数据字典、产业链生成/保存共用模块 | P2 |
 | `web/src/` | 页面、请求、图表和样式平铺；index.css 862 行 | P2 |
 | MCP 两套 server | 传输实现不同但共用 REGISTRY；不能因名称相近就强行合并 | P2 |
+| 项目根pip/pytest临时目录 | 默认临时目录落在根目录，安装/测试结束后残留混入工作区 | P2 |
 
 ## 四、处理方案
 
@@ -49,6 +50,15 @@ MCP 与 HTTP 只做协议、校验、鉴权和结果转换，不能成为另一�
 
 顺序：仓储与 DDL 边界 → 研报/行情采集编排 → Agent 执行拆分 → 前端按功能迁移。
 新增行情/新闻接入在新边界中实现，不等待全仓重构完成；方案见 [数据源选型](data_sources.md)。
+
+2026-11-13工作区整理：核验21个`pip-*`目录均为旧安装的空目录、元数据或wheel，
+运行依赖从虚拟环境/已配置site-packages加载，sys.path不含这些残留。
+删除操作被自动审批策略拦截，改用可恢复归档：
+`output/cleanup-archive/20261113-pip/`保存21目录与移动清单，
+`output/cleanup-archive/20261113-tests/`保存已结束测试的345个临时文件。
+未将有用途的维护脚本或用户文档当作缓存处理。根目录pip/pytest残留已移出；不宣称已永久删除或释放磁盘。
+`.gitignore`明确排除安装/测试缓存；后续命令用`output/tmp`，同时设置进程TMPDIR/TEMP/TMP并确认生效，
+不改用户系统环境设置。
 
 ## 五、验证记录
 
@@ -72,3 +82,7 @@ MCP 与 HTTP 只做协议、校验、鉴权和结果转换，不能成为另一�
 `skills/trend` 只负责纯策略与领域组合，`tools/market/trend_data` 隔离仓储，
 `jobs.scan_trend` 离线发布快照，HTTP只读取。新增DDL归 `storage/schema/trend.py`。
 分层检查仍无新增违规，既有50项依赖债务未扩大。详情见 [股票看板](../frontend/stock_dashboard.md)。
+
+2026-11-13：根目录`pip-*`目录0个、旧pytest临时目录已移出；依赖加载与API健康正常。
+K线图表实例/请求缓存/纯数据更新判别各司其职；8项Node校验及行情API/边界8项Python测试通过，
+前端构建通过，无新增分层违规。实屏交互验收见[股票行情记录](../frontend/stock_dashboard.md)。

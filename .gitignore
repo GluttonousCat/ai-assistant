@@ -9,6 +9,10 @@ dist/
 *.egg-info/
 .installed.cfg
 *.egg
+.pytest_cache/
+.ruff_cache/
+/pip-*/
+/pytest-of-*/
 
 # Virtual environments
 .venv/

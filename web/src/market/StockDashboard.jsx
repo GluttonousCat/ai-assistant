@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { platformApi } from '../platformApi'
 import TrendChart from './TrendChart'
+import useStockChart from './useStockChart'
 import './dashboard.css'
 
 const INDICES = { '000016.SH': '上证50', '000300.SH': '沪深300', '000905.SH': '中证500', '000852.SH': '中证1000', '932000.CSI': '中证2000' }
@@ -8,6 +9,7 @@ const number = (v, digits = 2) => v == null ? '—' : Number(v).toFixed(digits)
 const money = (v) => v == null ? '—' : v >= 1e8 ? `${(v / 1e8).toFixed(2)}亿` : `${(v / 1e4).toFixed(0)}万`
 const dateLabel = (v) => String(v || '—').replace('T', ' ').slice(0, 16)
 const SCREEN_TIMEFRAME = '60F'
+const EMPTY_BARS = []
 
 export default function StockDashboard({ user }) {
   const [snapshot, setSnapshot] = useState(null)
@@ -21,9 +23,9 @@ export default function StockDashboard({ user }) {
   const [mode, setMode] = useState('candidate')
   const [sort, setSort] = useState('score')
   const [code, setCode] = useState('')
-  const [detail, setDetail] = useState(null)
-  const [chartError, setChartError] = useState('')
-  const [chartBusy, setChartBusy] = useState(false)
+  const [chartRevision, setChartRevision] = useState(0)
+  const [resetChartView, setResetChartView] = useState(0)
+  const { detail, error: chartError, busy: chartBusy } = useStockChart(code, snapshot?.run_id, chartTimeframe, chartRevision)
   const [rulesOpen, setRulesOpen] = useState(false)
   const starKey = `alpha:watchlist:${user?.username || user?.id || 'local'}`
   const [stars, setStars] = useState(() => {
@@ -32,7 +34,7 @@ export default function StockDashboard({ user }) {
 
   async function load() {
     setBusy(true); setError('')
-    try { setSnapshot(await platformApi.marketDashboard()) } catch (e) { setError(e.message) }
+    try { setSnapshot(await platformApi.marketDashboard()); setChartRevision((v) => v + 1) } catch (e) { setError(e.message) }
     finally { setBusy(false) }
   }
   useEffect(() => { let active = true; platformApi.marketDashboard().then((r) => { if (active) setSnapshot(r) }).catch((e) => { if (active) setError(e.message) }).finally(() => { if (active) setBusy(false) }); return () => { active = false } }, [])
@@ -49,13 +51,6 @@ export default function StockDashboard({ user }) {
     if (rows.length && !rows.some((r) => r.ts_code === code)) setCode(rows[0].ts_code)
     if (!rows.length) setCode('')
   }, [rows, code])
-  useEffect(() => {
-    if (!code) { setDetail(null); return }
-    let active = true
-    setChartBusy(true); setDetail(null); setChartError('')
-    platformApi.marketStock(code, snapshot?.run_id, chartTimeframe).then((r) => { if (active) setDetail(r) }).catch((e) => { if (active) setChartError(e.message) }).finally(() => { if (active) setChartBusy(false) })
-    return () => { active = false }
-  }, [code, snapshot?.run_id, chartTimeframe])
   function toggleStar(value) {
     const next = stars.includes(value) ? stars.filter((s) => s !== value) : [...stars, value]
     setStars(next)
@@ -119,10 +114,17 @@ export default function StockDashboard({ user }) {
                 <div className="trend-chart-period" role="group" aria-label="K线图周期">
                   {[['1D', '日K'], ['60F', '60F']].map(([key, label]) => <button key={key} className={chartTimeframe === key ? 'on' : ''} aria-pressed={chartTimeframe === key} disabled={key === '1D' && !meta?.timeframes?.['1D']} title={key === '1D' && !meta?.timeframes?.['1D'] ? '当前快照暂无日K数据' : `显示${key === '1D' ? '日K' : '60F K线'}`} onClick={() => setChartTimeframe(key)}>{label}</button>)}
                 </div>
+                <button className="trend-chart-reset" disabled={!detail?.data.length} onClick={() => setResetChartView((v) => v + 1)}>回到最新</button>
                 <span>截至 {dateLabel(chartAsOf)}</span>
               </div>
-              {chartBusy ? <div className="trend-placeholder">加载 {selected.name} 的{chartTimeframe === '1D' ? '日K' : '60F K线'}…</div> : chartError ? <div className="trend-placeholder error" role="alert">{chartError}</div> : detail?.data.length ? <TrendChart data={detail.data} stop={detail.price_basis === 'forward_asof' && chartAsOf?.slice(0, 10) === viewAsOf?.slice(0, 10) ? selected.stop_price : null} stopLabel="60F策略参考止损" config={meta.config} timeframe={chartTimeframe} /> : <div className="trend-placeholder">没有可用的{chartTimeframe === '1D' ? '日K' : '60F K线'}</div>}
+              <div className="trend-chart-viewport" aria-busy={chartBusy}>
+                <TrendChart data={detail?.data || EMPTY_BARS} instrumentKey={`${code}:${chartTimeframe}`} stop={detail?.price_basis === 'forward_asof' && chartAsOf?.slice(0, 10) === viewAsOf?.slice(0, 10) ? selected.stop_price : null} stopLabel="60F策略参考止损" config={meta.config} timeframe={chartTimeframe} resetView={resetChartView} />
+                {chartBusy && (detail?.data.length ? <span className="trend-chart-updating" role="status">更新中…</span> : <div className="trend-chart-overlay" role="status"><span className="trend-chart-spinner" />正在加载 {selected.name} 的{chartTimeframe === '1D' ? '日K' : '60F K线'}…</div>)}
+                {!chartBusy && chartError && !detail?.data.length && <div className="trend-chart-overlay" role="alert"><span>{chartError}</span><button className="btn ghost" onClick={() => setChartRevision((v) => v + 1)}>重试K线</button></div>}
+                {!chartBusy && !chartError && !detail?.data.length && <div className="trend-chart-overlay">没有可用的{chartTimeframe === '1D' ? '日K' : '60F K线'}</div>}
+              </div>
             </div>
+            {chartError && !!detail?.data.length && <div className="trend-notice" role="alert">K线更新失败：{chartError}，当前保留上次数据。<button className="btn ghost" onClick={() => setChartRevision((v) => v + 1)}>重试</button></div>}
             <div className="trend-chart-foot"><span>{chartTimeframe === '1D' ? '原生日K' : '60分钟'} · {detail?.price_basis === 'forward_asof' ? '按截止日复权' : '原始价格'} · 成交量：股</span><span>图中信号按当前K线周期标记 · 滚轮缩放</span></div>
             {detail?.issue && <div className="trend-notice">{detail.issue}，展示原始行情，不据此生成趋势候选。</div>}
             <div className="trend-check-title"><h3>{SCREEN_TIMEFRAME} · 为什么{selected.eligible ? '入选' : '未入选'}</h3><span>质量分用于排序，不代表胜率</span></div>

@@ -147,6 +147,8 @@ vision=qwen3.8-flash（deepseek 不收图片）。**思考开关由 `llm.enable_
 7. **日志**：一律 `get_logger(__name__)`（core/logger 按顶层包聚合落
    logs/agent.log / tools.log 等；禁止裸 `logging.getLogger` 与库代码 print；
    CLI 最终汇总/报表输出可保留 print）；级别/保留天数在 config.yaml `logging` 段
+8. **临时文件**：pip/pytest运行前检查当前进程TMPDIR/TEMP/TMP，若指向项目根，先创建`output/tmp`，三者均指向其绝对路径再执行（TMPDIR优先）；
+   用`tempfile.gettempdir()`确认生效，不能假定系统Temp可写。只改本次进程环境，不改用户系统设置；安装缓存/解包目录不能放根目录或提交。
 
 ## 8. 文档地图（深入阅读）
 
