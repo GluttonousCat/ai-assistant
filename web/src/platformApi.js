@@ -81,6 +81,9 @@ function sseStream(path, body, onEvent) {
 }
 
 export const platformApi = {
+  quantStrategies: () => request('GET', '/api/v1/quant/strategies'),
+  quantBacktests: () => request('GET', '/api/v1/quant/backtests'),
+  quantBacktest: (runId, offset = 0, limit = 30) => request('GET', `/api/v1/quant/backtests/${encodeURIComponent(runId)}?${new URLSearchParams({offset, limit})}`),
   marketDashboard: () => request('GET', '/api/v1/market/dashboard'),
   marketStock: (code, runId, timeframe = '60F') => request('GET', `/api/v1/market/dashboard/${encodeURIComponent(code)}?${new URLSearchParams({timeframe, ...(runId ? {run_id: runId} : {})})}`),
   login: (username, password) =>

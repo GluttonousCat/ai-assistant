@@ -6,12 +6,14 @@ import ChainView from './ChainView'
 import UserAdmin from './UserAdmin' // user management (admin only)
 import Monitor from './Monitor' // real-time monitor (agent sessions/tools/LLM, admin only)
 import StockDashboard from './market/StockDashboard'
+import QuantDashboard from './quant/QuantDashboard'
 
 // Navigation definition: items with adminOnly are greyed out and unclickable for non-admins
 
 const NAV = [
   { key: 'chat', label: '智能对话', icon: '✦' },
   { key: 'market', label: '股票行情', icon: '▥' },
+  { key: 'quant', label: '量化策略', icon: '∿' },
   { key: 'chain', label: '行业挖掘', icon: '⛓' },
   { key: 'reports', label: '研报中心', icon: '▤' },
   { key: 'monitor', label: '实时监控', icon: '◉', adminOnly: true },
@@ -118,6 +120,7 @@ export default function Platform({ user, onLogout }) {
       <main className="main">
         {nav === 'chat' && <AgentChat />}
         {nav === 'market' && <StockDashboard key={user.username} user={user} />}
+        {nav === 'quant' && <QuantDashboard />}
         {nav === 'chain' && <ChainView />}
         {nav === 'reports' && <Reports />}
         {nav === 'monitor' && isAdmin && <Monitor />}

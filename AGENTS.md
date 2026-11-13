@@ -26,12 +26,14 @@ core/        基础设施 (引擎与各层共用的地基, 不含业务):
              config(.env+yaml)/logger(按顶层包分桶)/security(JWT+bcrypt)/
              lifespan(调度器启停)/net/helpers·paths
 skills/      领域技能 (每技能一目录, 专业知识放 prompt):
+             quant(策略注册/资金回测/净值与成交统计/研究报告,复用trend入场; 见 docs/agents/quant_backtesting.md) /
              trend(60F/原生日K两类机会:趋势回调、阴跌/砸坑反弹; 首阳观察/第2—4推进确认; 见 docs/frontend/stock_dashboard.md) /
              fin_query(Text-to-SQL) / report(研报) / scanned_report(OCR) /
              beta_alpha(产业链Beta+个股Alpha: chains种子链/analysis/tests) /
              content(内容资产管线: 画像/公众号文章/PPT/年报解读) /
              research(研究生产线: 证据→十章草稿→成稿, 任务分派见 docs/research/tasks/)
 jobs/        sync_intraday(2026年60F入库/五指数成分并集/断点续传) / check_boundaries(分层检查) /
+             backtest_quant(2026两周期三策略/固定与已知名单对照) / sync_backtest_inputs(原生日K查缺/真实限价/基准,不推水位线) /
              scan_trend(全池离线筛票/原子发布) / repair_trend_factors(精确补缺真实复权因子,不推进日线水位线) /
              任务层一体: scheduler(Tushare 17:00 Asia/Shanghai,交易日) / zsxq_scheduler(爬虫 00:00/12:00) /
              管线入口(daily_fetch_zxsq, sync_zxsq_to_pg, merge_report_duplicates, smoke) /
@@ -45,6 +47,7 @@ api/         路由+鉴权中间件(JWT) / agent_api(SSE) / chains_api / schema_
              finance.py仅保留兼容路由聚合；events.py统一SSE编码
 web/src/     Login / Platform(侧边栏壳+角色门控) / AgentChat(智能对话,SSE) / ChainView(行业挖掘页)
              market/(StockDashboard+TrendChart+dashboard.css,股票行情#market) /
+             quant/(QuantDashboard+EquityChart+quant.css,策略与回测#quant) /
              Reports / UserAdmin / Monitor(实时监控SSE, adminOnly); Markdownish 共享渲染器
 ```
 
@@ -152,6 +155,7 @@ vision=qwen3.8-flash（deepseek 不收图片）。**思考开关由 `llm.enable_
 | 前端登录 | [docs/frontend/login.md](docs/frontend/login.md) | JWT/邀请码/三级角色/校验规则 |
 | 前端问答 | [docs/frontend/chat.md](docs/frontend/chat.md) | SSE 协议/意图路由 |
 | 股票看板与趋势筛票 | [docs/frontend/stock_dashboard.md](docs/frontend/stock_dashboard.md) | 60F/日K趋势回调与阴跌砸坑反弹/独立截止/全池快照/可解释条件；不宣称已验证收益 |
+| 量化策略与回测 | [docs/agents/quant_backtesting.md](docs/agents/quant_backtesting.md) | 注册策略/真实限价/T+1资金组合/2026样本内研究/固定名单偏差与实际已知名单对照 |
 | 前端研报 | [docs/frontend/reports.md](docs/frontend/reports.md) | 流水线/表结构/去重/LLM Analysis/AI分析流式弹窗 |
 | 前端框架 | [docs/frontend/framework_theme.md](docs/frontend/framework_theme.md) | 品牌/深黑暗棕主题/桌面入口 |
 | 模型体系 | [docs/agents/llm_models.md](docs/agents/llm_models.md) | 用途路由/两个模型的坑 |

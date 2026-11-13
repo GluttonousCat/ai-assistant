@@ -28,7 +28,7 @@ web/src/
 
 ### 1.2 页面路由
 
-hash 路由（`window.location.hash`）：`#chat`（默认）→ 智能对话；`#market` → 股票行情；`#chain` → 行业挖掘；`#reports` → 研报中心；实时监控/用户管理各有对应 hash 入口。刷新保持当前页。
+hash 路由（`window.location.hash`）：`#chat`（默认）→ 智能对话；`#market` → 股票行情；`#quant` → 量化策略；`#chain` → 行业挖掘；`#reports` → 研报中心；实时监控/用户管理各有对应 hash 入口。刷新保持当前页。
 
 2026-11-12新增 `#market` 股票看板，普通研究员可用。首次nav直接从合法hash初始化，避免挂载effect将看板跳回chat。
 
