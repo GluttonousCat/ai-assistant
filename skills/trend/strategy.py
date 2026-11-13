@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 from skills.trend.startup import add_startup_features
 
-VERSION = "60f-startup-v2"
+VERSION = "60f-structure-v3"
 
 
 @dataclass(frozen=True)
@@ -36,8 +36,16 @@ class TrendConfig:
     startup_min_efficiency: float = 0.45
     startup_max_bars: int = 12
     startup_pause_bars: int = 2
+    require_precursor: bool = True
+    precursor_min_signs: int = 2
 
     def __post_init__(self):
+        if (
+            not isinstance(self.require_precursor, bool)
+            or not isinstance(self.precursor_min_signs, int)
+            or not 2 <= self.precursor_min_signs <= 4
+        ):
+            raise ValueError("结构开关必须为bool；前兆证据至少2项、最多4项")
         if self.selection_mode not in ("early", "mature"):
             raise ValueError("selection_mode只支持early/mature")
         if (
@@ -159,7 +167,7 @@ def indicators(bars: pd.DataFrame, cfg: TrendConfig = TrendConfig()) -> pd.DataF
 
 def _checks(f: pd.DataFrame, cfg: TrendConfig):
     early = cfg.selection_mode == "early"
-    return [
+    checks = [
         ("daily", "日线顺势", f.daily_trend, "完整日线EMA快线高于慢线，慢线3日上行"),
         (
             "trend",
@@ -218,6 +226,17 @@ def _checks(f: pd.DataFrame, cfg: TrendConfig):
             else f"放量突破前{cfg.breakout_bars}根高点，或回踩快线后转强",
         ),
     ]
+    if early and cfg.require_precursor:
+        checks.insert(
+            1,
+            (
+                "structure",
+                "反转前结构",
+                f.startup_prepared,
+                f"阳线出现前低点守住，且至少{cfg.precursor_min_signs}项：低点抬高/波动收敛/抛压减弱/底部盘整；再突破前4根阻力",
+            ),
+        )
+    return checks
 
 
 def evaluated_bars(bars: pd.DataFrame, cfg: TrendConfig = TrendConfig()):
@@ -245,6 +264,8 @@ def evaluated_bars(bars: pd.DataFrame, cfg: TrendConfig = TrendConfig()):
     f["first_watch"] &= (f.stop_price > 0) & f.risk_pct.between(
         0, cfg.max_risk_pct, inclusive="right"
     )
+    if cfg.require_precursor:
+        f["first_watch"] &= f.startup_prepared
     if cfg.selection_mode != "early":
         f["first_watch"] = False
     return f
@@ -285,6 +306,7 @@ def screen(bars: pd.DataFrame, cfg: TrendConfig = TrendConfig()) -> dict:
         for key, label, mask, rule in _checks(f, cfg)
     ]
     failed = [label for _, label, ok, _ in checks if not ok]
+    passed = {key: ok for key, _, ok, _ in checks}
     eligible = not failed
     if eligible:
         state = (
@@ -298,13 +320,13 @@ def screen(bars: pd.DataFrame, cfg: TrendConfig = TrendConfig()) -> dict:
         state = "首阳观察"
     elif cfg.selection_mode == "early" and r.daily_trend and r.startup_count == 0:
         state = "等待启动"
-    elif not checks[0][2] or not checks[1][2]:
+    elif not passed["daily"] or not passed["trend"]:
         state = "弱势过滤"
     elif cfg.selection_mode == "early" and r.startup_count > 4:
         state = "启动已过"
-    elif not checks[2][2]:
+    elif not passed["smooth"]:
         state = "震荡过滤"
-    elif not checks[4][2]:
+    elif not passed["extension"]:
         state = "追高过滤"
     else:
         state = "趋势观察"
@@ -362,6 +384,11 @@ def screen(bars: pd.DataFrame, cfg: TrendConfig = TrendConfig()) -> dict:
             "age_bars": int(r.startup_age),
             "efficiency": round(float(r.startup_efficiency), 4),
             "early": bool(r.startup_early),
+            "prepared": bool(r.startup_prepared),
+            "evidence": r.startup_evidence,
+            "neckline": round(float(r.startup_neckline), 4)
+            if pd.notna(r.startup_neckline)
+            else None,
         },
         "bar_end": r.bar_end.isoformat(),
         "config": asdict(cfg),

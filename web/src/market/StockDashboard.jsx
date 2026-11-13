@@ -58,7 +58,7 @@ export default function StockDashboard({ user }) {
   }
   function exportCsv() {
     const escape = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`
-    const csv = [['代码', '名称', '状态', '质量分', '本段首阳时间', '推进阳线数', '启动总根数', '本段效率', 'ER20', 'ADX', '参考止损', '风险距离%', '筛选解释', '策略截止'], ...rows.map((r) => [r.ts_code, r.name, r.state, r.score, r.startup?.start, r.startup?.bullish_count, r.startup?.age_bars, r.startup?.efficiency, r.metrics?.efficiency, r.metrics?.adx, r.stop_price, r.risk_pct, r.reason, snapshot.as_of])].map((r) => r.map(escape).join(',')).join('\r\n')
+    const csv = [['代码', '名称', '状态', '质量分', '本段首阳时间', '反转前证据', '突破阻力位', '推进阳线数', '启动总根数', '本段效率', 'ER20', 'ADX', '参考止损', '风险距离%', '筛选解释', '策略截止'], ...rows.map((r) => [r.ts_code, r.name, r.state, r.score, r.startup?.start, r.startup?.evidence, r.startup?.neckline, r.startup?.bullish_count, r.startup?.age_bars, r.startup?.efficiency, r.metrics?.efficiency, r.metrics?.adx, r.stop_price, r.risk_pct, r.reason, snapshot.as_of])].map((r) => r.map(escape).join(',')).join('\r\n')
     const url = URL.createObjectURL(new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' }))
     const a = document.createElement('a'); a.href = url; a.download = `60F筛选_${snapshot.as_of.slice(0, 10)}.csv`; a.click(); URL.revokeObjectURL(url)
   }
@@ -101,6 +101,7 @@ export default function StockDashboard({ user }) {
           {selected ? <>
             <div className="trend-stock-title"><div><h2>{selected.name} <small>{selected.ts_code}</small></h2><p>{selected.indices.map((i) => INDICES[i] || i).join(' / ')} <span>· 成分快照 {selected.membership_date}</span></p></div><span className={`trend-state ${selected.eligible ? 'passed' : ''}`}>{selected.state}</span></div>
             {earlyMode && selected.startup?.start && <p className="trend-startup-info">本段首阳 {dateLabel(selected.startup.start)} · 已推进 {selected.startup.bullish_count} 根阳线 / 共 {selected.startup.age_bars} 根K线</p>}
+            {earlyMode && meta.config.require_precursor && selected.startup?.start && <p className="trend-startup-info">首阳前证据：{selected.startup.evidence || '无有效结构'} · 当时阻力位 {number(selected.startup.neckline)}</p>}
             <div className="trend-metrics"><div><span>截止价</span><b>{number(metrics?.close)}</b></div><div><span>{earlyMode ? '本段推进效率' : '趋势效率 ER'}</span><b>{number(earlyMode ? selected.startup?.efficiency : metrics?.efficiency)}</b></div><div><span>{earlyMode ? '启动进度' : '趋势强度 ADX'}</span><b>{earlyMode ? selected.startup?.bullish_count ? `第 ${selected.startup.bullish_count} 阳` : '等待启动' : number(metrics?.adx, 1)}</b></div><div><span>20日日均成交额</span><b>{money(metrics?.daily_amount)}</b></div><div><span>参考止损 / 距离</span><b>{number(selected.stop_price)} <small>{number(selected.risk_pct)}%</small></b></div></div>
             <div className="trend-chart-shell">
               {chartBusy ? <div className="trend-placeholder">加载 {selected.name} 的60F K线…</div> : chartError ? <div className="trend-placeholder error" role="alert">{chartError}</div> : detail?.data.length ? <TrendChart data={detail.data} stop={selected.stop_price} config={meta.config} /> : <div className="trend-placeholder">没有可用的60F K线</div>}
@@ -113,9 +114,9 @@ export default function StockDashboard({ user }) {
         </div>
       </section>
       <section className="trend-method"><button aria-expanded={rulesOpen} onClick={() => setRulesOpen(!rulesOpen)}><span>策略说明 <small>{snapshot.version} · 视频理念 → 可解释规则</small></span><span>{rulesOpen ? '−' : '+'}</span></button>{rulesOpen && <div>
-        <p>{earlyMode ? '日线过滤大方向 → 回调或盘整后的首阳观察 → 第2—4根推进阳线确认 → 同周期结构与ATR控制风险。短暂整理不重置计数，超过早期窗口不再作为新启动推荐。' : '日线确认大方向 → 60F确认主趋势 → ER与ADX过滤杂乱走势 → 放量突破或回踩转强 → 用同周期ATR与结构低点设置参考风险边界。'}</p>
+        <p>{earlyMode ? meta.config.require_precursor ? '日线过滤大方向 → 前面先守住低点，并有低点抬高、波动收敛、抛压减弱、底部盘整中的至少两项证据 → 突破短期阻力的有效转强阳线进入观察 → 第2—4根推进确认。首阳指第一个有效结构信号，不保证是最低点后的第一根阳线。' : '日线过滤大方向 → 回调或盘整后的首阳观察 → 第2—4根推进阳线确认 → 同周期结构与ATR控制风险。短暂整理不重置计数，超过早期窗口不再作为新启动推荐。' : '日线确认大方向 → 60F确认主趋势 → ER与ADX过滤杂乱走势 → 放量突破或回踩转强 → 用同周期ATR与结构低点设置参考风险边界。'}</p>
         <p>视频原例为期货。当前实现是面向A股做多的研究策略，未将“主力资金推动”当作可直接观测的事实；流畅度仅用价格路径效率和趋势强度近似。</p>
-        <p>这里只使用60F与已完成日线，15F/30F精细择时尚未接入。参数是v1研究假设，尚未验证收益；成分股为已保存的日期快照，不是完整历史成员序列。A股实际执行需考虑T+1、涨跌停、滑点及交易费用。</p>
+        <p>这里只使用60F与已完成日线，15F/30F精细择时尚未接入。参数是研究假设，尚未验证收益；成分股为已保存的日期快照，不是完整历史成员序列。A股实际执行需考虑T+1、涨跌停、滑点及交易费用。</p>
         <p>当前参数：EMA {meta.config.fast}/{meta.config.slow}，{earlyMode ? `首阳实体≥${meta.config.startup_body_atr}ATR、量比≥${meta.config.startup_volume_ratio}，本段效率≥${meta.config.startup_min_efficiency}；不强等ADX/20根ER确认` : `ER≥${meta.config.min_efficiency}，ADX≥${meta.config.min_adx}，突破量比≥${meta.config.min_volume_ratio}`}，偏离≤{meta.config.max_extension_atr}ATR，风险距离≤{meta.config.max_risk_pct}%。已记录 {meta.states['数据待补'] || 0} 只数据待补。</p>
       </div>}</section>
     </>}

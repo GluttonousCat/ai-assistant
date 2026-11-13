@@ -23,6 +23,7 @@ def stock_detail(code: str, start: str, end: str, config: dict | None = None):
     # v1 snapshots have no mode field; retain their mature-trend interpretation.
     if config is not None:
         settings.setdefault("selection_mode", "mature")
+        settings.setdefault("require_precursor", False)
     data = evaluated_bars(frame, TrendConfig(**settings))
     if issue:
         data["eligible"] = False
@@ -46,6 +47,9 @@ def stock_detail(code: str, start: str, end: str, config: dict | None = None):
         "startup_efficiency",
         "eligible",
         "first_watch",
+        "startup_evidence",
+        "startup_prepared",
+        "startup_neckline",
     ]
     clean = (
         data[cols]

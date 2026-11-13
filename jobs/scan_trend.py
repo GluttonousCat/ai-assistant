@@ -5,6 +5,7 @@ Run: python -m jobs.scan_trend --as-of 2026-11-11
 
 import argparse
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
 from datetime import datetime, time
 import json
@@ -28,7 +29,36 @@ from tools.market.trend_data import (
 logger = get_logger(__name__)
 
 
-def scan(as_of: str | None = None, cfg: TrendConfig = TrendConfig()):
+def _scan_batch(batch, start, cutoff, cfg):
+    rows = []
+    inputs = scan_inputs([m["ts_code"] for m in batch], start, cutoff)
+    groups = dict(tuple(inputs.groupby("ts_code"))) if not inputs.empty else {}
+    for m in batch:
+        frame, issue = adjust_prices(groups.get(m["ts_code"], pd.DataFrame()))
+        if not issue and pd.Timestamp(frame.bar_end.max()) != pd.Timestamp(cutoff):
+            issue = "末根K线滞后（停牌或数据未更新）"
+        if issue:
+            result = {
+                "state": "数据待补",
+                "eligible": False,
+                "score": 0,
+                "reason": issue,
+                "checks": [],
+            }
+        else:
+            result = screen(frame, cfg)
+        result.pop("config", None)
+        if "ST" in m["name"].upper() or "退" in m["name"]:
+            result.update(
+                eligible=False,
+                state="风险标的过滤",
+                reason="当前简称含ST或退市标记",
+            )
+        rows.append({**m, "membership_date": str(m["membership_date"]), **result})
+    return rows
+
+
+def scan(as_of: str | None = None, cfg: TrendConfig = TrendConfig(), workers: int = 2):
     now = datetime.now(ZoneInfo("Asia/Shanghai")).replace(tzinfo=None)
     available = scan_cutoffs(now)
     if not available["bar_end"] or not available["factor_date"]:
@@ -47,34 +77,23 @@ def scan(as_of: str | None = None, cfg: TrendConfig = TrendConfig()):
     if not members:
         raise ValueError("该日期之前没有成分股快照，不能用未来成分冒充历史股票池")
     start = "2026-01-01"
+    if not 1 <= workers <= 4:
+        raise ValueError("workers必须在1到4之间")
     rows = []
-    for offset in range(0, len(members), 100):
-        batch = members[offset : offset + 100]
-        inputs = scan_inputs([m["ts_code"] for m in batch], start, cutoff.isoformat())
-        groups = dict(tuple(inputs.groupby("ts_code"))) if not inputs.empty else {}
-        for m in batch:
-            frame, issue = adjust_prices(groups.get(m["ts_code"], pd.DataFrame()))
-            if not issue and pd.Timestamp(frame.bar_end.max()) != pd.Timestamp(cutoff):
-                issue = "末根K线滞后（停牌或数据未更新）"
-            if issue:
-                result = {
-                    "state": "数据待补",
-                    "eligible": False,
-                    "score": 0,
-                    "reason": issue,
-                    "checks": [],
-                }
-            else:
-                result = screen(frame, cfg)
-            result.pop("config", None)
-            if "ST" in m["name"].upper() or "退" in m["name"]:
-                result.update(
-                    eligible=False,
-                    state="风险标的过滤",
-                    reason="当前简称含ST或退市标记",
-                )
-            rows.append({**m, "membership_date": str(m["membership_date"]), **result})
-        logger.info("60F筛选 %s/%s", min(offset + 100, len(members)), len(members))
+    pool = ThreadPoolExecutor(max_workers=workers)
+    try:
+        futures = [
+            pool.submit(
+                _scan_batch, members[i : i + 100], start, cutoff.isoformat(), cfg
+            )
+            for i in range(0, len(members), 100)
+        ]
+        for future in as_completed(futures):
+            rows.extend(future.result())
+            logger.info("60F筛选 %s/%s", len(rows), len(members))
+    finally:
+        pool.shutdown(wait=True, cancel_futures=True)
+    rows.sort(key=lambda r: r["ts_code"])
     metadata = {
         "config": asdict(cfg),
         "universe": len(members),
@@ -85,7 +104,7 @@ def scan(as_of: str | None = None, cfg: TrendConfig = TrendConfig()):
         "start": start,
         "price_basis": "forward_asof",
         "universe_basis": "当时可用的最近成分快照；不是逐日历史成员回放",
-        "method": "60F启动段：首阳观察、第2—4根推进阳线确认；参数为v2研究假设，尚未验证超额收益",
+        "method": "60F结构反转：先有止跌与至少两项前兆，再突破阻力首阳观察、第2—4推进阳线确认；v3研究假设，尚未验证超额收益",
     }
     if all(r["state"] == "数据待补" for r in rows):
         raise ValueError(
@@ -98,6 +117,13 @@ def main():
     parser = argparse.ArgumentParser(description="60F主趋势离线筛票")
     parser.add_argument("--as-of", help="完整收盘日，默认行情与复权因子共有的最新日期")
     parser.add_argument("--config", type=Path, help="TrendConfig字段的JSON文件")
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=2,
+        choices=range(1, 5),
+        help="有界批次并发，默认2",
+    )
     args = parser.parse_args()
     get_config()
     cfg = (
@@ -105,7 +131,7 @@ def main():
         if args.config
         else TrendConfig()
     )
-    cutoff, metadata, rows = scan(args.as_of, cfg)
+    cutoff, metadata, rows = scan(args.as_of, cfg, args.workers)
     ensure_trend_schema()
     run_id = str(uuid4())
     publish(run_id, cutoff, VERSION, metadata, rows)

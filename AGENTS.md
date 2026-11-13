@@ -2,7 +2,7 @@
 
 > 本文件是给 AI Agent（及新成员）的**项目第一入口**。读完本文件即可建立全局认知，
 > 再按需深入 `docs/` 对应模块文档。人类同事请从 [docs/README.md](docs/README.md) 进。
-> 更新：2026-11-12
+> 更新：2026-11-13
 
 ## 1. 项目是什么
 
@@ -26,7 +26,7 @@ core/        基础设施 (引擎与各层共用的地基, 不含业务):
              config(.env+yaml)/logger(按顶层包分桶)/security(JWT+bcrypt)/
              lifespan(调度器启停)/net/helpers·paths
 skills/      领域技能 (每技能一目录, 专业知识放 prompt):
-             trend(60F启动段:首阳观察/第2—4推进阳线确认/逐根标记; 纯计算与快照查询见 docs/frontend/stock_dashboard.md) /
+             trend(60F结构反转:先有止跌与至少两项前兆，再观察首阳/第2—4推进阳线确认; 见 docs/frontend/stock_dashboard.md) /
              fin_query(Text-to-SQL) / report(研报) / scanned_report(OCR) /
              beta_alpha(产业链Beta+个股Alpha: chains种子链/analysis/tests) /
              content(内容资产管线: 画像/公众号文章/PPT/年报解读) /

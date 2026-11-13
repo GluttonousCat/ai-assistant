@@ -25,6 +25,45 @@ def add_startup_features(frame: pd.DataFrame, cfg) -> pd.DataFrame:
     correction = (drawdown >= cfg.startup_reset_atr * prior_atr) & (
         (f.close.shift() < f.ema_fast.shift()) | (falling >= 2)
     )
+    # Every precursor uses ONLY completed bars before the ignition candle.
+    # A single rebound during an accelerating decline must not manufacture a base.
+    old_floor = f.low.shift(5).rolling(8).min()
+    support = f.low.shift().rolling(4).min() >= old_floor - 0.2 * prior_atr
+    higher_low = (
+        f.low.shift().rolling(2).min()
+        > f.low.shift(3).rolling(2).min() + 0.1 * prior_atr
+    )
+    tr = pd.concat(
+        [
+            f.high - f.low,
+            (f.high - f.close.shift()).abs(),
+            (f.low - f.close.shift()).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    contraction = tr.shift().rolling(4).mean() <= 0.9 * tr.shift(5).rolling(4).mean()
+    selling = (f.open - f.close).clip(lower=0)
+    old_selling = selling.shift(5).rolling(4).sum()
+    selling_eases = (old_selling > 0.1 * prior_atr) & (
+        selling.shift().rolling(4).sum() <= 0.7 * old_selling
+    )
+    signs = pd.DataFrame(
+        {
+            "低点抬高": higher_low,
+            "波动收敛": contraction,
+            "抛压减弱": selling_eases,
+            "底部盘整": base,
+        }
+    ).fillna(False)
+    prepared = support & signs.sum(axis=1).ge(cfg.precursor_min_signs)
+    neckline = f.high.shift().rolling(4).max()
+    f["precursor_ready"] = prepared.fillna(False)
+    f["precursor_count"] = signs.sum(axis=1)
+    f["precursor_support"] = support.fillna(False)
+    evidence = pd.Series("", index=f.index)
+    for label, mask in signs.items():
+        evidence += np.where(mask, label + " / ", "")
+    evidence = evidence.str.rstrip(" / ")
     body = f.close - f.open
     location = (f.close - f.low) / (f.high - f.low).replace(0, np.nan)
     ignition = (
@@ -34,6 +73,8 @@ def add_startup_features(frame: pd.DataFrame, cfg) -> pd.DataFrame:
     )
     ignition &= (location >= 0.65) & (f.volume_ratio >= cfg.startup_volume_ratio)
     ignition &= correction | (base & (f.close > f.high.shift().rolling(4).max()))
+    if cfg.require_precursor:
+        ignition &= prepared & (f.close > neckline)
     anchors = f.low.shift().rolling(8).min()
     values = []
     leg = None
@@ -72,6 +113,9 @@ def add_startup_features(frame: pd.DataFrame, cfg) -> pd.DataFrame:
                 "last_close": cl,
                 "pause": 0,
                 "expired": False,
+                "prepared": bool(prepared.iloc[i]),
+                "evidence": evidence.iloc[i],
+                "neckline": neckline.iloc[i],
             }
             advancing = True
         elif leg is not None:
@@ -90,7 +134,9 @@ def add_startup_features(frame: pd.DataFrame, cfg) -> pd.DataFrame:
             if leg["pause"] > cfg.startup_pause_bars:
                 leg["expired"] = True
         if leg is None:
-            values.append((pd.NaT, 0, 0, np.nan, np.nan, 0.0, False, False))
+            values.append(
+                (pd.NaT, 0, 0, np.nan, np.nan, 0.0, False, False, False, "", np.nan)
+            )
             continue
         age = i - leg["index"] + 1
         efficiency = (
@@ -109,6 +155,9 @@ def add_startup_features(frame: pd.DataFrame, cfg) -> pd.DataFrame:
                 efficiency,
                 advancing,
                 early,
+                leg["prepared"],
+                leg["evidence"],
+                leg["neckline"],
             )
         )
     names = [
@@ -120,6 +169,9 @@ def add_startup_features(frame: pd.DataFrame, cfg) -> pd.DataFrame:
         "startup_efficiency",
         "startup_advancing",
         "startup_early",
+        "startup_prepared",
+        "startup_evidence",
+        "startup_neckline",
     ]
     f[names] = pd.DataFrame(values, index=f.index, columns=names)
     return f
