@@ -35,10 +35,14 @@ def stock_detail(
     if config is not None:
         settings.setdefault("selection_mode", "mature")
         settings.setdefault("require_precursor", False)
+        settings.setdefault("track_swing_context", False)
     data = evaluated_bars(frame, TrendConfig(**settings), timeframe)
     if issue:
         data["eligible"] = False
         data["first_watch"] = False
+        if "resume_watch" in data:
+            data["resume_watch"] = False
+            data["swing_ignition"] = False
     cols = [
         "bar_end",
         "open",
@@ -63,6 +67,17 @@ def stock_detail(
         "startup_neckline",
     ]
     cols += [c for c in ["pattern", "pattern_label"] if c in data.columns]
+    cols += [
+        c
+        for c in [
+            "resume_watch",
+            "setup_phase",
+            "swing_start",
+            "swing_ignition",
+            "background_swing_start",
+        ]
+        if c in data.columns
+    ]
     clean = (
         data[cols]
         .tail(1000)

@@ -27,7 +27,7 @@ core/        基础设施 (引擎与各层共用的地基, 不含业务):
              lifespan(调度器启停)/net/helpers·paths
 skills/      领域技能 (每技能一目录, 专业知识放 prompt):
              quant(策略注册/资金回测/净值与成交统计/研究报告,复用trend入场; 见 docs/agents/quant_backtesting.md) /
-             trend(60F/原生日K两类机会:趋势回调、阴跌/砸坑反弹; 首阳观察/第2—4推进确认; 见 docs/frontend/stock_dashboard.md) /
+             trend(60F/原生日K两类机会:趋势回调、阴跌/砸坑反弹; 父级起势背景/首阳与回调再起分开/本轮第2—4推进确认; 见 docs/frontend/stock_dashboard.md) /
              fin_query(Text-to-SQL) / report(研报) / scanned_report(OCR) /
              beta_alpha(产业链Beta+个股Alpha: chains种子链/analysis/tests) /
              content(内容资产管线: 画像/公众号文章/PPT/年报解读) /

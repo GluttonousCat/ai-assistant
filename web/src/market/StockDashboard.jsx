@@ -43,7 +43,7 @@ export default function StockDashboard({ user }) {
     return (snapshot?.data || []).filter((r) => (!search || `${r.name}${r.ts_code}`.toUpperCase().includes(search))
       && (!index || r.indices.includes(index))
       && (!pattern || r.pattern === pattern)
-      && (mode === 'all' || mode === 'star' && stars.includes(r.ts_code) || mode === 'candidate' && r.eligible || mode === 'first' && r.state === '首阳观察' || mode === 'observe' && ['趋势观察', '等待启动', '等待形态', '启动已过'].includes(r.state)))
+      && (mode === 'all' || mode === 'star' && stars.includes(r.ts_code) || mode === 'candidate' && r.eligible || mode === 'first' && r.state === '首阳观察' || mode === 'resume' && r.state === '回调再起观察' || mode === 'observe' && ['回调再起观察', '趋势观察', '等待启动', '等待形态', '启动已过'].includes(r.state)))
       .sort((a, b) => sort === 'efficiency' ? (b.startup?.efficiency ?? b.metrics?.efficiency ?? 0) - (a.startup?.efficiency ?? a.metrics?.efficiency ?? 0) : sort === 'risk' ? (a.risk_pct ?? 1e9) - (b.risk_pct ?? 1e9) : b.score - a.score || a.ts_code.localeCompare(b.ts_code))
   }, [snapshot, query, index, mode, sort, stars, pattern])
   const selected = rows.find((r) => r.ts_code === code)
@@ -58,7 +58,7 @@ export default function StockDashboard({ user }) {
   }
   function exportCsv() {
     const escape = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`
-    const csv = [['代码', '名称', '周期', '机会类型', '状态', '质量分', '本段首阳时间', '结构证据', '收复位', '推进阳线数', '启动总根数', '本段效率', 'ER20', 'ADX', '参考止损', '风险距离%', '筛选解释', '策略截止'], ...rows.map((r) => [r.ts_code, r.name, SCREEN_TIMEFRAME, r.pattern_label, r.state, r.score, r.startup?.start, r.startup?.evidence, r.startup?.neckline, r.startup?.bullish_count, r.startup?.age_bars, r.startup?.efficiency, r.metrics?.efficiency, r.metrics?.adx, r.stop_price, r.risk_pct, r.reason, viewAsOf])].map((r) => r.map(escape).join(',')).join('\r\n')
+    const csv = [['代码', '名称', '周期', '机会类型', '状态', '质量分', '本轮转强时间', '前次起势背景时间', '结构证据', '收复位', '推进阳线数', '启动总根数', '本段效率', 'ER20', 'ADX', '参考止损', '风险距离%', '筛选解释', '策略截止'], ...rows.map((r) => [r.ts_code, r.name, SCREEN_TIMEFRAME, r.pattern_label, r.state, r.score, r.startup?.start, r.startup?.parent_start, r.startup?.evidence, r.startup?.neckline, r.startup?.bullish_count, r.startup?.age_bars, r.startup?.efficiency, r.metrics?.efficiency, r.metrics?.adx, r.stop_price, r.risk_pct, r.reason, viewAsOf])].map((r) => r.map(escape).join(',')).join('\r\n')
     const url = URL.createObjectURL(new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' }))
     const a = document.createElement('a'); a.href = url; a.download = `${SCREEN_TIMEFRAME}筛选_${viewAsOf.slice(0, 10)}.csv`; a.click(); URL.revokeObjectURL(url)
   }
@@ -82,7 +82,7 @@ export default function StockDashboard({ user }) {
       <div className="trend-cards">
         <div><span>扫描股票池</span><strong>{meta.universe.toLocaleString()}<small>只</small></strong><p>五指数成分去重</p></div>
         <div className="trend-card-gold"><span>{dualMode ? '两类机会确认' : earlyMode ? '启动第2—4阳候选' : '规则通过'}</span><strong>{viewMeta.eligible}<small>只</small></strong><p>{dualMode ? `趋势回调 ${viewMeta.patterns?.['趋势回调'] || 0} · 反弹 ${viewMeta.patterns?.['阴跌/砸坑反弹'] || 0}` : earlyMode ? `2阳 ${viewMeta.states['启动第2阳'] || 0} · 3阳 ${viewMeta.states['启动第3阳'] || 0} · 4阳 ${viewMeta.states['启动第4阳'] || 0}` : `突破 ${viewMeta.states['突破候选'] || 0} · 回踩 ${viewMeta.states['回踩候选'] || 0}`}</p></div>
-        <div><span>{earlyMode ? '首阳观察' : '趋势观察'}</span><strong>{viewMeta.states[earlyMode ? '首阳观察' : '趋势观察'] || 0}<small>只</small></strong><p>{earlyMode ? '启动待确认，不预判后续连阳' : '保留趋势，等待确认'}</p></div>
+        <div><span>{earlyMode ? '首阳观察' : '趋势观察'}</span><strong>{viewMeta.states[earlyMode ? '首阳观察' : '趋势观察'] || 0}<small>只</small></strong><p>{meta.config.track_swing_context ? `回调再起 ${viewMeta.states['回调再起观察'] || 0} 只见“再起”` : earlyMode ? '启动待确认，不预判后续连阳' : '保留趋势，等待确认'}</p></div>
         <div><span>{SCREEN_TIMEFRAME}策略截止 · 上海时间</span><strong className="trend-date">{dateLabel(viewAsOf)}</strong><p>行情最新 {dateLabel(viewMeta.data_latest)}</p></div>
       </div>
       {(stale || viewMeta.data_latest.slice(0, 10) !== viewAsOf.slice(0, 10)) && <div className="trend-notice">{stale ? '当前为历史快照。' : ''} 复权因子截至 {meta.factor_latest}，策略只使用已完整验证的数据。刷新读取已发布结果；全池计算由离线任务完成。</div>}
@@ -91,7 +91,7 @@ export default function StockDashboard({ user }) {
           <div className="trend-search"><span>⌕</span><input aria-label="搜索股票" placeholder="搜索名称或代码" value={query} onChange={(e) => setQuery(e.target.value)} /></div>
           <select aria-label="指数成分池" value={index} onChange={(e) => setIndex(e.target.value)}><option value="">全部指数成分</option>{Object.entries(INDICES).map(([key, label]) => <option value={key} key={key}>{label}</option>)}</select>
           {dualMode && <select aria-label="机会类型" value={pattern} onChange={e=>setPattern(e.target.value)}><option value="">两类机会 · 全部</option><option value="trend_pullback">趋势中的回调介入</option><option value="base_rebound">横盘阴跌 / 砸坑反弹</option></select>}
-          <div className="trend-tabs">{[['candidate', '候选'], ...(earlyMode ? [['first', '首阳']] : []), ['observe', '观察'], ['star', '自选'], ['all', '全部']].map(([key, label]) => <button key={key} className={mode === key ? 'active' : ''} onClick={() => setMode(key)}>{label}{key === 'star' ? ` ${stars.length}` : ''}</button>)}</div>
+          <div className="trend-tabs">{[['candidate', '候选'], ...(earlyMode ? [['first', '首阳']] : []), ...(meta.config.track_swing_context ? [['resume', '再起']] : []), ['observe', '观察'], ['star', '自选'], ['all', '全部']].map(([key, label]) => <button key={key} className={mode === key ? 'active' : ''} onClick={() => setMode(key)}>{label}{key === 'star' ? ` ${stars.length}` : ''}</button>)}</div>
           <div className="trend-list-heading"><span>{rows.length} 只股票</span><select aria-label="排序" value={sort} onChange={(e) => setSort(e.target.value)}><option value="score">质量分排序</option><option value="efficiency">趋势效率排序</option><option value="risk">风险距离排序</option></select><button onClick={exportCsv} title="导出当前筛选" aria-label="导出当前筛选">↓</button></div>
           <div className="trend-stock-list">
             {rows.slice(0, 250).map((r) => <div className={`trend-stock-row ${code === r.ts_code ? 'selected' : ''}`} key={r.ts_code}>
@@ -106,8 +106,9 @@ export default function StockDashboard({ user }) {
           {selected ? <>
             <div className="trend-stock-title"><div><h2>{selected.name} <small>{selected.ts_code}</small></h2><p>{selected.indices.map((i) => INDICES[i] || i).join(' / ')} <span>· 成分快照 {selected.membership_date}</span></p></div><span className={`trend-state ${selected.eligible ? 'passed' : ''}`}>{selected.state}</span></div>
             {dualMode && <p className="trend-startup-info">机会类型：{selected.pattern_label || '等待有效形态'} · 筛选周期：{SCREEN_TIMEFRAME}</p>}
-            {earlyMode && selected.startup?.start && <p className="trend-startup-info">本段首阳 {dateLabel(selected.startup.start)} · 已推进 {selected.startup.bullish_count} 根阳线 / 共 {selected.startup.age_bars} 根K线</p>}
-            {earlyMode && meta.config.require_precursor && selected.startup?.start && <p className="trend-startup-info">首阳前证据：{selected.startup.evidence || '无有效结构'} · 当时收复位 {number(selected.startup.neckline)}</p>}
+            {earlyMode && selected.startup?.start && <p className="trend-startup-info">{selected.startup.phase === 'pullback_resume' ? '本轮回调转强' : '本段首阳'} {dateLabel(selected.startup.start)} · 已推进 {selected.startup.bullish_count} 根阳线 / 共 {selected.startup.age_bars} 根K线</p>}
+            {selected.startup?.phase === 'pullback_resume' && selected.startup.parent_start && selected.startup.parent_start < selected.startup.start && <p className="trend-startup-info">前次起势（背景）{dateLabel(selected.startup.parent_start)} · 回调后重新转强，不计作新首阳</p>}
+            {earlyMode && meta.config.require_precursor && selected.startup?.start && <p className="trend-startup-info">本轮转强前证据：{selected.startup.evidence || '无有效结构'} · 当时收复位 {number(selected.startup.neckline)}</p>}
             <div className="trend-metrics"><div><span>截止价</span><b>{number(metrics?.close)}</b></div><div><span>{earlyMode ? '本段推进效率' : '趋势效率 ER'}</span><b>{number(earlyMode ? selected.startup?.efficiency : metrics?.efficiency)}</b></div><div><span>{earlyMode ? '启动进度' : '趋势强度 ADX'}</span><b>{earlyMode ? selected.startup?.bullish_count ? `第 ${selected.startup.bullish_count} 阳` : '等待启动' : number(metrics?.adx, 1)}</b></div><div><span>20日日均成交额</span><b>{money(metrics?.daily_amount)}</b></div><div><span>参考止损 / 距离</span><b>{number(selected.stop_price)} <small>{number(selected.risk_pct)}%</small></b></div></div>
             <div className="trend-chart-shell">
               <div className="trend-chart-toolbar">
@@ -134,6 +135,7 @@ export default function StockDashboard({ user }) {
       </section>
       <section className="trend-method"><button aria-expanded={rulesOpen} onClick={() => setRulesOpen(!rulesOpen)}><span>策略说明 <small>{snapshot.version} · 视频理念 → 可解释规则</small></span><span>{rulesOpen ? '−' : '+'}</span></button>{rulesOpen && <div>
         <p>{dualMode ? '只抓两类：①原升势未破的受控回调，止跌后重新推进；②横盘阴跌后的结构修复，或先有平台、下破砸坑后重新收回原支撑。第二类不要求日线多头，也不将反弹直接称为长期反转。首个有效转强信号观察，第2—4根推进确认。' : earlyMode ? meta.config.require_precursor ? '日线过滤大方向 → 前面先守住低点，并有低点抬高、波动收敛、抛压减弱、底部盘整中的至少两项证据 → 突破短期阻力的有效转强阳线进入观察 → 第2—4根推进确认。首阳指第一个有效结构信号，不保证是最低点后的第一根阳线。' : '日线过滤大方向 → 回调或盘整后的首阳观察 → 第2—4根推进阳线确认 → 同周期结构与ATR控制风险。短暂整理不重置计数，超过早期窗口不再作为新启动推荐。' : '日线确认大方向 → 60F确认主趋势 → ER与ADX过滤杂乱走势 → 放量突破或回踩转强 → 用同周期ATR与结构低点设置参考风险边界。'}</p>
+        {meta.config.track_swing_context && <p>先识别前次起势背景，再判断本轮转强。局部回调或机会类型切换不会抹掉前次起势；结构仍在时标为“回调再起”，移入观察列表。灰色“起势背景”只说明价格结构，不代表当时满足买入条件；第2—4阳统计本轮推进。</p>}
         <p>视频原例为期货。当前实现是面向A股做多的研究策略，未将“主力资金推动”当作可直接观测的事实；流畅度仅用价格路径效率和趋势强度近似。</p>
         <p>60F与原生日K分别计算，只使用已收盘数据；15F/30F精细择时尚未接入。参数是研究假设，尚未验证收益；成分股为已保存的日期快照，不是完整历史成员序列。A股实际执行需考虑T+1、涨跌停、滑点及交易费用。</p>
         <p>当前参数：EMA {meta.config.fast}/{meta.config.slow}，{earlyMode ? `首阳实体≥${meta.config.startup_body_atr}ATR、量比≥${meta.config.startup_volume_ratio}，本段效率≥${meta.config.startup_min_efficiency}；不强等ADX/20根ER确认` : `ER≥${meta.config.min_efficiency}，ADX≥${meta.config.min_adx}，突破量比≥${meta.config.min_volume_ratio}`}，偏离≤{meta.config.max_extension_atr}ATR，风险距离≤{meta.config.max_risk_pct}%。本周期已记录 {viewMeta.states['数据待补'] || 0} 只数据待补。</p>

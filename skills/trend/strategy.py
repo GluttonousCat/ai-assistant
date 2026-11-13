@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 from skills.trend.startup import add_startup_features
 
-VERSION = "dual-setups-v4"
+VERSION = "dual-setups-v4.1"
 
 
 @dataclass(frozen=True)
@@ -38,8 +38,19 @@ class TrendConfig:
     startup_pause_bars: int = 2
     require_precursor: bool = True
     precursor_min_signs: int = 2
+    track_swing_context: bool = True
+    swing_engulf_bars: int = 8
+    swing_body_atr: float = 0.8
+    swing_break_atr: float = 3.0
+    swing_slow_buffer_atr: float = 0.5
 
     def __post_init__(self):
+        if (
+            not isinstance(self.track_swing_context, bool)
+            or type(self.swing_engulf_bars) is not int
+            or not 2 <= self.swing_engulf_bars <= 20
+        ):
+            raise ValueError("走势背景开关必须为bool；包阴窗口必须为2—20根整数")
         if (
             not isinstance(self.require_precursor, bool)
             or not isinstance(self.precursor_min_signs, int)
@@ -72,6 +83,9 @@ class TrendConfig:
             self.startup_reset_atr,
             self.startup_base_atr,
             self.startup_volume_ratio,
+            self.swing_body_atr,
+            self.swing_break_atr,
+            self.swing_slow_buffer_atr,
         ]
         if any(not np.isfinite(v) or v <= 0 for v in values):
             raise ValueError("策略阈值必须为有限正数")

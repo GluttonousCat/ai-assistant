@@ -180,6 +180,10 @@ def evaluate_setups(f, cfg, timeframe):
     f["pattern"] = f.pattern.where(active, "")
     f["pattern_label"] = f.pattern.map(LABELS).fillna("等待形态")
     f["timeframe"] = timeframe
+    if cfg.track_swing_context:
+        from skills.trend.swings import add_swing_context
+
+        f = add_swing_context(f, cfg)
     return f
 
 
@@ -241,9 +245,12 @@ def setup_result(f, cfg, timeframe):
         ),
     ]
     ready = pd.notna(r.daily_amount) and pd.notna(r.atr) and r.atr > 0
+    resumed = r.get("setup_phase", "") == "pullback_resume"
     state = (
-        f"启动第{int(r.startup_count)}阳"
+        f"{'回调再起第' if resumed else '启动第'}{int(r.startup_count)}阳"
         if r.eligible
+        else "回调再起观察"
+        if r.get("resume_watch", False)
         else "首阳观察"
         if r.first_watch
         else "数据不足"
@@ -278,6 +285,8 @@ def setup_result(f, cfg, timeframe):
         "timeframe": timeframe,
         "reason": "全部条件通过"
         if r.eligible
+        else "已有前次起势；本轮回调转强，等待推进确认"
+        if r.get("resume_watch", False)
         else "有效转强首阳，等待推进确认"
         if r.first_watch
         else " / ".join(label for _, label, ok, _ in checks if not ok),
@@ -311,5 +320,17 @@ def setup_result(f, cfg, timeframe):
             "prepared": bool(r.startup_prepared),
             "evidence": r.startup_evidence,
             "neckline": num("startup_neckline"),
+            **(
+                {
+                    "phase": r.setup_phase,
+                    "parent_start": r.swing_start.isoformat()
+                    if pd.notna(r.swing_start)
+                    else None,
+                    "parent_low": num("swing_low"),
+                    "parent_reason": r.swing_reason,
+                }
+                if cfg.track_swing_context
+                else {}
+            ),
         },
     }

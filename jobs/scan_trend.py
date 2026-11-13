@@ -144,7 +144,7 @@ def scan(as_of: str | None = None, cfg: TrendConfig = TrendConfig(), workers: in
         "start": start,
         "price_basis": "forward_asof",
         "universe_basis": "当时可用的最近成分快照；不是逐日历史成员回放",
-        "method": "两类机会：趋势回调 / 阴跌与砸坑反弹；60F与原生日K分开筛选，反弹不要求日线多头；尚未验证超额收益",
+        "method": "两类机会：趋势回调 / 阴跌与砸坑反弹；60F与原生日K分开筛选；保留前次起势背景，回调再起不冒充首阳；尚未验证超额收益",
     }
     period_results = rows + [r["daily"] for r in rows if "daily" in r]
     if all(r["state"] == "数据待补" for r in period_results):

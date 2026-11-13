@@ -1,8 +1,22 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { boundedCache, captureView, chartRows, restoreView, seriesUpdate } from './chartData.js'
+import { boundedCache, captureView, chartRows, restoreView, seriesUpdate, signalMarkers } from './chartData.js'
 
 const bar = (time, close = 10) => ({ time, open: 10, high: 12, low: 9, close, volume: 100, ema_fast: 10, ema_slow: null })
+
+test('chart distinguishes non-tradable background, original first and pullback resumption', () => {
+  const markers = signalMarkers([
+    { time: 1, swing_ignition: true },
+    { time: 2, first_watch: true, startup_count: 1 },
+    { time: 3, resume_watch: true, setup_phase: 'pullback_resume', startup_count: 1 },
+    { time: 4, eligible: true, setup_phase: 'pullback_resume', startup_count: 2 },
+    { time: 5 },
+  ])
+  assert.deepEqual(markers.map((m) => m.text), ['起势背景', '首阳观察', '回调再起观察', '再起第2阳确认'])
+  assert.equal(markers[0].color, '#97948c')
+  assert.equal(markers[2].shape, 'circle')
+  assert.equal(markers[3].shape, 'arrowUp')
+})
 
 test('a historical correction must replace history instead of only updating the tail', () => {
   const before = [bar(1), bar(2), bar(3)]

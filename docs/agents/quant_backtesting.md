@@ -17,6 +17,8 @@ web/src/quant/ → platformApi → /api/v1/quant/*
 `registry.py`注册三种策略：`trend_dual_v4`双机会、`trend_pullback_v4`趋势回调、
 `base_rebound_v4`阴跌/砸坑反弹；均支持60F与原生日K。分支独立回测各自信号，双机会按看板同级优先A的规则去重。
 入场公式、前置证据和推进计数详见[股票行情](../frontend/stock_dashboard.md)。
+v4.1增加“初次反转/回调再起”的背景分类，修正首阳观察名称；入场掩码、计数与止损不变，
+注册ID继续使用v4，版本字段记录实际代码版本。已有12组v4回测保留原结果；本次分类修复未重算，不能宣称收益改善。
 
 `models.py`保存执行参数；`prepare.py`清洗与纯计算；`engine.py`管理资金/订单/持仓；
 `metrics.py`计算净值与成交统计；`report.py`输出JSON、CSV、Markdown与静态净值图。
