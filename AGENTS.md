@@ -27,13 +27,13 @@ core/        基础设施 (引擎与各层共用的地基, 不含业务):
              lifespan(调度器启停)/net/helpers·paths
 skills/      领域技能 (每技能一目录, 专业知识放 prompt):
              quant(策略注册/资金回测/净值与成交统计/研究报告,复用trend入场; 见 docs/agents/quant_backtesting.md) /
-             trend(60F/原生日K两类机会:趋势回调、阴跌/砸坑反弹; 父级起势背景/首阳与回调再起分开/本轮第2—4推进确认; 见 docs/frontend/stock_dashboard.md) /
+             trend(当前M8/M13/M21:60F趋势→原生日K入场; mtf.py纯计算; 旧v4首阳/回调再起规则与快照保留兼容; 见 docs/frontend/stock_dashboard.md) /
              fin_query(Text-to-SQL) / report(研报) / scanned_report(OCR) /
              beta_alpha(产业链Beta+个股Alpha: chains种子链/analysis/tests) /
              content(内容资产管线: 画像/公众号文章/PPT/年报解读) /
              research(研究生产线: 证据→十章草稿→成稿, 任务分派见 docs/research/tasks/)
 jobs/        sync_intraday(2026年60F入库/五指数成分并集/断点续传) / check_boundaries(分层检查) /
-             backtest_quant(2026两周期三策略/固定与已知名单对照) / sync_backtest_inputs(原生日K查缺/真实限价/基准,不推水位线) /
+             backtest_mtf(双周期日K入场/三退出方案开发段选择与分段验证) / backtest_quant(旧v4两周期三策略对照) / sync_backtest_inputs(原生日K查缺/真实限价/基准,不推水位线) /
              scan_trend(全池离线筛票/原子发布) / repair_trend_factors(精确补缺真实复权因子,不推进日线水位线) /
              任务层一体: scheduler(Tushare 17:00 Asia/Shanghai,交易日) / zsxq_scheduler(爬虫 00:00/12:00) /
              管线入口(daily_fetch_zxsq, sync_zxsq_to_pg, merge_report_duplicates, smoke) /
@@ -122,6 +122,8 @@ vision=qwen3.8-flash（deepseek 不收图片）。**思考开关由 `llm.enable_
 | 中文版研报与原版重复 | 下载/入库层过滤 `is_chinese_translated`（保留英文原版，无原版时中文版顶上） |
 | 地区敏感词 | 文档一律用代号 **TW / HK**（如 TW股/HK股），不用全称 |
 | zip 对齐错配 | 多源数据按键(dict)匹配，绝不按位置 zip（range_trading 回测曾全错） |
+| 走平均线换复权基准后信号翻转 | 斜率/均线贴合比较使用按ATR缩放的微小数值容差；覆盖前复权展示与首因子回测基准的一致性，不能把1ULP误差当趋势 |
+| 回测原始价被复权计算改写 | `to_numpy`可能返回视图；原始执行价必须`copy=True`，与复权指标数组分离；撮合前校验raw×scale=adjusted，拒绝混合单位；旧失真批次保留并标记替代 |
 | LLM prompt 花括号 | `.format()` 模板里的 JSON 花括号必须转义 `{{}}`（曾致 KeyError） |
 | 视觉 OCR 阻塞请求线程 | OCR 一律后台线程 + 状态 pending_ocr（前端隐藏，完成后自动接续） |
 | PG 服务端重启杀数小时批任务 | 长批任务按工作单元（每股）捕获 OperationalError 重连续跑（batch.py `_process_stock`/sync_holders 模式）；注意 PgClient 连接在 `__enter__` 才从池获取，手动管理必须 `PgClient().__enter__()` 成对使用，裸构造 conn/cur 全是 None |

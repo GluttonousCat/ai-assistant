@@ -133,8 +133,29 @@ def list_runs(limit=50):
         return pg.fetch_all(
             """SELECT run_id::text,suite_id::text,created_at::text,strategy_id,timeframe,
             start_date::text,end_date::text,universe_mode,payload->'metrics' AS metrics,
-            payload->'diagnostics' AS diagnostics FROM stock.backtest_run ORDER BY created_at DESC,run_id LIMIT %s""",
+            payload->'diagnostics' AS diagnostics,payload->>'strategy_version' AS strategy_version,
+            payload->>'execution_version' AS execution_version FROM stock.backtest_run ORDER BY created_at DESC,run_id LIMIT %s""",
             (limit,),
+        )
+
+
+def mark_suite_superseded(suite_id, reason):
+    """Keep all historical values; explicitly label a research run with a defect."""
+    with PgClient() as pg:
+        pg.execute(
+            """UPDATE stock.backtest_run SET payload=jsonb_set(
+            jsonb_set(payload,'{diagnostics,superseded}','true'::jsonb),
+            '{diagnostics,superseded_reason}',to_jsonb(%s::text)) WHERE suite_id=%s::uuid""",
+            (reason, suite_id),
+        )
+
+
+def annotate_replay_config(suite_id, config):
+    """Complete replay parameter provenance without changing any metric/trade."""
+    with PgClient() as pg:
+        pg.execute(
+            "UPDATE stock.backtest_run SET payload=jsonb_set(payload,'{strategy_config}',%s::jsonb) WHERE suite_id=%s::uuid",
+            (Json(config), suite_id),
         )
 
 

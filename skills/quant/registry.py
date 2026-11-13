@@ -3,6 +3,24 @@
 from skills.trend.strategy import VERSION, TrendConfig
 
 STRATEGIES = {
+    "mtf_dual_v5": {
+        "name": "60F趋势·日K双机会",
+        "family": None,
+        "generation": "v5",
+        "description": "M8/M13/M21判断60F趋势；日K转强确认入场；结构止损与有限退出方案对照，按开发段选择后固定检验。",
+    },
+    "mtf_pullback_v5": {
+        "name": "60F趋势·日K回调",
+        "family": "trend_pullback",
+        "generation": "v5",
+        "description": "60F方向配合已有日线升势的受控回调，日K转强后下一交易日开盘入场。",
+    },
+    "mtf_rebound_v5": {
+        "name": "60F修复·日K反包",
+        "family": "base_rebound",
+        "generation": "v5",
+        "description": "60F均线开始修复，日K在阴跌/盘整后反包收复；不强等日线长均线多头。",
+    },
     "trend_dual_v4": {
         "name": "趋势双机会",
         "family": None,
@@ -22,13 +40,18 @@ STRATEGIES = {
 
 
 def catalog():
+    from skills.trend.mtf import VERSION as MTF_VERSION, MtfConfig
+
     return [
         {
             **value,
             "id": key,
-            "version": VERSION,
-            "timeframes": ["60F", "1D"],
-            "entry_config": TrendConfig().__dict__,
+            "version": MTF_VERSION if value.get("generation") == "v5" else VERSION,
+            "timeframes": ["1D"] if value.get("generation") == "v5" else ["60F", "1D"],
+            "entry_config": (
+                MtfConfig() if value.get("generation") == "v5" else TrendConfig()
+            ).__dict__,
+            "trend_timeframe": "60F" if value.get("generation") == "v5" else None,
         }
         for key, value in STRATEGIES.items()
     ]

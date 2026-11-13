@@ -12,6 +12,8 @@ from skills.quant.models import BacktestConfig
 from skills.quant.metrics import summarize
 from skills.quant.registry import STRATEGIES
 
+EXECUTION_VERSION = "price-units-and-protected-stop-v3"
+
 
 def opening_time(end, timeframe):
     end = pd.Timestamp(end)
@@ -45,6 +47,15 @@ def simulate(
         raise ValueError("回测交易时间轴必须非空且严格递增")
     family = STRATEGIES[strategy_id]["family"]
     stocks = {s.code: s for s in series}
+    for s in series:
+        for field in ["open", "high", "low", "close"]:
+            if not np.allclose(
+                s.data[field] * s.data["scale"],
+                s.data["adjusted_" + field],
+                rtol=1e-10,
+                atol=1e-8,
+            ):
+                raise ValueError(f"{s.code}原始价/复权价不一致，拒绝回测")
     orders = defaultdict(list)
     audit = Counter()
     for s in series:
@@ -109,6 +120,10 @@ def simulate(
         cash += value - fee
         fees += fee
         pnl = value - fee - p["cost"]
+        # At least the known exit fill belongs to the excursion; the rest of an
+        # intrabar exit candle is deliberately not assumed to precede the exit.
+        p["peak"] = max(p["peak"], base_price)
+        p["trough"] = min(p["trough"], base_price)
         trades.append(
             {
                 "ts_code": code,
@@ -127,6 +142,12 @@ def simulate(
                 "return_pct": pnl / p["cost"] * 100,
                 "reason": reason,
                 "leg": p["leg"],
+                "initial_stop": p["initial_stop"],
+                "exit_stop": p["stop"],
+                "mfe_r": max(0, (p["peak"] - p["entry_adjusted"]) / p["initial_risk"]),
+                "mae_r": min(
+                    0, (p["trough"] - p["entry_adjusted"]) / p["initial_risk"]
+                ),
             }
         )
         del positions[code]
@@ -143,13 +164,15 @@ def simulate(
                 continue
             if day > p["entry_day"]:
                 op = s.data["adjusted_open"][i]
-                reason = p["pending"] or (
-                    "stop_loss"
-                    if op <= p["stop"]
-                    else "take_profit"
-                    if op >= p["target"]
-                    else None
-                )
+                reason = p["pending"]
+                if reason is None and op <= p["stop"]:
+                    reason = (
+                        "protected_stop"
+                        if p["stop"] > p["initial_stop"]
+                        else "stop_loss"
+                    )
+                elif reason is None and op >= p["target"]:
+                    reason = "take_profit"
                 if reason:
                     sell(code, i, op, reason, start)
         marked = cash
@@ -195,6 +218,10 @@ def simulate(
                 audit["gap_or_risk_rejected"] += 1
                 continue
             budget = min(cash, marked * cfg.position_weight)
+            if cfg.risk_budget_pct:
+                budget = min(
+                    budget, marked * (cfg.risk_budget_pct / 100) / (risk / 100)
+                )
             quantity = (
                 int(
                     min(budget / raw_fill, d["volume"][i - 1] * cfg.participation)
@@ -233,6 +260,12 @@ def simulate(
                 "pending": None,
                 "last_mark": fill,
                 "last_seen": end.isoformat(),
+                "entry_adjusted": fill,
+                "initial_risk": fill - sig["stop"],
+                "initial_stop": sig["stop"],
+                "peak": fill,
+                "trough": fill,
+                "failure_count": 0,
             }
             consumed.add(key)
             audit["entries"] += 1
@@ -256,7 +289,11 @@ def simulate(
                     audit["t1_stop_deferred"] += 1
             elif not p["pending"] and (stop_hit or target_hit):
                 # Bar OHLC cannot order simultaneous touches; use the adverse one.
-                reason = "stop_loss" if stop_hit else "take_profit"
+                reason = (
+                    ("protected_stop" if p["stop"] > p["initial_stop"] else "stop_loss")
+                    if stop_hit
+                    else "take_profit"
+                )
                 price = min(op, p["stop"]) if stop_hit else max(op, p["target"])
                 if stop_hit and target_hit:
                     audit["ambiguous_bracket_stop_first"] += 1
@@ -265,12 +302,49 @@ def simulate(
                     continue
             p["last_mark"] = d["adjusted_close"][i]
             p["last_seen"] = end.isoformat()
+            p["peak"] = max(p["peak"], hi)
+            p["trough"] = min(p["trough"], lo)
             if not p["pending"]:
                 trail = d["trail_a" if p["family"] == "trend_pullback" else "trail_b"][
                     i
                 ]
-                if cfg.trend_exit and np.isfinite(trail) and p["last_mark"] < trail:
-                    p["pending"] = "trend_break"
+                p["failure_count"] = (
+                    p["failure_count"] + 1
+                    if np.isfinite(trail) and p["last_mark"] < trail
+                    else 0
+                )
+                held = step - p["entry_step"] + 1
+                if cfg.exit_policy == "protected":
+                    # Decided at this close; the raised stop starts NEXT bar.
+                    # Never apply this bar's high to this bar's earlier low.
+                    atr = d["atr"][i]
+                    gain_r = (p["peak"] - p["entry_adjusted"]) / p["initial_risk"]
+                    if gain_r >= cfg.protect_after_r and np.isfinite(atr):
+                        buffer = p["entry_adjusted"] * (
+                            2 * cfg.slippage
+                            + 2 * cfg.commission_rate
+                            + 2 * cfg.transfer_fee
+                            + cfg.stamp_tax
+                        )
+                        candidate = max(
+                            p["entry_adjusted"] + buffer,
+                            p["peak"] - cfg.trail_atr * atr,
+                        )
+                        p["stop"] = max(
+                            p["stop"], min(candidate, p["last_mark"] - 0.1 * atr)
+                        )
+                    broken = (
+                        held >= cfg.min_trend_holding_bars
+                        and p["failure_count"] >= cfg.failure_bars
+                    )
+                else:
+                    broken = np.isfinite(trail) and p["last_mark"] < trail
+                if cfg.trend_exit and broken:
+                    p["pending"] = (
+                        "trend_break_confirmed"
+                        if cfg.exit_policy == "protected"
+                        else "trend_break"
+                    )
                 elif step - p["entry_step"] + 1 >= cfg.max_holding_bars:
                     p["pending"] = "holding_timeout"
         nav = cash + sum(p["units"] * p["last_mark"] for p in positions.values())
@@ -304,6 +378,7 @@ def simulate(
     metrics = summarize(equity, trades, cfg.initial_cash, len(positions))
     metrics["total_fees"] = fees
     return {
+        "execution_version": EXECUTION_VERSION,
         "config": asdict(cfg),
         "metrics": metrics,
         "equity": equity,

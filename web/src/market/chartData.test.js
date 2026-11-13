@@ -4,6 +4,12 @@ import { boundedCache, captureView, chartRows, restoreView, seriesUpdate, signal
 
 const bar = (time, close = 10) => ({ time, open: 10, high: 12, low: 9, close, volume: 100, ma13: 10, ma21: null })
 
+test('multi-timeframe entries are labeled as daily entries rather than a candle count', () => {
+  assert.equal(signalMarkers([{time:1,eligible:true}], {dailyEntry:true})[0].text,'日K入场')
+  const before=[bar(1),bar(2)]
+  assert.equal(seriesUpdate(before,[bar(1),{...bar(2),ma8:10.5}]).type,'update')
+})
+
 test('chart distinguishes non-tradable background, original first and pullback resumption', () => {
   const markers = signalMarkers([
     { time: 1, swing_ignition: true },

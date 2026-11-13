@@ -17,6 +17,12 @@ import pandas as pd
 from core.config import get_config
 from core.logger import get_logger
 from skills.trend.strategy import VERSION, TrendConfig, screen
+from skills.trend.mtf import (
+    MtfConfig,
+    evaluate as evaluate_mtf,
+    result as mtf_result,
+    VERSION as MTF_VERSION,
+)
 from storage.schema.trend import ensure_trend_schema
 from storage.repositories.trend import publish
 from tools.market.trend_data import (
@@ -59,7 +65,34 @@ def _scan_batch(batch, start, cutoff, cfg, daily_cutoff=None):
         return result
 
     for m in batch:
-        result = evaluate(groups.get(m["ts_code"], pd.DataFrame()), cutoff, "60F")
+        if cfg.selection_mode == "mtf":
+            minute, minute_issue = adjust_prices(
+                groups.get(m["ts_code"], pd.DataFrame())
+            )
+            native, daily_issue = adjust_prices(
+                daily_groups.get(m["ts_code"], pd.DataFrame())
+            )
+            issue = minute_issue or daily_issue
+            if not issue and (
+                pd.Timestamp(minute.bar_end.max()) != pd.Timestamp(cutoff)
+                or pd.Timestamp(native.bar_end.max()) != pd.Timestamp(daily_cutoff)
+            ):
+                issue = "末根K线滞后（停牌或数据未更新）"
+            if issue:
+                result = {
+                    "state": "数据待补",
+                    "eligible": False,
+                    "score": 0,
+                    "reason": issue,
+                    "checks": [],
+                    "timeframe": "1D",
+                    "trend60": {"ready": False, "state": "数据待补"},
+                }
+            else:
+                _, evaluated = evaluate_mtf(minute, native, cfg)
+                result = mtf_result(evaluated, cfg)
+        else:
+            result = evaluate(groups.get(m["ts_code"], pd.DataFrame()), cutoff, "60F")
         if cfg.selection_mode == "dual":
             result["daily"] = evaluate(
                 daily_groups.get(m["ts_code"], pd.DataFrame()), daily_cutoff, "1D"
@@ -88,6 +121,19 @@ def scan(as_of: str | None = None, cfg: TrendConfig = TrendConfig(), workers: in
     latest = min(
         available["bar_end"], datetime.combine(available["factor_date"], time(15))
     )
+    if cfg.selection_mode == "mtf":
+        if not available.get("daily_end"):
+            raise ValueError("双周期策略缺少原生日K")
+        minute_day = available["bar_end"].date()
+        if available["bar_end"].time() < time(15):
+            from datetime import timedelta
+
+            minute_day -= timedelta(days=1)
+        latest = min(
+            latest,
+            datetime.combine(minute_day, time(15)),
+            datetime.combine(available["daily_end"], time(15)),
+        )
     cutoff = (
         datetime.combine(datetime.fromisoformat(as_of).date(), time(15))
         if as_of
@@ -100,7 +146,7 @@ def scan(as_of: str | None = None, cfg: TrendConfig = TrendConfig(), workers: in
         raise ValueError("该日期之前没有成分股快照，不能用未来成分冒充历史股票池")
     start = "2026-01-01"
     daily_cutoff = None
-    if cfg.selection_mode == "dual" and available.get("daily_end"):
+    if cfg.selection_mode in ("dual", "mtf") and available.get("daily_end"):
         daily_latest = min(
             datetime.combine(available["daily_end"], time(15)),
             datetime.combine(available["factor_date"], time(15)),
@@ -108,6 +154,8 @@ def scan(as_of: str | None = None, cfg: TrendConfig = TrendConfig(), workers: in
         daily_cutoff = (
             datetime.combine(datetime.fromisoformat(as_of).date(), time(15))
             if as_of
+            else cutoff
+            if cfg.selection_mode == "mtf"
             else daily_latest
         )
         if daily_cutoff > daily_latest:
@@ -151,7 +199,7 @@ def scan(as_of: str | None = None, cfg: TrendConfig = TrendConfig(), workers: in
         raise ValueError(
             "全池数据检查未通过；请先运行 python -m jobs.repair_trend_factors，未发布本轮快照"
         )
-    if cfg.selection_mode == "dual":
+    if cfg.selection_mode in ("dual", "mtf"):
 
         def stats(records, end, latest):
             return {
@@ -167,10 +215,29 @@ def scan(as_of: str | None = None, cfg: TrendConfig = TrendConfig(), workers: in
                 ),
             }
 
-        metadata["timeframes"] = {
-            "60F": stats(rows, cutoff, available["bar_end"]),
-            "1D": stats([r["daily"] for r in rows], daily_cutoff, daily_cutoff),
-        }
+        if cfg.selection_mode == "mtf":
+            trend_rows = [
+                {
+                    "state": r.get("trend60", {}).get("state", "数据待补"),
+                    "eligible": False,
+                }
+                for r in rows
+            ]
+            metadata.update(
+                entry_timeframe="1D",
+                trend_timeframe="60F",
+                trend_ready=sum(r.get("trend60", {}).get("ready", False) for r in rows),
+                method="60F M8/M13/M21确认趋势，原生日K转强确认入场；下一交易日开盘模型；参数仍需后续新样本验证",
+            )
+            metadata["timeframes"] = {
+                "1D": stats(rows, daily_cutoff, daily_cutoff),
+                "60F": stats(trend_rows, cutoff, available["bar_end"]),
+            }
+        else:
+            metadata["timeframes"] = {
+                "60F": stats(rows, cutoff, available["bar_end"]),
+                "1D": stats([r["daily"] for r in rows], daily_cutoff, daily_cutoff),
+            }
     return max(cutoff, daily_cutoff or cutoff).isoformat(), metadata, rows
 
 
@@ -187,15 +254,24 @@ def main():
     )
     args = parser.parse_args()
     get_config()
-    cfg = (
-        TrendConfig(**json.loads(args.config.read_text(encoding="utf-8")))
+    settings = (
+        json.loads(args.config.read_text(encoding="utf-8"))
         if args.config
-        else TrendConfig()
+        else {"selection_mode": "mtf"}
+    )
+    cfg = (MtfConfig if settings.get("selection_mode") == "mtf" else TrendConfig)(
+        **settings
     )
     cutoff, metadata, rows = scan(args.as_of, cfg, args.workers)
     ensure_trend_schema()
     run_id = str(uuid4())
-    publish(run_id, cutoff, VERSION, metadata, rows)
+    publish(
+        run_id,
+        cutoff,
+        MTF_VERSION if cfg.selection_mode == "mtf" else VERSION,
+        metadata,
+        rows,
+    )
     output = Path(get_config().root_dir) / "output" / "market" / "trend"
     output.mkdir(parents=True, exist_ok=True)
     (output / f"{run_id}.json").write_text(

@@ -6,6 +6,14 @@ from storage.repositories.backtest import (
     list_runs,
     load_run,
     observed_dates,
+    mark_suite_superseded,
 )
 
-__all__ = ["quotes", "benchmarks", "list_runs", "load_run", "observed_dates"]
+__all__ = [
+    "quotes",
+    "benchmarks",
+    "list_runs",
+    "load_run",
+    "observed_dates",
+    "mark_suite_superseded",
+]

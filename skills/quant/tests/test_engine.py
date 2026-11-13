@@ -185,6 +185,13 @@ def test_factor_change_keeps_economic_value_in_factor_units():
     assert abs(r["trades"][0]["pnl"]) < 20
 
 
+def test_mixed_raw_and_adjusted_prices_are_rejected_before_trading():
+    s, t = fixture()
+    s.data["scale"][4:] = 2
+    with pytest.raises(ValueError, match="原始价/复权价不一致"):
+        simulate([s], t, cfg=CFG)
+
+
 @pytest.mark.parametrize(
     "field,value",
     [

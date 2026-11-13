@@ -1,4 +1,4 @@
-"""Explicit execution assumptions. These are research parameters, not optimization."""
+"""Immutable execution assumptions; legacy defaults remain reproducible."""
 
 from dataclasses import dataclass
 import math
@@ -19,6 +19,12 @@ class BacktestConfig:
     max_holding_bars: int = 20
     max_entry_risk_pct: float = 8
     trend_exit: bool = True
+    exit_policy: str = "legacy"
+    risk_budget_pct: float = 0
+    protect_after_r: float = 1.2
+    trail_atr: float = 2.5
+    failure_bars: int = 2
+    min_trend_holding_bars: int = 4
 
     def __post_init__(self):
         numbers = [
@@ -32,6 +38,9 @@ class BacktestConfig:
             self.participation,
             self.take_profit_r,
             self.max_entry_risk_pct,
+            self.risk_budget_pct,
+            self.protect_after_r,
+            self.trail_atr,
         ]
         if any(not math.isfinite(x) or x < 0 for x in numbers):
             raise ValueError("回测参数必须为有限非负数")
@@ -51,6 +60,19 @@ class BacktestConfig:
             or self.slippage >= 0.1
         ):
             raise ValueError("持仓/退出参数不合法")
+        if self.exit_policy not in ("legacy", "protected"):
+            raise ValueError("未知退出策略")
+        if (
+            not 0 <= self.risk_budget_pct <= 5
+            or self.protect_after_r <= 0
+            or self.trail_atr <= 0
+        ):
+            raise ValueError("风险预算/跟踪参数不合法")
+        if any(
+            type(x) is not int or x < 1
+            for x in [self.failure_bars, self.min_trend_holding_bars]
+        ):
+            raise ValueError("确认/保护根数不合法")
 
     def fee(self, notional, selling=False):
         return max(

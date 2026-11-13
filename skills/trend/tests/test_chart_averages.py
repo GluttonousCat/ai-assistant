@@ -43,8 +43,8 @@ def test_dividend_or_split_does_not_create_price_gap_or_change_strategy(
     chart = pd.DataFrame(result["data"])
     expected = evaluated_bars(adjusted, timeframe=timeframe)
     assert result["price_basis"] == "forward_asof"
-    assert result["chart_averages"] == {"type": "sma", "windows": [13, 21]}
-    for window in [13, 21]:
+    assert result["chart_averages"] == {"type": "sma", "windows": [8, 13, 21]}
+    for window in [8, 13, 21]:
         np.testing.assert_allclose(
             chart[f"ma{window}"].astype(float),
             expected.close.rolling(window).mean(),

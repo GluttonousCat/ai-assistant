@@ -57,7 +57,11 @@ def test_unknown_result_and_invalid_pagination(monkeypatch):
 
 def test_registry_contains_both_opportunities_and_combined_strategy():
     rows = client().get("/api/v1/quant/strategies").json()["data"]
-    assert len(rows) == 3
+    assert len(rows) == 6
+    current = [r for r in rows if r.get("generation") == "v5"]
+    assert len(current) == 3 and all(
+        r["timeframes"] == ["1D"] and r["trend_timeframe"] == "60F" for r in current
+    )
     assert {r["family"] for r in rows} == {None, "trend_pullback", "base_rebound"}
 
 

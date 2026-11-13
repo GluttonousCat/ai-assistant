@@ -19,6 +19,8 @@ def dashboard(run_id=None, include_rows=True):
 def stock_detail(
     code: str, start: str, end: str, config: dict | None = None, timeframe: str = "60F"
 ):
+    if (config or {}).get("selection_mode") == "mtf":
+        return _mtf_detail(code, start, end, config, timeframe)
     frame = (
         adjusted_daily_bars(code, start, end)
         if timeframe == "1D"
@@ -39,7 +41,7 @@ def stock_detail(
     data = evaluated_bars(frame, TrendConfig(**settings), timeframe)
     # Display averages are independent of the snapshot's strategy EMA settings.
     # Compute before tail(1000) so the left edge keeps its full warm-up history.
-    for window in (13, 21):
+    for window in (8, 13, 21):
         data[f"ma{window}"] = data.close.rolling(window, min_periods=window).mean()
     if issue:
         data["eligible"] = False
@@ -59,6 +61,7 @@ def stock_detail(
         "ema_slow",
         "ma13",
         "ma21",
+        "ma8",
         "atr",
         "adx",
         "efficiency",
@@ -100,5 +103,84 @@ def stock_detail(
         "time_zone": "Asia/Shanghai",
         "volume_unit": "share",
         "amount_unit": "CNY",
-        "chart_averages": {"type": "sma", "windows": [13, 21]},
+        "chart_averages": {"type": "sma", "windows": [8, 13, 21]},
+    }
+
+
+def _mtf_detail(code, start, end, config, timeframe):
+    from skills.trend.mtf import MtfConfig, evaluate, features
+
+    settings = dict(config)
+    settings.setdefault(
+        "slope_epsilon_atr", 0.0
+    )  # Keep the superseded v5 chart reproducible.
+    cfg = MtfConfig(**settings)
+    minute, mi = adjust_prices(adjusted_bars(code, start, end))
+    daily, di = adjust_prices(adjusted_daily_bars(code, start, end))
+    chosen = minute if timeframe == "60F" else daily
+    price_issue = mi if timeframe == "60F" else di
+    if chosen.empty:
+        return {"code": code, "data": [], "issue": price_issue, "price_basis": "raw"}
+    issue = mi or di
+    if issue:
+        data = features(chosen, cfg)
+        data["eligible"] = False
+    else:
+        m, d = evaluate(minute, daily, cfg)
+        data = m if timeframe == "60F" else d
+        if timeframe == "60F":
+            data["eligible"] = False
+    data["first_watch"] = False
+    data["resume_watch"] = False
+    data["swing_ignition"] = False
+    cols = [
+        c
+        for c in [
+            "bar_end",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "amount",
+            f"ma{cfg.fast}",
+            f"ma{cfg.mid}",
+            f"ma{cfg.slow}",
+            "atr",
+            "eligible",
+            "first_watch",
+            "resume_watch",
+            "swing_ignition",
+            "pattern",
+            "pattern_label",
+            "trend_ready",
+            "trend_state",
+            "state",
+            "context_end",
+            "stop_price",
+        ]
+        if c in data
+    ]
+    clean = (
+        data[cols]
+        .tail(1000)
+        .astype(object)
+        .where(pd.notna(data[cols].tail(1000)), None)
+    )
+    return {
+        "code": code,
+        "data": json.loads(clean.to_json(orient="records", date_format="iso")),
+        "issue": issue,
+        "price_basis": "raw" if price_issue else "forward_asof",
+        "as_of": end,
+        "timeframe": timeframe,
+        "trend_timeframe": "60F",
+        "entry_timeframe": "1D",
+        "time_zone": "Asia/Shanghai",
+        "volume_unit": "share",
+        "amount_unit": "CNY",
+        "chart_averages": {"type": "sma", "windows": [cfg.fast, cfg.mid, cfg.slow]},
+        "version_notice": "该历史v5数值版本存在浮点走平误判，已由v5.1替代；仅供核查"
+        if "slope_epsilon_atr" not in config
+        else None,
     }

@@ -35,6 +35,27 @@ def test_missing_real_factor_is_not_filled():
     assert stock is None and "不完整" in issue
 
 
+def test_factor_adjustment_never_mutates_raw_execution_prices():
+    f = make_setup("pit")
+    f["up_limit"] = 100
+    f["down_limit"] = 1
+    cut = len(f) // 2
+    f.loc[cut:, "adj_factor"] = 2
+    f.loc[cut:, ["open", "high", "low", "close"]] /= 2
+    original = f.copy(deep=True)
+    s, issue = prepare_stock(
+        f, {"ts_code": "000001.SZ", "name": "样本", "observed_at": "2026-01-01"}, "60F"
+    )
+    assert issue is None
+    for key in ["open", "high", "low", "close"]:
+        np.testing.assert_array_equal(s.data[key], original[key].to_numpy())
+        np.testing.assert_allclose(
+            s.data["adjusted_" + key], original[key] * s.data["scale"]
+        )
+        assert not np.shares_memory(s.data[key], s.data["adjusted_" + key])
+    assert f.equals(original)
+
+
 def test_nav_drawdown_and_profit_factor_use_different_units():
     equity = [{"equity": 90.0, "exposure": 0.5}, {"equity": 110.0, "exposure": 0.8}]
     trades = [

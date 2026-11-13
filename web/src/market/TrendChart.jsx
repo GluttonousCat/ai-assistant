@@ -32,12 +32,13 @@ const TrendChart = memo(function TrendChart({ data, instrumentKey, stop, stopLab
     })
     const candles = chart.addSeries(CandlestickSeries, { upColor: '#e87768', downColor: '#55ad92', wickUpColor: '#e87768', wickDownColor: '#55ad92', borderVisible: false })
     const fast = chart.addSeries(LineSeries, { color: '#dfb671', lineWidth: 2, priceLineVisible: false, lastValueVisible: false })
+    const quick = chart.addSeries(LineSeries, { color: '#d89bc1', lineWidth: 1, priceLineVisible: false, lastValueVisible: false })
     const slow = chart.addSeries(LineSeries, { color: '#98a9cb', lineWidth: 2, priceLineVisible: false, lastValueVisible: false })
     const volume = chart.addSeries(HistogramSeries, { priceFormat: { type: 'volume' }, priceLineVisible: false, lastValueVisible: false }, 1)
     const markers = createSeriesMarkers(candles, [])
     chart.panes()[0].setStretchFactor(4)
     chart.panes()[1].setStretchFactor(1)
-    const state = { chart, candles, fast, slow, volume, markers, rows: [], byTime: new Map(), views: boundedCache(20), key: '', priceLine: null, shown: null, pending: null, hoverTime: null }
+    const state = { chart, candles, quick, fast, slow, volume, markers, rows: [], byTime: new Map(), views: boundedCache(20), key: '', priceLine: null, shown: null, pending: null, hoverTime: null }
     api.current = state
     const move = (param) => {
       state.hoverTime = state.byTime.has(param.time) ? param.time : null
@@ -72,12 +73,14 @@ const TrendChart = memo(function TrendChart({ data, instrumentKey, stop, stopLab
     if (plan.type === 'replace') {
       state.candles.setData(rows.map(candle))
       state.fast.setData(rows.map((r) => average(r, 'ma13')))
+      state.quick.setData(rows.map((r) => average(r, 'ma8')))
       state.slow.setData(rows.map((r) => average(r, 'ma21')))
       state.volume.setData(rows.map(turnover))
     } else if (plan.type === 'update') {
       for (const row of rows.slice(plan.from)) {
         state.candles.update(candle(row))
         state.fast.update(average(row, 'ma13'))
+        state.quick.update(average(row, 'ma8'))
         state.slow.update(average(row, 'ma21'))
         state.volume.update(turnover(row))
       }
@@ -104,8 +107,9 @@ const TrendChart = memo(function TrendChart({ data, instrumentKey, stop, stopLab
   }, [timeframe])
 
   useEffect(() => {
-    api.current.markers.setMarkers(['early', 'dual'].includes(config?.selection_mode) ? signalMarkers(rows) : [])
-  }, [rows, config?.selection_mode])
+    const mtf = config?.selection_mode === 'mtf'
+    api.current.markers.setMarkers((mtf ? timeframe === '1D' : ['early', 'dual'].includes(config?.selection_mode)) ? signalMarkers(rows, { dailyEntry: mtf }) : [])
+  }, [rows, config?.selection_mode, timeframe])
 
   useEffect(() => {
     const state = api.current
@@ -124,7 +128,8 @@ const TrendChart = memo(function TrendChart({ data, instrumentKey, stop, stopLab
   const active = hover?.key === instrumentKey ? hover.row : rows.at(-1)
   return <>
     <div className="trend-chart-legend">
-      <span className="trend-legend-fast">MA 13{Number.isFinite(active?.ma13) ? ` · ${active.ma13.toFixed(2)}` : ''}</span><span className="trend-legend-slow">MA 21{Number.isFinite(active?.ma21) ? ` · ${active.ma21.toFixed(2)}` : ''}</span>
+      <span style={{ color: '#d89bc1' }}>M8{Number.isFinite(active?.ma8) ? ` · ${active.ma8.toFixed(2)}` : ''}</span><span className="trend-legend-fast">M13{Number.isFinite(active?.ma13) ? ` · ${active.ma13.toFixed(2)}` : ''}</span><span className="trend-legend-slow">M21{Number.isFinite(active?.ma21) ? ` · ${active.ma21.toFixed(2)}` : ''}</span>
+      {config?.selection_mode === 'mtf' && active?.trend_state && <span>60F背景：{active.trend_state}</span>}
       {active && <span className="trend-ohlc">{timeLabel(active.time, timeframe)}　开 {active.open.toFixed(2)}　高 {active.high.toFixed(2)}　低 {active.low.toFixed(2)}　收 {active.close.toFixed(2)}</span>}
       {active?.startup_count > 0 && ['early', 'dual'].includes(config?.selection_mode) && <span className="trend-legend-fast">{active.pattern_label || ''} · {active.setup_phase === 'pullback_resume' ? '回调再起，本轮' : '本段'}第 {active.startup_count} 阳 / {active.startup_age} 根K线</span>}
     </div>

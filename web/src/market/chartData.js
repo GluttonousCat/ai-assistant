@@ -1,9 +1,9 @@
 // Only choose incremental updates when historical prices are unchanged.
 // A corrected/adjusted historical candle must replace the full series.
-const priceFields = ['open', 'high', 'low', 'close', 'volume', 'ma13', 'ma21']
+const priceFields = ['open', 'high', 'low', 'close', 'volume', 'ma8', 'ma13', 'ma21']
 const sameBar = (a, b) => a.time === b.time && priceFields.every((field) => a[field] === b[field])
 
-export function signalMarkers(rows) {
+export function signalMarkers(rows, { dailyEntry = false } = {}) {
   return rows.filter((r) => r.eligible || r.first_watch || r.resume_watch || r.swing_ignition).map((r) => {
     const resumed = r.setup_phase === 'pullback_resume'
     const confirmed = r.eligible
@@ -11,7 +11,7 @@ export function signalMarkers(rows) {
     return {
       time: r.time, position: 'belowBar', shape: confirmed ? 'arrowUp' : 'circle',
       color: confirmed ? '#68bea2' : watch ? '#dfb671' : '#97948c',
-      text: confirmed ? `${resumed ? '再起第' : ''}${r.startup_count}阳确认` : r.resume_watch ? '回调再起观察' : r.first_watch ? '首阳观察' : '起势背景',
+      text: confirmed ? dailyEntry ? '日K入场' : `${resumed ? '再起第' : ''}${r.startup_count}阳确认` : r.resume_watch ? '回调再起观察' : r.first_watch ? '首阳观察' : '起势背景',
     }
   })
 }
