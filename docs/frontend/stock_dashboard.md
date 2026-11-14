@@ -97,9 +97,9 @@ web/src/market/StockDashboard → platformApi → /api/v1/market/dashboard
 
 
 
-### 4.0 v6.1：低位60F早期反转（当前默认）
+### 4.0 v6.1：低位60F早期反转（历史兼容）
 
-默认CLI显式使用`MtfConfig(fresh_reversal=True, reversal_cycle_reset=True)`，版本`60f-early-reversal-daily-entry-v6.1`。
+v6.1冻结配置使用`MtfConfig(fresh_reversal=True, reversal_cycle_reset=True)`，版本`60f-early-reversal-daily-entry-v6.1`。
 `reversal.py`是无IO的因果起点追踪器；未保存新字段的v5.1配置仍按旧规则回放，不重解释历史快照。
 
 - 前置背景只用此前60F：16根净跌≥2ATR且至少半数收盘下跌，或8根高点至前收盘回撤≥3ATR；还须距16根低点≤1.5ATR、前32根高点回撤≥2ATR、处此前64根区间下45%、此前M13下降。
