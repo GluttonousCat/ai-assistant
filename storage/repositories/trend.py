@@ -29,14 +29,20 @@ def universe(as_of: str, listed=False) -> list[dict]:
         if listed and pg.table_exists("stock", "listed_universe_snapshot"):
             # This is a current observed universe, not reconstructed historical
             # membership. Allow an earlier quote cutoff, recording fetched_at.
-            rows = pg.fetch_all("""SELECT u.ts_code,u.name,u.industry,u.board,
+            rows = pg.fetch_df_stream("""WITH dates AS (
+                SELECT index_code,max(as_of_date) AS as_of_date
+                FROM stock.index_membership_snapshot GROUP BY index_code
+            ), membership AS (
+                SELECT m.ts_code,array_agg(DISTINCT m.index_code::text ORDER BY m.index_code::text) AS indices
+                FROM stock.index_membership_snapshot m JOIN dates d USING(index_code,as_of_date)
+                GROUP BY m.ts_code
+            ) SELECT u.ts_code,u.name,u.industry,u.board,
                 u.snapshot_date AS membership_date,u.fetched_at AS observed_at,
-                ARRAY(SELECT DISTINCT m.index_code FROM stock.index_membership_snapshot m
-                    WHERE m.ts_code=u.ts_code AND m.as_of_date=(SELECT max(s.as_of_date)
-                    FROM stock.index_membership_snapshot s WHERE s.index_code=m.index_code)) AS indices
+                coalesce(m.indices,ARRAY[]::text[]) AS indices
                 FROM stock.listed_universe_snapshot u
+                LEFT JOIN membership m USING(ts_code)
                 WHERE u.snapshot_date=(SELECT max(snapshot_date) FROM stock.listed_universe_snapshot)
-                ORDER BY u.ts_code""")
+                ORDER BY u.ts_code""").to_dict(orient="records")
             if rows:
                 return rows
         return pg.fetch_all(
@@ -55,7 +61,7 @@ def universe(as_of: str, listed=False) -> list[dict]:
 
 def inputs(codes: list[str], start: str, end: str):
     with PgClient(read_only=True) as pg:
-        return pg.fetch_df(
+        return pg.fetch_df_stream(
             """SELECT b.ts_code,b.bar_end,b.open,b.high,b.low,b.close,b.volume,b.amount,f.adj_factor
             FROM stock.intraday_bar b LEFT JOIN stock.adj_factor f
             ON f.ts_code=b.ts_code AND f.trade_date=b.bar_end::date
@@ -68,7 +74,7 @@ def inputs(codes: list[str], start: str, end: str):
 def daily_inputs(codes: list[str], start: str, end: str):
     """Native daily bars; Tushare lots/thousand CNY become shares/CNY."""
     with PgClient(read_only=True) as pg:
-        return pg.fetch_df(
+        return pg.fetch_df_stream(
             """SELECT d.ts_code,d.trade_date::timestamp+interval '15 hours' AS bar_end,
             d.open,d.high,d.low,d.close,d.vol*100 AS volume,d.amount*1000 AS amount,f.adj_factor
             FROM stock.daily d LEFT JOIN stock.adj_factor f USING(ts_code,trade_date)

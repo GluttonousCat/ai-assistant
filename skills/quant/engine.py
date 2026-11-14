@@ -39,6 +39,8 @@ def simulate(
     ):
         raise ValueError("未知策略/成分模式/周期")
     timeline = pd.DatetimeIndex(timeline)
+    if cfg.exit_policy == "reversal" and timeframe != "1D":
+        raise ValueError("反转分段离场使用原生日K，持有期按交易日计算")
     if (
         timeline.empty
         or not timeline.is_monotonic_increasing
@@ -171,7 +173,11 @@ def simulate(
                         if p["stop"] > p["initial_stop"]
                         else "stop_loss"
                     )
-                elif reason is None and op >= p["target"]:
+                elif (
+                    reason is None
+                    and cfg.exit_policy != "reversal"
+                    and op >= p["target"]
+                ):
                     reason = "take_profit"
                 if reason:
                     sell(code, i, op, reason, start)
@@ -266,6 +272,7 @@ def simulate(
                 "peak": fill,
                 "trough": fill,
                 "failure_count": 0,
+                "line_reclaimed": False,
             }
             consumed.add(key)
             audit["entries"] += 1
@@ -282,7 +289,7 @@ def simulate(
                 d["adjusted_high"][i],
             )
             stop_hit = lo <= p["stop"]
-            target_hit = hi >= p["target"]
+            target_hit = cfg.exit_policy != "reversal" and hi >= p["target"]
             if day == p["entry_day"]:
                 if stop_hit:
                     p["pending"] = "t1_deferred_stop"
@@ -297,7 +304,12 @@ def simulate(
                 price = min(op, p["stop"]) if stop_hit else max(op, p["target"])
                 if stop_hit and target_hit:
                     audit["ambiguous_bracket_stop_first"] += 1
-                when = start if op <= p["stop"] or op >= p["target"] else end
+                when = (
+                    start
+                    if op <= p["stop"]
+                    or (cfg.exit_policy != "reversal" and op >= p["target"])
+                    else end
+                )
                 if sell(code, i, price, reason, when):
                     continue
             p["last_mark"] = d["adjusted_close"][i]
@@ -314,6 +326,23 @@ def simulate(
                     else 0
                 )
                 held = step - p["entry_step"] + 1
+                if cfg.exit_policy == "reversal":
+                    if np.isfinite(trail) and p["last_mark"] >= trail:
+                        p["line_reclaimed"] = True
+                    if not p["line_reclaimed"]:
+                        p["failure_count"] = 0
+                if cfg.exit_policy == "reversal":
+                    from skills.quant.reversal_exit import decide
+
+                    cost_floor = (
+                        (p["cost"] + cfg.fee(p["cost"], selling=True))
+                        / p["units"]
+                        / (1 - cfg.slippage)
+                    )
+                    p["stop"], p["pending"] = decide(
+                        p, p["last_mark"], d["atr"][i], held, cfg, cost_floor
+                    )
+                    continue
                 if cfg.exit_policy == "protected":
                     # Decided at this close; the raised stop starts NEXT bar.
                     # Never apply this bar's high to this bar's earlier low.
@@ -378,7 +407,9 @@ def simulate(
     metrics = summarize(equity, trades, cfg.initial_cash, len(positions))
     metrics["total_fees"] = fees
     return {
-        "execution_version": EXECUTION_VERSION,
+        "execution_version": "reversal-staged-exit-v2"
+        if cfg.exit_policy == "reversal"
+        else EXECUTION_VERSION,
         "config": asdict(cfg),
         "metrics": metrics,
         "equity": equity,

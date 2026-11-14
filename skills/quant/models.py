@@ -25,6 +25,9 @@ class BacktestConfig:
     trail_atr: float = 2.5
     failure_bars: int = 2
     min_trend_holding_bars: int = 4
+    rebound_patience: int = 5
+    rebound_min_progress_r: float = 0.5
+    trail_after_r: float = 2
 
     def __post_init__(self):
         numbers = [
@@ -41,6 +44,8 @@ class BacktestConfig:
             self.risk_budget_pct,
             self.protect_after_r,
             self.trail_atr,
+            self.rebound_min_progress_r,
+            self.trail_after_r,
         ]
         if any(not math.isfinite(x) or x < 0 for x in numbers):
             raise ValueError("回测参数必须为有限非负数")
@@ -60,7 +65,7 @@ class BacktestConfig:
             or self.slippage >= 0.1
         ):
             raise ValueError("持仓/退出参数不合法")
-        if self.exit_policy not in ("legacy", "protected"):
+        if self.exit_policy not in ("legacy", "protected", "reversal"):
             raise ValueError("未知退出策略")
         if (
             not 0 <= self.risk_budget_pct <= 5
@@ -70,9 +75,17 @@ class BacktestConfig:
             raise ValueError("风险预算/跟踪参数不合法")
         if any(
             type(x) is not int or x < 1
-            for x in [self.failure_bars, self.min_trend_holding_bars]
+            for x in [
+                self.failure_bars,
+                self.min_trend_holding_bars,
+                self.rebound_patience,
+            ]
         ):
             raise ValueError("确认/保护根数不合法")
+        if self.rebound_min_progress_r <= 0 or (
+            self.exit_policy == "reversal" and self.trail_after_r < self.protect_after_r
+        ):
+            raise ValueError("反转退出的推进/跟踪阈值不合法")
 
     def fee(self, notional, selling=False):
         return max(

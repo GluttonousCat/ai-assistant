@@ -13,6 +13,7 @@ import pandas as pd
 VERSION = "60f-trend-daily-entry-v5.1"
 REVERSAL_VERSION = "60f-early-reversal-daily-entry-v6"
 FRESH_VERSION = "60f-early-reversal-daily-entry-v6.1"
+DUAL_VERSION = "60f-risk-structured-setups-v7"
 LABELS = {"trend_pullback": "趋势回调", "base_rebound": "止跌修复"}
 
 
@@ -35,8 +36,13 @@ class MtfConfig:
     # Opt in explicitly so persisted v5.1 configurations remain reproducible.
     fresh_reversal: bool = False
     reversal_cycle_reset: bool = False
+    risk_setups: bool = False
 
     def __post_init__(self):
+        if type(self.risk_setups) is not bool or (
+            self.risk_setups and not self.fresh_reversal
+        ):
+            raise ValueError("risk_setups需要早期反转模式及布尔参数")
         if type(self.fresh_reversal) is not bool:
             raise ValueError("fresh_reversal必须为布尔值")
         if type(self.reversal_cycle_reset) is not bool:
@@ -71,6 +77,8 @@ class MtfConfig:
 
 
 def version_for(cfg):
+    if cfg.risk_setups:
+        return DUAL_VERSION
     return (
         (FRESH_VERSION if cfg.reversal_cycle_reset else REVERSAL_VERSION)
         if cfg.fresh_reversal
@@ -127,6 +135,8 @@ def evaluate(minute, daily, cfg=MtfConfig()):
     m["trend_state"] = np.select(
         [orderly, repair], ["趋势向上", "止跌修复"], default="趋势未确认"
     )
+    m["continuation_ready"] = m.trend_ready
+    m["early_repair_ready"] = (m.close.ge(fast) & fast.diff(2).gt(eps)).fillna(False)
     reversal_cols = []
     if cfg.fresh_reversal:
         from skills.trend.reversal import reversal_context
@@ -148,6 +158,8 @@ def evaluate(minute, daily, cfg=MtfConfig()):
             "bar_end",
             "trend_ready",
             "trend_state",
+            "continuation_ready",
+            "early_repair_ready",
             f"ma{cfg.fast}",
             f"ma{cfg.mid}",
             f"ma{cfg.slow}",
@@ -211,6 +223,16 @@ def evaluate(minute, daily, cfg=MtfConfig()):
         # permitting a mature daily uptrend to supply an unrelated background.
         context_a = pd.Series(False, index=d.index)
         context_b = d.reversal_fresh.fillna(False)
+    if cfg.risk_setups:
+        from skills.trend.pullback import controlled_pullbacks
+
+        pullback = controlled_pullbacks(d)
+        d["pullback_round"] = pullback["rounds"]
+        context_a = pullback.active & touch & d.context_complete
+        d["trend_ready"] |= (
+            context_a & d.continuation_ready.fillna(False) & d.context_complete
+        )
+        d.loc[context_a & d.trend_ready, "trend_state"] = "趋势回调转强"
     body = d.close - d.open
     location = (d.close - d.low) / (d.high - d.low).replace(0, np.nan)
     red = (d.close < d.open).shift().rolling(3).sum().ge(2)
@@ -227,11 +249,32 @@ def evaluate(minute, daily, cfg=MtfConfig()):
         & volume
         & d.close.ge(d[f"ma{cfg.fast}"] - 0.1 * atr)
     ).fillna(False)
+    if cfg.risk_setups:
+        d["gap_held"] = (
+            (d.open - d.high.shift()).ge(0.5 * atr)
+            & (d.open - previous).le(2 * atr)
+            & d.low.gt(d.high.shift())
+            & d.close.ge(d.open)
+            & volume
+        ).fillna(False)
+        d["quality_candle"] |= d.gap_held
+        gap_context = d.gap_held & drift & near_floor & d.context_complete
+        context_b |= gap_context
+        d["trend_ready"] |= gap_context & d.early_repair_ready.fillna(False)
+        d.loc[gap_context & d.trend_ready, "trend_state"] = "缺口止跌修复"
+    else:
+        d["gap_held"] = False
     d["daily_amount"] = d.amount.rolling(20).mean()
     d["extension_atr"] = (d.close - daily_mid) / d.atr
     d["stop_price"] = np.minimum(
         d.low.rolling(3).min() - 0.15 * atr, d.close - cfg.stop_atr * atr
     )
+    if cfg.risk_setups:
+        # An unfilled gap has a distinct invalidation structure. Do not borrow
+        # a much older low, nor remove the minimum one-ATR volatility allowance.
+        d.loc[d.gap_held, "stop_price"] = np.minimum(d.low - 0.25 * atr, d.close - atr)[
+            d.gap_held
+        ]
     d["risk_pct"] = (d.close - d.stop_price) / d.close * 100
     d["liquidity_ok"] = d.daily_amount.ge(cfg.min_daily_amount)
     d["risk_ok"] = d.stop_price.gt(0) & d.risk_pct.between(
@@ -275,6 +318,11 @@ def evaluate(minute, daily, cfg=MtfConfig()):
         )
         d.loc[~d.context_complete, "state"] = "数据不足"
         d["pattern_label"] = d.reversal_kind.fillna("").replace("", "等待低位反转")
+        if cfg.risk_setups:
+            d.loc[context_a, "pattern_label"] = "趋势首次回调"
+            d.loc[context_a & d.pullback_round.gt(1), "pattern_label"] = "趋势回调再起"
+            d.loc[d.gap_held & context_b & ~context_a, "pattern_label"] = "低位缺口守稳"
+            d.loc[context_a & ~d.eligible, "state"] = "首次回调观察"
     d["score"] = (
         40 * d.trend_ready.astype(int)
         + 20 * d.quality_candle.astype(int)
@@ -283,7 +331,10 @@ def evaluate(minute, daily, cfg=MtfConfig()):
         + 10 * (1 - d.risk_pct / cfg.max_risk_pct).clip(0, 1)
     ).round(1)
     if cfg.fresh_reversal:
-        d.loc[~d.reversal_fresh.fillna(False), "score"] = 0
+        d.loc[
+            ~(d.reversal_fresh.fillna(False) | context_a | (d.gap_held & context_b)),
+            "score",
+        ] = 0
     return m, d
 
 
@@ -347,6 +398,32 @@ def result(d, cfg=MtfConfig()):
             "前16根下跌≥2ATR且至少半数下跌，或前8根回撤≥3ATR；处64根区间下45%，靠近16根低点且M13此前下降",
         )
 
+    if cfg.risk_setups:
+        checks[0] = (
+            "trend60",
+            "60F方向确认",
+            r.trend_ready,
+            "低位反转修复或首次回调后的60F趋势恢复；当天完整收盘背景",
+        )
+        checks[1] = (
+            "structure",
+            "机会前置结构",
+            r.a_context or r.b_context,
+            "低位阴跌/深坑，或已有升势的受控回调（首次与后续分别标注）；回调不冒充首阳",
+        )
+        checks[2] = (
+            "candle",
+            "日K转强或缺口守稳",
+            r.quality_candle,
+            "转强阳线，或高开超过前高0.5ATR、全天不补缺口且收阳；高开幅度不超过2ATR并有量能",
+        )
+        checks[5] = (
+            "risk",
+            "初始风险",
+            r.risk_ok,
+            "常规结构止损；缺口守稳按当日低点外0.25ATR且至少1ATR缓冲；风险距离不超过配置上限",
+        )
+
     def num(key):
         value = r.get(key, np.nan)
         return (
@@ -359,6 +436,10 @@ def result(d, cfg=MtfConfig()):
         "score": num("score") or 0,
         "pattern": r.pattern,
         "pattern_label": r.pattern_label,
+        "setup_watch": bool(r.a_context or r.b_context)
+        if cfg.risk_setups
+        else bool(r.get("reversal_fresh", False)),
+        "pullback_round": num("pullback_round"),
         "timeframe": "1D",
         "bar_end": r.bar_end.isoformat(),
         "reason": "60F趋势与日K转强确认，下一交易日开盘尝试入场"

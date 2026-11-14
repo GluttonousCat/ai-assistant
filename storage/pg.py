@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import os
 import threading
+from uuid import uuid4
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
@@ -269,6 +270,22 @@ class PgClient:
         self.cur.execute(sql, params)
         cols = [d[0] for d in self.cur.description]
         return pd.DataFrame(self.cur.fetchall(), columns=cols)
+
+    def fetch_df_stream(
+        self, sql: str, params: Optional[Sequence] = None, chunk_size: int = 512
+    ) -> pd.DataFrame:
+        """Bound wire buffers for bulk reads; cursor stays inside this transaction."""
+        if type(chunk_size) is not int or chunk_size < 1:
+            raise ValueError("chunk_size must be a positive integer")
+        with self.conn.cursor(name="read_" + uuid4().hex) as stream:
+            stream.execute(sql, params)
+            batch = stream.fetchmany(chunk_size)
+            columns = [d[0] for d in stream.description]
+            rows = list(batch)
+            while batch:
+                batch = stream.fetchmany(chunk_size)
+                rows.extend(batch)
+            return pd.DataFrame(rows, columns=columns)
 
     # ---------- utilities ----------
     def table_exists(self, schema: str, table: str) -> bool:

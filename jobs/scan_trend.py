@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 from core.config import get_config
 from core.logger import get_logger
+from jobs.backtest_quant import _database_unit
 from tools.market.universe import board_of, risk_name
 from skills.trend.strategy import VERSION, TrendConfig, screen
 from skills.trend.mtf import (
@@ -32,6 +33,7 @@ from tools.market.trend_data import (
     scan_daily_inputs,
     scan_universe,
     adjust_prices,
+    load_dashboard,
 )
 
 logger = get_logger(__name__)
@@ -39,10 +41,16 @@ logger = get_logger(__name__)
 
 def _scan_batch(batch, start, cutoff, cfg, daily_cutoff=None):
     rows = []
-    inputs = scan_inputs([m["ts_code"] for m in batch], start, cutoff)
+    inputs = _database_unit(
+        lambda: scan_inputs([m["ts_code"] for m in batch], start, cutoff)
+    )
     groups = dict(tuple(inputs.groupby("ts_code"))) if not inputs.empty else {}
     daily = (
-        scan_daily_inputs([m["ts_code"] for m in batch], start, daily_cutoff)
+        _database_unit(
+            lambda: scan_daily_inputs(
+                [m["ts_code"] for m in batch], start, daily_cutoff
+            )
+        )
         if daily_cutoff
         else pd.DataFrame()
     )
@@ -126,9 +134,38 @@ def _scan_batch(batch, start, cutoff, cfg, daily_cutoff=None):
     return rows
 
 
-def scan(as_of: str | None = None, cfg: TrendConfig = TrendConfig(), workers: int = 2):
+def scan(
+    as_of: str | None = None,
+    cfg: TrendConfig = TrendConfig(),
+    workers: int = 2,
+    batch_size: int = 100,
+):
+    if type(batch_size) is not int or not 1 <= batch_size <= 100:
+        raise ValueError("batch_size必须为1到100")
     now = datetime.now(ZoneInfo("Asia/Shanghai")).replace(tzinfo=None)
-    available = scan_cutoffs(now)
+    available = None
+    if as_of and getattr(cfg, "risk_setups", False):
+        previous = _database_unit(lambda: load_dashboard(None, False))
+        if previous and previous["metadata"].get("factor_latest"):
+            meta = previous["metadata"]
+            bounds = dict(
+                bar_end=pd.Timestamp(meta["data_latest"]).to_pydatetime(),
+                factor_date=pd.Timestamp(meta["factor_latest"]).date(),
+                daily_end=pd.Timestamp(
+                    meta.get("timeframes", {})
+                    .get("1D", {})
+                    .get("as_of", previous["as_of"])
+                ).date(),
+                snapshot_run_id=previous["run_id"],
+            )
+            requested = pd.Timestamp(as_of).date()
+            if requested <= min(
+                bounds["bar_end"].date(), bounds["factor_date"], bounds["daily_end"]
+            ):
+                available = bounds
+    if available is None:
+        available = _database_unit(lambda: scan_cutoffs(now))
+    logger.info("趋势扫描截止已核实，加载股票池")
     if not available["bar_end"] or not available["factor_date"]:
         raise ValueError("缺少60F行情或复权因子")
     latest = min(
@@ -164,6 +201,7 @@ def scan(as_of: str | None = None, cfg: TrendConfig = TrendConfig(), workers: in
         members = [m for m in members if not risk_name(m["name"])]
     if not members:
         raise ValueError("该日期之前没有成分股快照，不能用未来成分冒充历史股票池")
+    logger.info("扫描股票池加载完成: %s只", len(members))
     start = "2026-01-01"
     daily_cutoff = None
     if cfg.selection_mode in ("dual", "mtf") and available.get("daily_end"):
@@ -188,13 +226,13 @@ def scan(as_of: str | None = None, cfg: TrendConfig = TrendConfig(), workers: in
         futures = [
             pool.submit(
                 _scan_batch,
-                members[i : i + 100],
+                members[i : i + batch_size],
                 start,
                 cutoff.isoformat(),
                 cfg,
                 daily_cutoff.isoformat() if daily_cutoff else None,
             )
-            for i in range(0, len(members), 100)
+            for i in range(0, len(members), batch_size)
         ]
         for future in as_completed(futures):
             rows.extend(future.result())
@@ -204,6 +242,7 @@ def scan(as_of: str | None = None, cfg: TrendConfig = TrendConfig(), workers: in
     rows.sort(key=lambda r: r["ts_code"])
     metadata = {
         "config": asdict(cfg),
+        "cutoffs_source": available.get("snapshot_run_id", "local_latest"),
         "universe": len(members),
         "eligible": sum(r["eligible"] for r in rows),
         "states": dict(Counter(r["state"] for r in rows)),
@@ -220,6 +259,7 @@ def scan(as_of: str | None = None, cfg: TrendConfig = TrendConfig(), workers: in
             universe_basis="当前非ST上市名单（沪深三板及原有北交所）；非历史逐日成员，存在幸存者偏差",
             boards=dict(Counter(r["board"] for r in rows)),
             reversal_watch=sum(r.get("trend60", {}).get("fresh", False) for r in rows),
+            opportunity_watch=sum(r.get("setup_watch", False) for r in rows),
         )
     if all(r["state"] == "数据待补" for r in period_results):
         raise ValueError(
@@ -259,6 +299,10 @@ def scan(as_of: str | None = None, cfg: TrendConfig = TrendConfig(), workers: in
                 metadata["method"] = (
                     "60F阴跌/深坑后的低位早期反转观察；起点不因局部回调重置，限12根/前4推进阳线；日K确认后次日开盘模型，低位不保证安全或收益"
                 )
+            if getattr(cfg, "risk_setups", False):
+                metadata["method"] = (
+                    "按安全边际区分低位反转、缺口守稳与趋势回调（首次/后续），而非按已涨幅度一刀切；日K收盘确认、次日开盘模型；仍未证明盈利优势"
+                )
             metadata["timeframes"] = {
                 "1D": stats(rows, daily_cutoff, daily_cutoff),
                 "60F": stats(trend_rows, cutoff, available["bar_end"]),
@@ -274,7 +318,15 @@ def scan(as_of: str | None = None, cfg: TrendConfig = TrendConfig(), workers: in
 def main():
     parser = argparse.ArgumentParser(description="60F主趋势离线筛票")
     parser.add_argument("--as-of", help="完整收盘日，默认行情与复权因子共有的最新日期")
-    parser.add_argument("--config", type=Path, help="TrendConfig/MtfConfig冻结参数的JSON文件")
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=100,
+        help="每个可重试读取单元的股票数，1~100；弱网络可用10",
+    )
+    parser.add_argument(
+        "--config", type=Path, help="TrendConfig/MtfConfig冻结参数的JSON文件"
+    )
     parser.add_argument(
         "--workers",
         type=int,
@@ -291,12 +343,13 @@ def main():
             "selection_mode": "mtf",
             "fresh_reversal": True,
             "reversal_cycle_reset": True,
+            "risk_setups": True,
         }
     )
     cfg = (MtfConfig if settings.get("selection_mode") == "mtf" else TrendConfig)(
         **settings
     )
-    cutoff, metadata, rows = scan(args.as_of, cfg, args.workers)
+    cutoff, metadata, rows = scan(args.as_of, cfg, args.workers, args.batch_size)
     ensure_trend_schema()
     run_id = str(uuid4())
     publish(

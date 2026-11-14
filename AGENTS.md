@@ -26,8 +26,8 @@ core/        基础设施 (引擎与各层共用的地基, 不含业务):
              config(.env+yaml)/logger(按顶层包分桶)/security(JWT+bcrypt)/
              lifespan(调度器启停)/net/helpers·paths
 skills/      领域技能 (每技能一目录, 专业知识放 prompt):
-             quant(策略注册/资金回测/净值与成交统计/研究报告,复用trend入场; 见 docs/agents/quant_backtesting.md) /
-             trend(当前M8/M13/M21:60F趋势→原生日K入场; mtf.py纯计算; 旧v4首阳/回调再起规则与快照保留兼容; 见 docs/frontend/stock_dashboard.md) /
+             quant(分段离场reversal_exit,先收复M21才判失守,实验对照不替换默认2R/策略注册/资金回测/净值与成交统计/研究报告,复用trend入场; 见 docs/agents/quant_backtesting.md) /
+             trend(默认V7低位反转/趋势回调首次及后续/缺口守稳，risk_setups冻结配置兼容; 当前M8/M13/M21:60F趋势→原生日K入场; mtf.py纯计算; 旧v4首阳/回调再起规则与快照保留兼容; 见 docs/frontend/stock_dashboard.md) /
              fin_query(Text-to-SQL) / report(研报) / scanned_report(OCR) /
              beta_alpha(产业链Beta+个股Alpha: chains种子链/analysis/tests) /
              content(内容资产管线: 画像/公众号文章/PPT/年报解读) /

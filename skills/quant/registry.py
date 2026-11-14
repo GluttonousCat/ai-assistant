@@ -3,6 +3,12 @@
 from skills.trend.strategy import VERSION, TrendConfig
 
 STRATEGIES = {
+    "mtf_risk_v7": {
+        "name": "60F结构机会·反转与趋势回调",
+        "family": None,
+        "generation": "v7",
+        "description": "低位反转、缺口守稳及趋势受控回调分别识别，区分首次与后续；安全边际按结构失效距离衡量，日K确认后次日执行。",
+    },
     "mtf_reversal_v6": {
         "name": "60F低位早期反转",
         "family": "base_rebound",
@@ -46,31 +52,29 @@ STRATEGIES = {
 
 
 def catalog():
-    from skills.trend.mtf import VERSION as MTF_VERSION, FRESH_VERSION, MtfConfig
+    from skills.trend.mtf import MtfConfig, version_for
 
-    return [
-        {
-            **value,
-            "id": key,
-            "version": FRESH_VERSION
-            if value.get("generation") == "v6"
-            else MTF_VERSION
-            if value.get("generation") == "v5"
-            else VERSION,
-            "timeframes": ["1D"]
-            if value.get("generation") in ("v5", "v6")
-            else ["60F", "1D"],
-            "entry_config": (
-                MtfConfig(
-                    fresh_reversal=value.get("generation") == "v6",
-                    reversal_cycle_reset=value.get("generation") == "v6",
-                )
-                if value.get("generation") in ("v5", "v6")
-                else TrendConfig()
-            ).__dict__,
-            "trend_timeframe": "60F"
-            if value.get("generation") in ("v5", "v6")
-            else None,
-        }
-        for key, value in STRATEGIES.items()
-    ]
+    result = []
+    for key, value in STRATEGIES.items():
+        gen = value.get("generation")
+        mtf = gen in ("v5", "v6", "v7")
+        cfg = (
+            MtfConfig(
+                fresh_reversal=gen in ("v6", "v7"),
+                reversal_cycle_reset=gen in ("v6", "v7"),
+                risk_setups=gen == "v7",
+            )
+            if mtf
+            else TrendConfig()
+        )
+        result.append(
+            {
+                **value,
+                "id": key,
+                "version": version_for(cfg) if mtf else VERSION,
+                "timeframes": ["1D"] if mtf else ["60F", "1D"],
+                "entry_config": cfg.__dict__,
+                "trend_timeframe": "60F" if mtf else None,
+            }
+        )
+    return result

@@ -158,7 +158,7 @@ def run(start, end, periods, workers=2, max_stocks=None):
         }
         for mode in ["fixed_snapshot", "observed_only"]:
             for strategy_id in STRATEGIES:
-                if STRATEGIES[strategy_id].get("generation") in ("v5", "v6"):
+                if STRATEGIES[strategy_id].get("generation") in ("v5", "v6", "v7"):
                     continue  # v5 needs both timeframes; use jobs.backtest_mtf.
                 result = simulate(series, timeline, strategy_id, timeframe, mode)
                 result.update(

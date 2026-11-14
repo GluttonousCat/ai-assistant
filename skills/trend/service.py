@@ -13,7 +13,12 @@ from skills.trend.strategy import TrendConfig, evaluated_bars
 
 
 def dashboard(run_id=None, include_rows=True):
-    return load_dashboard(run_id, include_rows)
+    snapshot = load_dashboard(run_id, include_rows)
+    if snapshot and run_id is None:
+        from skills.trend.mtf import DUAL_VERSION
+
+        snapshot = {**snapshot, "latest_rules_version": DUAL_VERSION}
+    return snapshot
 
 
 def stock_detail(
