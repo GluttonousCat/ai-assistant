@@ -26,13 +26,14 @@ core/        基础设施 (引擎与各层共用的地基, 不含业务):
              config(.env+yaml)/logger(按顶层包分桶)/security(JWT+bcrypt)/
              lifespan(调度器启停)/net/helpers·paths
 skills/      领域技能 (每技能一目录, 专业知识放 prompt):
-             quant(v9结构持有structure_exit/固定入场退出对照；v8主板60F参数研究/close_only盘后触发次日执行/分段离场reversal_exit,先收复M21才判失守/策略注册/资金回测/研究报告; 见 docs/agents/quant_backtesting.md) /
+             quant(v10 tranches/tranche_engine/tranche_prepare:442/532分批、逐批T+1/FIFO、完整周期胜率及部分已实现盈亏；v9结构持有/固定对照；v8参数研究/盘后触发次日执行; 见 docs/agents/quant_backtesting.md) /
              trend(structure.py新增V9有序推进/缩量回撤/测试反转；swing.py保留V8底背离/回调；均无日K形态门槛，日K仅执行；V7及更早快照冻结兼容; M8/M13/M21; 见 docs/frontend/stock_dashboard.md) /
              fin_query(Text-to-SQL) / report(研报) / scanned_report(OCR) /
              beta_alpha(产业链Beta+个股Alpha: chains种子链/analysis/tests) /
              content(内容资产管线: 画像/公众号文章/PPT/年报解读) /
              research(研究生产线: 证据→十章草稿→成稿, 任务分派见 docs/research/tasks/)
 jobs/        sync_remaining_market(沪深三板非ST剩余60F+原生日K/真实因子补齐,独立上市名单快照) / backtest_reversal(原池v6固定退出对照) /
+             research_tranches(442/532固定资金方案，冻结v8/v9信号，单买单卖/仅买/仅卖/双向对照，不自动设默认) /
              research_ordered_60f(v9有序结构/结构持有7组固定对照，未通过验证；rejected不自动成为量化默认，无参数搜索或全年赢家选择) /
              cache_mainboard_minutes(显式离线同源分钟缓存，不改库) / research_mainboard_60f(首轮36组) / research_mainboard_regime(次轮24组60F广度/恢复过滤，盘后与预挂条件单分开；两轮60组仅开发段选参，均未达5%目标，不作交易推荐) /
              sync_intraday(2026年60F入库/五指数成分并集/断点续传) / check_boundaries(分层检查) /

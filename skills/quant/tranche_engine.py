@@ -1,0 +1,485 @@
+"""Opt-in daily staged execution; legacy engine/results are untouched.
+
+Buy confirmations and profit thresholds use completed bars only. All orders
+execute next session. Hard exits override percentage plans. One closed campaign
+is one trade; each cash fill is retained separately inside that campaign.
+"""
+
+from collections import Counter, defaultdict
+from dataclasses import asdict
+
+import numpy as np
+import pandas as pd
+
+from skills.quant.metrics import summarize
+from skills.quant.registry import STRATEGIES
+from skills.quant.tranches import TrancheConfig, Inventory
+
+VERSION = "tranche-campaign-next-open-v1"
+
+
+def simulate(series, timeline, strategy_id, cfg=TrancheConfig()):
+    base = cfg.base
+    clock = pd.DatetimeIndex(timeline)
+    if clock.empty or not clock.is_monotonic_increasing or clock.has_duplicates:
+        raise ValueError("交易日历不合法")
+    if clock.normalize().has_duplicates:
+        raise ValueError("分批模型每交易日一根原生日K")
+    if strategy_id not in STRATEGIES:
+        raise ValueError("未知策略")
+    stocks = {s.code: s for s in series}
+    if len(stocks) != len(series):
+        raise ValueError("重复股票")
+    orders = defaultdict(list)
+    audit = Counter()
+    family = STRATEGIES[strategy_id]["family"]
+    for s in series:
+        for k in ["open", "high", "low", "close"]:
+            if not np.allclose(
+                s.data[k] * s.data["scale"],
+                s.data["adjusted_" + k],
+                rtol=1e-10,
+                atol=1e-8,
+            ):
+                raise ValueError("原始价/复权价不一致")
+        if not {"scale_in_ready", "tranche_trend_failed"}.issubset(s.data):
+            raise ValueError("缺少完成60F的增仓/离场证据")
+        mapping = clock.get_indexer(s.times)
+        if (mapping < 0).any():
+            raise ValueError("行情不在交易日历内")
+        s.row_at = np.full(len(clock), -1, dtype=int)
+        s.row_at[mapping] = np.arange(len(mapping))
+        for sig in s.signals:
+            if (family and sig["family"] != family) or (
+                family is None and not sig["preferred"]
+            ):
+                continue
+            i = sig["i"]
+            audit["signals"] += 1
+            if i + 1 < len(mapping) and mapping[i + 1] == mapping[i] + 1:
+                orders[int(mapping[i + 1])].append((s.code, sig))
+            else:
+                audit["no_next_bar"] += 1
+    cash = base.initial_cash
+    fees = 0.0
+    positions = {}
+    closed = []
+    equity = []
+    consumed = set()
+
+    def cost_floor(p):
+        inv = p["inventory"]
+        return (inv.cost + base.fee(inv.cost, True)) / inv.units / (1 - base.slippage)
+
+    def record_close(code, p, when, raw_exit):
+        inv = p["inventory"]
+        pnl = inv.realized
+        risk = p["initial_risk"]
+        entry = p["first_price"]
+        t = dict(
+            ts_code=code,
+            name=stocks[code].name,
+            family=p["family"],
+            signal_time=p["signal_time"],
+            entry_time=p["entry_time"],
+            exit_time=when.isoformat(),
+            entry_price=p["first_raw"],
+            exit_price=raw_exit,
+            initial_shares=p["initial_shares"],
+            entry_notional=p["buy_notional"],
+            exit_notional=p["sell_notional"],
+            fees=p["fees"],
+            pnl=pnl,
+            return_pct=pnl / inv.bought_cost * 100,
+            reason=p["last_reason"],
+            leg=p["leg"],
+            initial_stop=p["initial_stop"],
+            exit_stop=p["stop"],
+            mfe_r=max(0, (p["peak"] - entry) / risk),
+            mae_r=min(0, (p["trough"] - entry) / risk),
+            buy_legs=p["buy_stage"],
+            sell_legs=sum(f["side"] == "sell" for f in p["fills"]),
+            fills=p["fills"],
+            excursion_basis="first_fill_price",
+            entry_evidence=p.get("evidence"),
+        )
+        closed.append(t)
+
+    def sell(code, p, i, day, when):
+        nonlocal cash, fees
+        s = stocks[code]
+        d = s.data
+        inv = p["inventory"]
+        pending = p["pending_sell"]
+        if (
+            i < 0
+            or d["volume"][i] <= 0
+            or not np.isfinite(d["down_limit"][i])
+            or d["down_limit"][i] <= 0
+        ):
+            audit["exit_missing_limit_or_bar"] += 1
+            return
+        raw = d["open"][i]
+        if (
+            raw <= d["down_limit"][i] + 1e-8
+            or raw * (1 - base.slippage) < d["down_limit"][i] - 1e-8
+        ):
+            audit["exit_limit_down_deferred"] += 1
+            return
+        if raw * d["scale"][i] <= p["stop"] and not pending["all"]:
+            pending = dict(
+                all=True,
+                reason="protected_stop"
+                if p["stop"] > p["initial_stop"]
+                else "stop_loss",
+            )
+            p["pending_sell"] = pending
+        available = inv.available(day)
+        all_exit = pending["all"]
+        desired = (
+            inv.units if all_exit else max(0, pending["target_sold"] - p["sold_units"])
+        )
+        units = min(available, desired)
+        scale = d["scale"][i]
+        if all_exit and available >= inv.units - 1e-8:
+            units = inv.units  # Full disposal includes economic odd-lot remainder.
+        else:
+            units = np.floor((units * scale + 1e-8) / 100) * 100 / scale
+        if units <= 1e-10:
+            if desired * scale < 100 and not all_exit:
+                audit["partial_exit_below_lot_skipped"] += 1
+                p["exit_stage"] += 1
+                p["pending_sell"] = None
+            else:
+                audit["t1_exit_deferred"] += 1
+            return
+        price = raw * (1 - base.slippage) * scale
+        p["peak"] = max(p["peak"], raw * scale)
+        p["trough"] = min(p["trough"], raw * scale)
+        value = units * price
+        fee = base.fee(value, True)
+        realized = inv.sell(units, value - fee, day)
+        cash += value - fee
+        fees += fee
+        p["fees"] += fee
+        p["sell_notional"] += value
+        p["sold_units"] += units
+        p["last_reason"] = pending["reason"]
+        p["fills"].append(
+            dict(
+                side="sell",
+                time=when.isoformat(),
+                quantity=units * scale,
+                price=raw * (1 - base.slippage),
+                notional=value,
+                fee=fee,
+                pnl=realized,
+                reason=pending["reason"],
+            )
+        )
+        audit["sell_fills"] += 1
+        if inv.units <= 1e-8:
+            record_close(code, p, when, raw * (1 - base.slippage))
+            del positions[code]
+        elif (
+            not all_exit
+            and pending["target_sold"] - p["sold_units"] < 100 / scale + 1e-8
+        ):
+            p["exit_stage"] += 1
+            p["pending_sell"] = None
+
+    def buy(code, p, i, day, when, marked, stage):
+        nonlocal cash, fees
+        d = stocks[code].data
+        inv = p["inventory"]
+        if (
+            i < 1
+            or d["volume"][i] <= 0
+            or not all(
+                np.isfinite(d[k][i]) and d[k][i] > 0 for k in ["up_limit", "down_limit"]
+            )
+        ):
+            audit["entry_missing_limit_or_bar"] += 1
+            return False
+        raw = d["open"][i] * (1 + base.slippage)
+        scale = d["scale"][i]
+        fill = raw * scale
+        if raw >= d["up_limit"][i] - 1e-8:
+            audit["entry_limit_up_rejected"] += 1
+            return False
+        risk = (fill - p["stop"]) / fill * 100
+        if not 0 < risk <= base.max_entry_risk_pct:
+            audit["gap_or_risk_rejected"] += 1
+            return False
+        if stage and fill <= p["highest_buy_price"] + 1e-10:
+            audit["averaging_down_rejected"] += 1
+            return False
+        if stage == 0:
+            p["plan_budget"] = min(
+                marked * base.position_weight, marked * base.risk_budget_pct / risk
+            )
+            p["risk_limit"] = marked * base.risk_budget_pct / 100
+        cap = max(0, marked * base.position_weight - inv.units * fill)
+        budget = min(cash, p["plan_budget"] * cfg.entry_weights[stage], cap)
+        risk_cash = max(0, p["risk_limit"] - inv.risk_at(p["stop"]))
+        risk_per_share = (fill - p["stop"]) / scale
+        quantity = (
+            int(
+                min(
+                    budget / raw,
+                    risk_cash / risk_per_share,
+                    d["volume"][i - 1] * base.participation,
+                )
+                // 100
+            )
+            * 100
+        )
+        while quantity >= 100:
+            value = quantity * raw
+            fee = base.fee(value)
+            if (
+                value + fee <= budget + 1e-8
+                and inv.risk_at(p["stop"]) + value + fee - quantity / scale * p["stop"]
+                <= p["risk_limit"] + 1e-8
+            ):
+                break
+            quantity -= 100
+        if quantity < 100:
+            audit["cash_risk_or_lot_rejected"] += 1
+            return False
+        value = quantity * raw
+        fee = base.fee(value)
+        units = quantity / scale
+        inv.buy(units, value + fee, day)
+        cash -= value + fee
+        fees += fee
+        p["fees"] += fee
+        p["buy_notional"] += value
+        p["highest_buy_price"] = fill
+        p["buy_stage"] = stage + 1
+        p["last_mark"] = fill
+        p["fills"].append(
+            dict(
+                side="buy",
+                time=when.isoformat(),
+                quantity=quantity,
+                price=raw,
+                notional=value,
+                fee=fee,
+                pnl=None,
+                reason="probe" if not stage else "confirmed_add",
+            )
+        )
+        if stage == 0:
+            p.update(
+                first_price=fill,
+                first_raw=raw,
+                initial_risk=fill - p["stop"],
+                initial_shares=quantity,
+                peak=fill,
+                trough=fill,
+                entry_time=when.isoformat(),
+            )
+        audit["buy_fills"] += 1
+        return True
+
+    for step, end in enumerate(clock):
+        day = end.date()
+        when = end.normalize() + pd.Timedelta(hours=9, minutes=30)
+        for code, p in list(positions.items()):
+            if p["pending_sell"] is not None:
+                sell(code, p, int(stocks[code].row_at[step]), day, when)
+        marked = cash + sum(
+            p["inventory"].units
+            * (
+                stocks[c].data["adjusted_open"][int(stocks[c].row_at[step])]
+                if stocks[c].row_at[step] >= 0
+                else p["last_mark"]
+            )
+            for c, p in positions.items()
+        )
+        # Existing confirmed additions precede newly initiated probes.
+        for code, p in list(positions.items()):
+            if p["pending_add"] is not None and not p["entry_locked"]:
+                i = int(stocks[code].row_at[step])
+                if i >= 0:
+                    buy(code, p, i, day, when, marked, p["pending_add"])
+                p["pending_add"] = None
+        for code, sig in sorted(
+            orders.get(step, []), key=lambda x: (-x[1]["score"], x[0])
+        ):
+            key = (code, sig["family"], sig["leg"])
+            if code in positions or key in consumed:
+                continue
+            if len(positions) >= base.max_positions:
+                audit["capacity_rejected"] += 1
+                continue
+            s = stocks[code]
+            i = int(s.row_at[step])
+            p = dict(
+                inventory=Inventory(),
+                family=sig["family"],
+                leg=sig["leg"],
+                signal_time=s.times[sig["i"]].isoformat(),
+                entry_step=step,
+                stop=sig["stop"],
+                initial_stop=sig["stop"],
+                plan_budget=0,
+                risk_limit=0,
+                fees=0.0,
+                buy_notional=0.0,
+                sell_notional=0.0,
+                highest_buy_price=0.0,
+                buy_stage=0,
+                exit_stage=0,
+                exit_base=None,
+                sold_units=0.0,
+                entry_locked=False,
+                pending_add=None,
+                pending_sell=None,
+                fills=[],
+                line_reclaimed=False,
+                evidence=sig.get("evidence"),
+            )
+            if buy(code, p, i, day, when, marked, 0):
+                positions[code] = p
+                consumed.add(key)
+                audit["campaigns_started"] += 1
+        for code, p in positions.items():
+            s = stocks[code]
+            i = int(s.row_at[step])
+            d = s.data
+            if i < 0:
+                continue
+            close = d["adjusted_close"][i]
+            eps = 1e-8 * d["atr"][i] if np.isfinite(d["atr"][i]) else 1e-10 * close
+            p["last_mark"] = close
+            p["last_seen"] = end.isoformat()
+            p["peak"] = max(p["peak"], d["adjusted_high"][i])
+            p["trough"] = min(p["trough"], d["adjusted_low"][i])
+            inv = p["inventory"]
+            held = step - p["entry_step"] + 1
+            line = d["trail_a" if p["family"] == "trend_pullback" else "trail_b"][i]
+            if np.isfinite(line) and close >= line:
+                p["line_reclaimed"] = True
+            hard_reason = None
+            if close <= p["stop"]:
+                hard_reason = (
+                    "protected_stop" if p["stop"] > p["initial_stop"] else "stop_loss"
+                )
+            elif held >= base.max_holding_bars:
+                hard_reason = "holding_timeout"
+            elif (
+                base.trend_exit
+                and p["line_reclaimed"]
+                and held >= base.min_trend_holding_bars
+                and d["tranche_trend_failed"][i]
+            ):
+                hard_reason = "structure_failed"
+            elif (
+                p["family"] == "base_rebound"
+                and held >= base.rebound_patience
+                and p["peak"] - p["first_price"]
+                < base.rebound_min_progress_r * p["initial_risk"]
+                and close < p["first_price"]
+            ):
+                hard_reason = "rebound_failed"
+            if hard_reason:
+                p["entry_locked"] = True
+                p["pending_add"] = None
+                p["pending_sell"] = dict(all=True, reason=hard_reason)
+                continue
+            if p["pending_sell"] is not None:
+                continue
+            anchor = (
+                p["profit_anchor"]
+                if p["exit_base"] is not None
+                else inv.cost / inv.units
+            )
+            if (
+                p["exit_stage"] < len(cfg.exit_weights) - 1
+                and (close / anchor - 1) * 100 + 1e-8
+                >= cfg.take_profit_pct[p["exit_stage"]]
+            ):
+                if p["exit_base"] is None:
+                    p["exit_base"] = inv.units
+                    p["profit_anchor"] = anchor
+                p["entry_locked"] = True
+                p["pending_add"] = None
+                p["pending_sell"] = dict(
+                    all=False,
+                    target_sold=p["exit_base"]
+                    * sum(cfg.exit_weights[: p["exit_stage"] + 1]),
+                    reason=f"tranche_profit_{p['exit_stage'] + 1}",
+                )
+            elif (
+                not p["entry_locked"]
+                and p["buy_stage"] < len(cfg.entry_weights)
+                and d["scale_in_ready"][i]
+                and close > p["highest_buy_price"] + eps
+                and close - p["first_price"] + eps
+                >= cfg.add_at_r[p["buy_stage"] - 1] * p["initial_risk"]
+            ):
+                p["pending_add"] = p["buy_stage"]
+            if (close / anchor - 1) * 100 >= cfg.protect_at_pct:
+                atr = d["atr"][i]
+                if np.isfinite(atr) and atr > 0:
+                    candidate = cost_floor(p)
+                    if np.isfinite(line):
+                        candidate = max(candidate, line - 0.5 * atr)
+                    p["stop"] = max(p["stop"], min(candidate, close - 0.1 * atr))
+        nav = cash + sum(
+            p["inventory"].units * p["last_mark"] for p in positions.values()
+        )
+        if cash < -1e-6:
+            raise AssertionError("分批账户出现负现金")
+        equity.append(
+            dict(
+                date=day.isoformat(),
+                equity=nav,
+                cash=cash,
+                positions=len(positions),
+                exposure=(nav - cash) / nav if nav else 0,
+            )
+        )
+    opened = [
+        dict(
+            ts_code=c,
+            name=stocks[c].name,
+            family=p["family"],
+            entry_time=p["entry_time"],
+            signal_time=p["signal_time"],
+            entry_notional=p["buy_notional"],
+            market_value=p["inventory"].units * p["last_mark"],
+            unrealized_pnl=p["inventory"].units * p["last_mark"] - p["inventory"].cost,
+            partial_realized_pnl=p["inventory"].realized,
+            last_quote=p["last_seen"],
+            pending_exit=p["pending_sell"]["reason"] if p["pending_sell"] else None,
+            buy_legs=p["buy_stage"],
+            sell_legs=sum(f["side"] == "sell" for f in p["fills"]),
+            fills=p["fills"],
+        )
+        for c, p in positions.items()
+    ]
+    metrics = summarize(equity, closed, base.initial_cash, len(opened))
+    metrics.update(
+        total_fees=fees,
+        realized_pnl=sum(t["pnl"] for t in closed)
+        + sum(p["partial_realized_pnl"] for p in opened),
+        buy_fills=audit["buy_fills"],
+        sell_fills=audit["sell_fills"],
+    )
+    config = {
+        **asdict(base),
+        **{k: v for k, v in asdict(cfg).items() if k != "base"},
+        "exit_policy": "tranches",
+    }
+    return dict(
+        execution_version=VERSION,
+        config=config,
+        metrics=metrics,
+        equity=equity,
+        trades=closed,
+        open_positions=opened,
+        execution_audit=dict(audit),
+    )

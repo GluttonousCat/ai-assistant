@@ -41,3 +41,7 @@
 .quant-page button:focus-visible, .quant-page summary:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 3px; }
 @media (max-width: 1000px) { .quant-page { padding: 24px 20px; }.quant-strategies { grid-template-columns: 1fr; }.quant-cards { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 600px) { .quant-page { padding: 20px 12px; }.quant-cards strong { font-size: 21px; }.quant-panel, .quant-results { padding: 14px; }.quant-header { align-items: flex-start; } }
+
+.quant-tranche-fills { max-width: 520px; margin-top: 8px; }
+.quant-tranche-fills .quant-scroll { max-height: 250px; overflow: auto; }
+.quant-tranche-fills summary { cursor: pointer; color: var(--text-dim); }

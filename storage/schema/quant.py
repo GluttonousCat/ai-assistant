@@ -6,6 +6,13 @@ from storage.schema.connection import ddl_cursor
 def ensure_quant_schema():
     with ddl_cursor() as cur:
         cur.execute("SET lock_timeout='5s'")
+        # CREATE INDEX IF NOT EXISTS still acquires locks on an existing table.
+        # Avoid colliding with active report publication when nothing is missing.
+        cur.execute("""SELECT to_regclass('stock.daily_price_limit'),
+            to_regclass('stock.backtest_run'),to_regclass('stock.backtest_trade'),
+            to_regclass('stock.backtest_run_created_idx')""")
+        if all(cur.fetchone()):
+            return
         cur.execute("""
             CREATE TABLE IF NOT EXISTS stock.daily_price_limit (
                 ts_code VARCHAR(16) NOT NULL,

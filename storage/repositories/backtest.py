@@ -98,7 +98,10 @@ def observed_dates(codes, end):
     return {r["ts_code"]: r["observed_at"] for r in rows}
 
 
-def publish(result):
+def publish(result, trade_page_size=500):
+    """Publish atomically; allow smaller transport batches for nested fill data."""
+    if type(trade_page_size) is not int or not 1 <= trade_page_size <= 500:
+        raise ValueError("trade_page_size must be 1..500")
     payload = {k: v for k, v in result.items() if k != "trades"}
     with PgClient() as pg:
         pg.execute(
@@ -122,7 +125,7 @@ def publish(result):
                     (result["run_id"], i + 1, Json(t))
                     for i, t in enumerate(result["trades"])
                 ],
-                page_size=500,
+                page_size=trade_page_size,
             )
 
 
