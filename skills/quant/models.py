@@ -70,7 +70,7 @@ class BacktestConfig:
             or self.slippage >= 0.1
         ):
             raise ValueError("持仓/退出参数不合法")
-        if self.exit_policy not in ("legacy", "protected", "reversal"):
+        if self.exit_policy not in ("legacy", "protected", "reversal", "structure"):
             raise ValueError("未知退出策略")
         if (
             not 0 <= self.risk_budget_pct <= 5
@@ -96,3 +96,23 @@ class BacktestConfig:
         return max(
             self.minimum_commission, notional * self.commission_rate
         ) + notional * (self.transfer_fee + (self.stamp_tax if selling else 0))
+
+
+@dataclass(frozen=True)
+class StructureExitConfig(BacktestConfig):
+    exit_policy: str = "structure"
+    protect_after_r: float = 1.5
+    protect_after_pct: float = 3
+    support_buffer_atr: float = 0.25
+    max_holding_bars: int = 40
+    close_only: bool = True
+
+    def __post_init__(self):
+        super().__post_init__()
+        if self.exit_policy != "structure" or not self.close_only:
+            raise ValueError("结构持有退出仅支持盘后检查、次日执行")
+        if any(
+            not math.isfinite(v) or v <= 0
+            for v in (self.protect_after_pct, self.support_buffer_atr)
+        ):
+            raise ValueError("结构保护阈值不合法")

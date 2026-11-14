@@ -206,3 +206,45 @@ def prepare_swing(minute, frozen, cfg=None, evaluated=None):
     return MarketSeries(
         frozen.code, frozen.name, frozen.observed_at, frozen.times.copy(), data, signals
     ), None
+
+
+def prepare_structure(minute, frozen, cfg=None):
+    """Versioned ordered setups plus causal 60F support for carry exits."""
+    from skills.trend.swing import indicators
+    from skills.trend.structure import StructureConfig, setups
+
+    cfg = cfg or StructureConfig()
+    m, issue = swing_frame(minute, frozen)
+    if issue:
+        return None, issue
+    evaluated = setups(indicators(m), cfg)
+    stock, issue = prepare_swing(minute, frozen, cfg, evaluated=evaluated)
+    if issue:
+        return None, issue
+    closing = evaluated[
+        evaluated.bar_end.dt.hour.eq(15) & evaluated.bar_end.dt.minute.eq(0)
+    ].set_index("bar_end")
+    aligned = closing.reindex(stock.times)
+    stock.data["structural_support"] = aligned.support.to_numpy(dtype=float, copy=True)
+    stock.data["support_origin"] = pd.DatetimeIndex(aligned.support_origin).asi8.copy()
+    stock.data["structure_failed"] = aligned.structure_failed.fillna(False).to_numpy(
+        dtype=bool
+    )
+    valid = aligned.structure_valid.fillna(False).to_numpy(dtype=bool)
+    stock.signals = [s for s in stock.signals if valid[s["i"]]]
+    evidence = evaluated.set_index("bar_end")
+    for sig in stock.signals:
+        row = evidence.loc[pd.Timestamp(sig["leg"])]
+        sig["evidence"] = dict(
+            impulse_start=row.impulse_start.isoformat()
+            if pd.notna(row.impulse_start)
+            else None,
+            impulse_peak=row.impulse_peak.isoformat()
+            if pd.notna(row.impulse_peak)
+            else None,
+            pullback_round=int(row.pullback_round),
+            source="ordered-60f"
+            if sig["family"] == "trend_pullback"
+            else "tested-divergence-60f",
+        )
+    return stock, None

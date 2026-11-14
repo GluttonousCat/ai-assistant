@@ -3,6 +3,24 @@
 from skills.trend.strategy import VERSION, TrendConfig
 
 STRATEGIES = {
+    "swing_structure_v9": {
+        "name": "60F结构趋势·反转与回调",
+        "family": None,
+        "generation": "v9",
+        "description": "按时间验证启动、推进、缩量回撤和再转强；底部需低点测试。盘后计划、次日执行，无日K形态门槛。固定对照未通过收益与风险验证，限研究。",
+    },
+    "swing_structure_pullback_v9": {
+        "name": "60F结构趋势·上涨回调",
+        "family": "trend_pullback",
+        "generation": "v9",
+        "description": "先有至少5%且4ATR的有序推进，再验证受控缩量回调；首次与后续分开记录。固定对照未通过验证，限研究。",
+    },
+    "swing_structure_reversal_v9": {
+        "name": "60F结构趋势·测试反转",
+        "family": "base_rebound",
+        "generation": "v9",
+        "description": "有反弹间隔的低点测试、DIF改善及测试量能衰减，等待60F重新收复短期结构；固定对照未通过验证，限研究。",
+    },
     "swing_60f_v8": {
         "name": "主板60F·底背离与上涨回调",
         "family": None,
@@ -75,16 +93,24 @@ def catalog():
     result = []
     for key, value in STRATEGIES.items():
         gen = value.get("generation")
-        if gen == "v8":
+        if gen in ("v8", "v9"):
             from skills.trend.swing import SwingConfig, VERSION as SWING_VERSION
+            from skills.trend.structure import (
+                StructureConfig,
+                VERSION as STRUCTURE_VERSION,
+            )
 
             result.append(
                 {
                     **value,
                     "id": key,
-                    "version": SWING_VERSION,
+                    "version": STRUCTURE_VERSION if gen == "v9" else SWING_VERSION,
                     "timeframes": ["1D"],
-                    "entry_config": vars(SwingConfig(family=value["family"] or "both")),
+                    "entry_config": vars(
+                        (StructureConfig if gen == "v9" else SwingConfig)(
+                            family=value["family"] or "both"
+                        )
+                    ),
                     "trend_timeframe": "60F",
                     "execution_schedule": "after_close",
                 }

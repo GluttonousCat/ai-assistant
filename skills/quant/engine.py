@@ -8,7 +8,7 @@ from collections import Counter, defaultdict
 from dataclasses import asdict
 import numpy as np
 import pandas as pd
-from skills.quant.models import BacktestConfig
+from skills.quant.models import BacktestConfig, StructureExitConfig
 from skills.quant.metrics import summarize
 from skills.quant.registry import STRATEGIES
 
@@ -39,6 +39,10 @@ def simulate(
     ):
         raise ValueError("未知策略/成分模式/周期")
     timeline = pd.DatetimeIndex(timeline)
+    if cfg.exit_policy == "structure" and (
+        not isinstance(cfg, StructureExitConfig) or timeframe != "1D"
+    ):
+        raise ValueError("结构持有退出需要StructureExitConfig与日级撮合")
     if cfg.close_only and timeframe != "1D":
         raise ValueError("盘后执行模式使用原生日K撮合与交易日持有期")
     if cfg.exit_policy == "reversal" and timeframe != "1D":
@@ -52,6 +56,12 @@ def simulate(
     family = STRATEGIES[strategy_id]["family"]
     stocks = {s.code: s for s in series}
     for s in series:
+        if cfg.exit_policy == "structure" and not {
+            "structural_support",
+            "support_origin",
+            "structure_failed",
+        }.issubset(s.data):
+            raise ValueError("结构持有退出缺少已确认的60F支撑数据")
         for field in ["open", "high", "low", "close"]:
             if not np.allclose(
                 s.data[field] * s.data["scale"],
@@ -154,6 +164,8 @@ def simulate(
                 ),
             }
         )
+        if p.get("evidence"):
+            trades[-1]["entry_evidence"] = p["evidence"]
         del positions[code]
         return True
 
@@ -178,7 +190,7 @@ def simulate(
                 elif (
                     reason is None
                     and not cfg.close_only
-                    and cfg.exit_policy != "reversal"
+                    and cfg.exit_policy not in ("reversal", "structure")
                     and op >= p["target"]
                 ):
                     reason = "take_profit"
@@ -276,6 +288,7 @@ def simulate(
                 "trough": fill,
                 "failure_count": 0,
                 "line_reclaimed": False,
+                "evidence": sig.get("evidence"),
             }
             consumed.add(key)
             audit["entries"] += 1
@@ -292,7 +305,9 @@ def simulate(
                 d["adjusted_high"][i],
             )
             stop_hit = lo <= p["stop"]
-            target_hit = cfg.exit_policy != "reversal" and hi >= p["target"]
+            target_hit = (
+                cfg.exit_policy not in ("reversal", "structure") and hi >= p["target"]
+            )
             if cfg.close_only:
                 # A close-derived decision is executable next session only,
                 # including a threshold reached on the entry day (T+1).
@@ -305,7 +320,7 @@ def simulate(
                     )
                 elif (
                     not p["pending"]
-                    and cfg.exit_policy != "reversal"
+                    and cfg.exit_policy not in ("reversal", "structure")
                     and close >= p["target"]
                 ):
                     p["pending"] = "take_profit"
@@ -326,7 +341,10 @@ def simulate(
                 when = (
                     start
                     if op <= p["stop"]
-                    or (cfg.exit_policy != "reversal" and op >= p["target"])
+                    or (
+                        cfg.exit_policy not in ("reversal", "structure")
+                        and op >= p["target"]
+                    )
                     else end
                 )
                 if sell(code, i, price, reason, when):
@@ -345,6 +363,27 @@ def simulate(
                     else 0
                 )
                 held = step - p["entry_step"] + 1
+                if cfg.exit_policy == "structure":
+                    from skills.quant.structure_exit import decide
+
+                    cost_floor = (
+                        (p["cost"] + cfg.fee(p["cost"], selling=True))
+                        / p["units"]
+                        / (1 - cfg.slippage)
+                    )
+                    origin = d["support_origin"][i]
+                    p["stop"], p["pending"] = decide(
+                        p,
+                        p["last_mark"],
+                        d["atr"][i],
+                        d["structural_support"][i],
+                        origin >= pd.Timestamp(p["entry_time"]).value,
+                        bool(d["structure_failed"][i]),
+                        held,
+                        cfg,
+                        cost_floor,
+                    )
+                    continue
                 if cfg.exit_policy == "reversal":
                     if np.isfinite(trail) and p["last_mark"] >= trail:
                         p["line_reclaimed"] = True
@@ -426,7 +465,9 @@ def simulate(
     metrics = summarize(equity, trades, cfg.initial_cash, len(positions))
     metrics["total_fees"] = fees
     return {
-        "execution_version": "scheduled-close-next-open-v1"
+        "execution_version": "confirmed-support-close-next-open-v1"
+        if cfg.exit_policy == "structure"
+        else "scheduled-close-next-open-v1"
         if cfg.close_only
         else "reversal-staged-exit-v2"
         if cfg.exit_policy == "reversal"
