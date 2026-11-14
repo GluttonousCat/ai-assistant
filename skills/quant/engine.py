@@ -39,6 +39,8 @@ def simulate(
     ):
         raise ValueError("未知策略/成分模式/周期")
     timeline = pd.DatetimeIndex(timeline)
+    if cfg.close_only and timeframe != "1D":
+        raise ValueError("盘后执行模式使用原生日K撮合与交易日持有期")
     if cfg.exit_policy == "reversal" and timeframe != "1D":
         raise ValueError("反转分段离场使用原生日K，持有期按交易日计算")
     if (
@@ -167,7 +169,7 @@ def simulate(
             if day > p["entry_day"]:
                 op = s.data["adjusted_open"][i]
                 reason = p["pending"]
-                if reason is None and op <= p["stop"]:
+                if reason is None and not cfg.close_only and op <= p["stop"]:
                     reason = (
                         "protected_stop"
                         if p["stop"] > p["initial_stop"]
@@ -175,6 +177,7 @@ def simulate(
                     )
                 elif (
                     reason is None
+                    and not cfg.close_only
                     and cfg.exit_policy != "reversal"
                     and op >= p["target"]
                 ):
@@ -290,7 +293,23 @@ def simulate(
             )
             stop_hit = lo <= p["stop"]
             target_hit = cfg.exit_policy != "reversal" and hi >= p["target"]
-            if day == p["entry_day"]:
+            if cfg.close_only:
+                # A close-derived decision is executable next session only,
+                # including a threshold reached on the entry day (T+1).
+                close = d["adjusted_close"][i]
+                if not p["pending"] and close <= p["stop"]:
+                    p["pending"] = (
+                        "protected_stop"
+                        if p["stop"] > p["initial_stop"]
+                        else "stop_loss"
+                    )
+                elif (
+                    not p["pending"]
+                    and cfg.exit_policy != "reversal"
+                    and close >= p["target"]
+                ):
+                    p["pending"] = "take_profit"
+            elif day == p["entry_day"]:
                 if stop_hit:
                     p["pending"] = "t1_deferred_stop"
                     audit["t1_stop_deferred"] += 1
@@ -407,7 +426,9 @@ def simulate(
     metrics = summarize(equity, trades, cfg.initial_cash, len(positions))
     metrics["total_fees"] = fees
     return {
-        "execution_version": "reversal-staged-exit-v2"
+        "execution_version": "scheduled-close-next-open-v1"
+        if cfg.close_only
+        else "reversal-staged-exit-v2"
         if cfg.exit_policy == "reversal"
         else EXECUTION_VERSION,
         "config": asdict(cfg),

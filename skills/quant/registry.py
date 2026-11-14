@@ -3,6 +3,24 @@
 from skills.trend.strategy import VERSION, TrendConfig
 
 STRATEGIES = {
+    "swing_60f_v8": {
+        "name": "主板60F·底背离与上涨回调",
+        "family": None,
+        "generation": "v8",
+        "description": "60F已确认低点的MACD底背离或上涨回调转强；盘后汇总，次日开盘按风险执行，无日K形态门槛。参数研究不保证5%收益。",
+    },
+    "swing_reversal_v8": {
+        "name": "主板60F·底背离反转",
+        "family": "base_rebound",
+        "generation": "v8",
+        "description": "仅研究已确认的60F低点背离与转强，盘后决策、次日执行，无日K阳线要求。",
+    },
+    "swing_pullback_v8": {
+        "name": "主板60F·上涨回调",
+        "family": "trend_pullback",
+        "generation": "v8",
+        "description": "仅研究60F升势中的受控回调与恢复，盘后决策、次日执行，无日K阳线要求。",
+    },
     "mtf_risk_v7": {
         "name": "60F结构机会·反转与趋势回调",
         "family": None,
@@ -57,6 +75,21 @@ def catalog():
     result = []
     for key, value in STRATEGIES.items():
         gen = value.get("generation")
+        if gen == "v8":
+            from skills.trend.swing import SwingConfig, VERSION as SWING_VERSION
+
+            result.append(
+                {
+                    **value,
+                    "id": key,
+                    "version": SWING_VERSION,
+                    "timeframes": ["1D"],
+                    "entry_config": vars(SwingConfig(family=value["family"] or "both")),
+                    "trend_timeframe": "60F",
+                    "execution_schedule": "after_close",
+                }
+            )
+            continue
         mtf = gen in ("v5", "v6", "v7")
         cfg = (
             MtfConfig(

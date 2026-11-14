@@ -137,3 +137,72 @@ def prepare_mtf(minute, daily, member, cfg=None):
         data,
         signals,
     ), None
+
+
+def swing_frame(minute, frozen):
+    """Validate native minutes and share the frozen daily factor base.
+
+    Factors are keyed by date, never zipped. Minute/daily indicators share the
+    frozen daily factor base, even if their first available dates differ.
+    """
+    m = minute.copy().sort_values("bar_end").reset_index(drop=True)
+    m["bar_end"] = pd.to_datetime(m.bar_end)
+    if m.empty or m.bar_end.duplicated().any():
+        return None, "60F为空或重复"
+    days = frozen.times.normalize()
+    scale = pd.Series(frozen.data["scale"], index=days)
+    m["scale"] = m.bar_end.dt.normalize().map(scale)
+    fields = ["open", "high", "low", "close", "volume", "scale"]
+    m[fields] = m[fields].apply(pd.to_numeric, errors="coerce")
+    if not np.isfinite(m[fields]).all().all() or (m[fields] < 0).any().any():
+        return None, "60F价格/成交/真实复权映射不完整"
+    if (m[["open", "high", "low", "close", "scale"]] <= 0).any().any():
+        return None, "60F非正价格/复权因子"
+    if (
+        (m.high < m[["open", "low", "close"]].max(axis=1))
+        | (m.low > m[["open", "high", "close"]].min(axis=1))
+    ).any():
+        return None, "60F OHLC无效"
+    for key in ["open", "high", "low", "close"]:
+        m[key] *= m.scale
+    return m, None
+
+
+def prepare_swing(minute, frozen, cfg=None, evaluated=None):
+    """60F-only decisions, using frozen daily execution inputs."""
+    from skills.trend.swing import indicators, setups, execution_plans, SwingConfig
+
+    cfg = cfg or SwingConfig()
+    m, issue = swing_frame(minute, frozen)
+    if issue:
+        return None, issue
+    f = evaluated if evaluated is not None else setups(indicators(m), cfg)
+    daily = pd.DataFrame({"bar_end": frozen.times, "amount": frozen.data["amount"]})
+    plans = execution_plans(f, daily, cfg)
+    indexes = frozen.times.get_indexer(pd.DatetimeIndex(plans.bar_end))
+    if (indexes < 0).any():
+        return None, "60F信号缺少对应原生日K"
+    signals = [
+        dict(
+            i=int(i),
+            family=r.pattern,
+            preferred=True,
+            leg=r.signal_60f.isoformat(),
+            count=1,
+            stop=float(r.stop_price),
+            score=float(r.score),
+        )
+        for i, r in zip(indexes, plans.itertuples())
+    ]
+    # join by time, not position: missing native slots never shift a MA.
+    closing = f[f.bar_end.dt.hour.eq(15) & f.bar_end.dt.minute.eq(0)].set_index(
+        "bar_end"
+    )
+    aligned = closing.reindex(frozen.times)
+    data = dict(frozen.data)
+    data["trail_a"] = aligned.ma21.to_numpy(dtype=float, copy=True)
+    data["trail_b"] = data["trail_a"].copy()
+    data["atr"] = aligned.atr.to_numpy(dtype=float, copy=True)
+    return MarketSeries(
+        frozen.code, frozen.name, frozen.observed_at, frozen.times.copy(), data, signals
+    ), None

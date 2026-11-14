@@ -57,7 +57,13 @@ def test_unknown_result_and_invalid_pagination(monkeypatch):
 
 def test_registry_contains_both_opportunities_and_combined_strategy():
     rows = client().get("/api/v1/quant/strategies").json()["data"]
-    assert len(rows) == 8
+    assert len(rows) == 11
+    swing = [r for r in rows if r.get("generation") == "v8"]
+    assert len(swing) == 3
+    assert all(r["execution_schedule"] == "after_close" for r in swing)
+    assert all(
+        r["trend_timeframe"] == "60F" and r["timeframes"] == ["1D"] for r in swing
+    )
     reversal = next(r for r in rows if r["id"] == "mtf_reversal_v6")
     assert reversal["entry_config"]["fresh_reversal"] is True
     assert reversal["entry_config"]["reversal_cycle_reset"] is True

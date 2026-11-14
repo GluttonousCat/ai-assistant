@@ -28,8 +28,13 @@ class BacktestConfig:
     rebound_patience: int = 5
     rebound_min_progress_r: float = 0.5
     trail_after_r: float = 2
+    # After-work mode: thresholds are checked at close, exits queue next open.
+    # Intraday extremes never imply a discretionary fill in this mode.
+    close_only: bool = False
 
     def __post_init__(self):
+        if type(self.close_only) is not bool:
+            raise ValueError("close_only必须为布尔值")
         numbers = [
             self.initial_cash,
             self.position_weight,
