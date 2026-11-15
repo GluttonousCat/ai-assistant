@@ -32,7 +32,8 @@ skills/      领域技能 (每技能一目录, 专业知识放 prompt):
              beta_alpha(产业链Beta+个股Alpha: chains种子链/analysis/tests) /
              content(内容资产管线: 画像/公众号文章/PPT/年报解读) /
              research(研究生产线: 证据→十章草稿→成稿, 任务分派见 docs/research/tasks/)
-jobs/        research_market_context(指数环境/分批节奏/相对排序/软退出耐心四轮88组，均未达标；只离线研究，不改默认；market_context与signal_priority在skills/quant) /
+jobs/        research_online_60f(v21每月只训练已结束历史标签/指数相对排序/532入场风险2.5%，2026-01-01—11-12样本内+8.69%/回撤2.76%，双倍滑点+7.14%但压力单股尾损-11.68%；预热持币/当前名单偏差/不改默认；领域online_priority在skills/quant) /
+             research_market_context(指数环境/分批节奏/相对排序/软退出耐心四轮88组，均未达标；只离线研究，不改默认；market_context与signal_priority在skills/quant) /
              sync_remaining_market(沪深三板非ST剩余60F+原生日K/真实因子补齐,独立上市名单快照) / backtest_reversal(原池v6固定退出对照) /
              research_tranches(442/532固定资金方案，冻结v8/v9信号，单买单卖/仅买/仅卖/双向对照，不自动设默认) /
              research_ordered_60f(v9有序结构/结构持有7组固定对照，未通过验证；rejected不自动成为量化默认，无参数搜索或全年赢家选择) /

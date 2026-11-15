@@ -17,6 +17,12 @@ const marketNames = {
 }
 
 export function marketResearchLabel(run) {
+  if (run.diagnostics?.research_kind === 'online_market') {
+    const variant = run.diagnostics.research_variant || ''
+    const match = variant.match(/^risk([\d.]+)_(442|532)_protect([\d.]+)/)
+    return (match ? `相对强弱学习 · 风险${match[1]}% · ${match[2]} · ${match[3]}%保护` : '旧3%风险对照')
+      + (variant.endsWith('__cost_stress') ? ' · 双倍滑点' : '')
+  }
   if (!run.diagnostics?.research_kind?.startsWith('market_')) return null
   const variant = run.diagnostics.research_variant || ''
   const name = variant.replace(/__cost_stress$/, '')
