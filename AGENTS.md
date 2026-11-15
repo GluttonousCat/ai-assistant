@@ -2,7 +2,7 @@
 
 > 本文件是给 AI Agent（及新成员）的**项目第一入口**。读完本文件即可建立全局认知，
 > 再按需深入 `docs/` 对应模块文档。人类同事请从 [docs/README.md](docs/README.md) 进。
-> 更新：2026-11-14
+> 更新：2026-11-15
 
 ## 1. 项目是什么
 
@@ -32,7 +32,8 @@ skills/      领域技能 (每技能一目录, 专业知识放 prompt):
              beta_alpha(产业链Beta+个股Alpha: chains种子链/analysis/tests) /
              content(内容资产管线: 画像/公众号文章/PPT/年报解读) /
              research(研究生产线: 证据→十章草稿→成稿, 任务分派见 docs/research/tasks/)
-jobs/        sync_remaining_market(沪深三板非ST剩余60F+原生日K/真实因子补齐,独立上市名单快照) / backtest_reversal(原池v6固定退出对照) /
+jobs/        research_market_context(指数环境/分批节奏/相对排序/软退出耐心四轮88组，均未达标；只离线研究，不改默认；market_context与signal_priority在skills/quant) /
+             sync_remaining_market(沪深三板非ST剩余60F+原生日K/真实因子补齐,独立上市名单快照) / backtest_reversal(原池v6固定退出对照) /
              research_tranches(442/532固定资金方案，冻结v8/v9信号，单买单卖/仅买/仅卖/双向对照，不自动设默认) /
              research_ordered_60f(v9有序结构/结构持有7组固定对照，未通过验证；rejected不自动成为量化默认，无参数搜索或全年赢家选择) /
              cache_mainboard_minutes(显式离线同源分钟缓存，不改库) / research_mainboard_60f(首轮36组) / research_mainboard_regime(次轮24组60F广度/恢复过滤，盘后与预挂条件单分开；两轮60组仅开发段选参，均未达5%目标，不作交易推荐) /

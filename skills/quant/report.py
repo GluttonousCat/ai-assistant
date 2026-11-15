@@ -2,7 +2,35 @@
 
 import csv
 import json
+import math
 from pathlib import Path
+
+
+def with_benchmarks(result, reference):
+    """Attach date-keyed price indices without modifying strategy performance.
+
+    Normalize at the first portfolio valuation of each window. Missing or
+    invalid observations are errors, never forward-filled.
+    """
+    rows = {p["date"]: p["benchmarks"] for p in reference}
+    dates = [p["date"] for p in result["equity"]]
+    if not dates:
+        raise ValueError("净值为空，无法对齐基准")
+    codes = ("000300.SH", "000852.SH")
+    for day in dates:
+        if day not in rows or any(
+            code not in rows[day]
+            or not math.isfinite(rows[day][code])
+            or rows[day][code] <= 0
+            for code in codes
+        ):
+            raise ValueError("基准日期缺失或数值无效")
+    base = rows[dates[0]]
+    equity = [
+        {**p, "benchmarks": {c: rows[p["date"]][c] / base[c] for c in codes}}
+        for p in result["equity"]
+    ]
+    return {**result, "equity": equity}
 
 
 def write_result(folder, result):

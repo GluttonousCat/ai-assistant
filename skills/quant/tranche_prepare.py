@@ -1,7 +1,47 @@
 """Causal completed-60F confirmation arrays for the staged execution model."""
 
+import numpy as np
+import pandas as pd
+
 from skills.quant.prepare import MarketSeries, swing_frame
 from skills.trend.swing import indicators
+
+
+def confirm_signal_close(minute, stock):
+    """Annotate whether each native 60F trigger held its close through 15:00.
+
+    Compare adjusted prices by timestamp. This introduces no daily-candle shape
+    predicate and cannot revive an expired or missing intraday signal.
+    """
+    frame, issue = swing_frame(minute, stock)
+    if issue:
+        raise ValueError(issue)
+    prices = frame.set_index("bar_end").close
+    signals = []
+    for original in stock.signals:
+        signal = dict(original)
+        i = signal["i"]
+        trigger = pd.Timestamp(signal["leg"])
+        end = stock.times[i]
+        initial = prices.get(trigger, float("nan"))
+        close = prices.get(end, float("nan"))
+        eps = 1e-8 * stock.data["atr"][i]
+        signal["close_held"] = bool(
+            trigger.normalize() == end.normalize()
+            and trigger <= end
+            and np.isfinite(initial)
+            and np.isfinite(close)
+            and close >= initial - eps
+        )
+        signals.append(signal)
+    return MarketSeries(
+        stock.code,
+        stock.name,
+        stock.observed_at,
+        stock.times.copy(),
+        dict(stock.data),
+        signals,
+    )
 
 
 def attach_confirmations(minute, stock):

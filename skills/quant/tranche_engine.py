@@ -14,11 +14,12 @@ import pandas as pd
 from skills.quant.metrics import summarize
 from skills.quant.registry import STRATEGIES
 from skills.quant.tranches import TrancheConfig, Inventory
+from skills.quant.market_context import MarketPolicy
 
 VERSION = "tranche-campaign-next-open-v1"
 
 
-def simulate(series, timeline, strategy_id, cfg=TrancheConfig()):
+def simulate(series, timeline, strategy_id, cfg=TrancheConfig(), market_policy=None):
     base = cfg.base
     clock = pd.DatetimeIndex(timeline)
     if clock.empty or not clock.is_monotonic_increasing or clock.has_duplicates:
@@ -28,6 +29,8 @@ def simulate(series, timeline, strategy_id, cfg=TrancheConfig()):
     if strategy_id not in STRATEGIES:
         raise ValueError("未知策略")
     stocks = {s.code: s for s in series}
+    if market_policy is not None and not isinstance(market_policy, MarketPolicy):
+        raise ValueError("指数策略需要MarketPolicy")
     if len(stocks) != len(series):
         raise ValueError("重复股票")
     orders = defaultdict(list)
@@ -44,6 +47,16 @@ def simulate(series, timeline, strategy_id, cfg=TrancheConfig()):
                 raise ValueError("原始价/复权价不一致")
         if not {"scale_in_ready", "tranche_trend_failed"}.issubset(s.data):
             raise ValueError("缺少完成60F的增仓/离场证据")
+        if market_policy is not None and not {
+            "market_entry_allowed",
+            "market_add_allowed",
+            "market_context_valid",
+            "market_systemic_weak",
+            "market_resilient",
+            "market_beta",
+            "market_excess_pct",
+        }.issubset(s.data):
+            raise ValueError("缺少完整指数状态")
         mapping = clock.get_indexer(s.times)
         if (mapping < 0).any():
             raise ValueError("行情不在交易日历内")
@@ -56,6 +69,9 @@ def simulate(series, timeline, strategy_id, cfg=TrancheConfig()):
                 continue
             i = sig["i"]
             audit["signals"] += 1
+            if market_policy is not None and not s.data["market_entry_allowed"][i]:
+                audit["market_entry_rejected"] += 1
+                continue
             if i + 1 < len(mapping) and mapping[i + 1] == mapping[i] + 1:
                 orders[int(mapping[i + 1])].append((s.code, sig))
             else:
@@ -104,6 +120,9 @@ def simulate(series, timeline, strategy_id, cfg=TrancheConfig()):
             entry_evidence=p.get("evidence"),
         )
         closed.append(t)
+        if market_policy is not None:
+            t["market_at_entry"] = p["market_at_entry"]
+            t["market_grace_used"] = p["market_grace_used"]
 
     def sell(code, p, i, day, when):
         nonlocal cash, fees
@@ -341,6 +360,19 @@ def simulate(series, timeline, strategy_id, cfg=TrancheConfig()):
                 line_reclaimed=False,
                 evidence=sig.get("evidence"),
             )
+            if market_policy is not None:
+                signal_i = sig["i"]
+                p["market_grace_used"] = False
+                p["market_at_entry"] = dict(
+                    decision_time=s.times[signal_i].isoformat(),
+                    beta=float(s.data["market_beta"][signal_i])
+                    if np.isfinite(s.data["market_beta"][signal_i])
+                    else None,
+                    excess_pct=float(s.data["market_excess_pct"][signal_i])
+                    if np.isfinite(s.data["market_excess_pct"][signal_i])
+                    else None,
+                    systemic_weak=bool(s.data["market_systemic_weak"][signal_i]),
+                )
             if buy(code, p, i, day, when, marked, 0):
                 positions[code] = p
                 consumed.add(key)
@@ -363,6 +395,7 @@ def simulate(series, timeline, strategy_id, cfg=TrancheConfig()):
             if np.isfinite(line) and close >= line:
                 p["line_reclaimed"] = True
             hard_reason = None
+            grace_now = False
             if close <= p["stop"]:
                 hard_reason = (
                     "protected_stop" if p["stop"] > p["initial_stop"] else "stop_loss"
@@ -384,6 +417,33 @@ def simulate(series, timeline, strategy_id, cfg=TrancheConfig()):
                 and close < p["first_price"]
             ):
                 hard_reason = "rebound_failed"
+            if hard_reason:
+                if (
+                    hard_reason == "structure_failed"
+                    and market_policy is not None
+                    and market_policy.soft_grace_days
+                    and not p["market_grace_used"]
+                    and d["market_context_valid"][i]
+                    and d["market_systemic_weak"][i]
+                    and d["market_resilient"][i]
+                ):
+                    # One observation session per campaign; no repeated excuses
+                    # for a continuing decline. Price stops above always win.
+                    rebound_failed = (
+                        p["family"] == "base_rebound"
+                        and held >= base.rebound_patience
+                        and p["peak"] - p["first_price"]
+                        < base.rebound_min_progress_r * p["initial_risk"]
+                        and close < p["first_price"]
+                    )
+                    if rebound_failed:
+                        hard_reason = "rebound_failed"
+                    else:
+                        hard_reason = None
+                        grace_now = True
+                        p["market_grace_used"] = True
+                        p["pending_add"] = None
+                        audit["systemic_soft_grace"] += 1
             if hard_reason:
                 p["entry_locked"] = True
                 p["pending_add"] = None
@@ -414,8 +474,10 @@ def simulate(series, timeline, strategy_id, cfg=TrancheConfig()):
                 )
             elif (
                 not p["entry_locked"]
+                and not grace_now
                 and p["buy_stage"] < len(cfg.entry_weights)
                 and d["scale_in_ready"][i]
+                and (market_policy is None or d["market_add_allowed"][i])
                 and close > p["highest_buy_price"] + eps
                 and close - p["first_price"] + eps
                 >= cfg.add_at_r[p["buy_stage"] - 1] * p["initial_risk"]
@@ -474,8 +536,16 @@ def simulate(series, timeline, strategy_id, cfg=TrancheConfig()):
         **{k: v for k, v in asdict(cfg).items() if k != "base"},
         "exit_policy": "tranches",
     }
+    if market_policy is not None:
+        config["market_policy"] = asdict(market_policy)
+        metrics["systemic_soft_grace_uses"] = audit["systemic_soft_grace"]
+        for item in opened:
+            item["market_at_entry"] = positions[item["ts_code"]]["market_at_entry"]
+            item["market_grace_used"] = positions[item["ts_code"]]["market_grace_used"]
     return dict(
-        execution_version=VERSION,
+        execution_version="tranche-market-aware-v2"
+        if market_policy is not None
+        else VERSION,
         config=config,
         metrics=metrics,
         equity=equity,
