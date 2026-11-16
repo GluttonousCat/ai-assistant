@@ -1,0 +1,250 @@
+"""Preview or deliver the daily visual trend email from a pinned local snapshot.
+
+Scheduled entry: python -m jobs.send_market_digest --send --wait
+Delivery is never inferred from rendering a preview or from a successful login.
+"""
+from __future__ import annotations
+
+import argparse
+import base64
+from datetime import datetime, time as day_time
+from email import policy
+from email.parser import BytesParser
+from hashlib import sha256
+import json
+import os
+from pathlib import Path
+import smtplib
+import time
+from zoneinfo import ZoneInfo
+
+from core.config import get_config
+from core.local_state import file_lock, read_json, write_json
+from core.logger import get_logger
+from skills.trend.digest import export_csv, render_html, select_stocks, stock_cards
+from tools.market.refresh_clock import expected_date
+from tools.market.refresh_state import read_state as market_state
+from tools.market.trend_data import load_dashboard, scan_cutoffs
+from tools.notifications.email import SmtpSettings, MailNotConfigured, DeliveryUncertain, address, message, send
+
+logger = get_logger(__name__)
+SHANGHAI = ZoneInfo("Asia/Shanghai")
+MAX_MESSAGE_BYTES = 8 * 1024 * 1024
+
+
+def options():
+    cfg = get_config()
+    minimum = float(cfg.env("MARKET_DIGEST_MIN_SCORE", cfg.get("email_digest.min_score", 60)))
+    if not 0 <= minimum <= 100:
+        raise ValueError("邮件评分门槛必须为0~100")
+    observations = str(cfg.env("MARKET_DIGEST_OBSERVATIONS", cfg.get("email_digest.observations", True))).lower() in ("true", "1", "yes")
+    recipient = address(cfg.env("MARKET_DIGEST_TO", ""))
+    return recipient, minimum, observations
+
+
+def _root():
+    root = Path(get_config().root_dir)
+    plot_cache = root / "output" / "tmp" / "matplotlib"
+    plot_cache.mkdir(parents=True, exist_ok=True)
+    os.environ.setdefault("MPLCONFIGDIR", str(plot_cache))
+    return root / "output" / "market" / "email_digest"
+
+
+def _profile(recipient, minimum, observations):
+    return sha256(f"{recipient}|{minimum}|{observations}".encode()).hexdigest()[:16]
+
+
+def ready(snapshot, target, status, bounds):
+    target = target.isoformat()
+    return bool(snapshot and str(snapshot["as_of"])[:10] == target
+                and all(str(snapshot["metadata"].get("timeframes", {}).get(t, {}).get("as_of", ""))[:10] == target
+                        for t in ("1D", "60F"))
+                and status.get("status") == "complete" and status.get("target") == target
+                and status.get("snapshot", {}).get("run_id") == snapshot["run_id"]
+                and all(bounds.get(key) is not None and str(bounds[key])[:10] >= target
+                        for key in ("bar_end", "daily_end", "factor_date")))
+
+
+def _messages(snapshot, cards, report_day, minimum, recipient, sender, *, preview=False, delayed=False, observations=True):
+    groups = [cards[i:i+20] for i in range(0, len(cards), 20)] or [[]]
+    profile = _profile(recipient, minimum, observations)
+    while True:
+        built, too_large = [], None
+        for n, group in enumerate(groups, 1):
+            html = render_html(snapshot, group, report_day, minimum, part=n, total_parts=len(groups),
+                               total_count=len(cards), preview=preview, delayed=delayed)
+            kind = "delay" if delayed else "digest"
+            run = snapshot["run_id"] if snapshot else "none"
+            message_id = f"<afr.{kind}.{report_day}.{profile}.{run}.{n}@{sender.split('@')[1]}>"
+            subject = ("[预览] " if preview else "") + f"Alpha Finance Radar | {report_day} | "
+            subject += "行情更新延迟" if delayed else f"≥{minimum:g}分候选 {len(cards)}只"
+            if len(groups) > 1:
+                subject += f" ({n}/{len(groups)})"
+            text = f"{subject}\n数据截止: {snapshot['as_of'] if snapshot else '暂无'}（上海时间）\n"
+            text += "观察不代表入场，评分不代表胜率。正文包含日K和60F图片。\n"
+            text += "\n".join(f"{c['row']['ts_code']} {c['row']['name']} {c['row']['score']}分 · {c['row']['state']}" for c in group)
+            msg = message(sender, recipient, subject, text, html, {c["cid"]: c["png"] for c in group},
+                          message_id, csv=export_csv([c["row"] for c in group]) if not delayed else None)
+            payload = msg.as_bytes(policy=policy.SMTP)
+            if len(payload) > MAX_MESSAGE_BYTES:
+                if len(group) <= 1:
+                    raise ValueError("单股邮件超过大小上限，未发送")
+                too_large = n-1
+                break
+            built.append((html, payload))
+        if too_large is None:
+            return built, groups
+        group = groups[too_large]
+        split = len(group)//2
+        groups[too_large:too_large+1] = [group[:split], group[split:]]
+
+
+def _prepare(folder, snapshot, cards, report_day, minimum, recipient, sender, preview=False, delayed=False, observations=True):
+    folder.mkdir(parents=True, exist_ok=True)
+    built, groups = _messages(snapshot, cards, report_day, minimum, recipient, sender,
+                              preview=preview, delayed=delayed, observations=observations)
+    files = []
+    for n, ((html, payload), group) in enumerate(zip(built, groups), 1):
+        # Both sequences are produced together by _messages, not independent feeds.
+        browser_html = html
+        for card in group:
+            browser_html = browser_html.replace(f"cid:{card['cid']}", "data:image/png;base64,"+base64.b64encode(card["png"]).decode())
+            (folder / f"{card['cid']}.png").write_bytes(card["png"])
+        (folder / f"part-{n:02d}.html").write_text(browser_html, encoding="utf-8")
+        filename = f"part-{n:02d}.eml"
+        (folder / filename).write_bytes(payload)
+        files.append({"file": filename, "status": "prepared", "message_id": str(BytesParser(policy=policy.default).parsebytes(payload)["Message-ID"])})
+    return files
+
+
+def preview():
+    recipient, minimum, observations = options()
+    snapshot = load_dashboard()
+    if not snapshot:
+        raise ValueError("尚无已发布快照")
+    folder = _root() / "preview" / snapshot["run_id"]
+    rows = select_stocks(snapshot, minimum, observations)
+    cards = stock_cards(snapshot, rows)
+    files = _prepare(folder, snapshot, cards, datetime.now(SHANGHAI).date(), minimum, recipient,
+                     "radar@example.invalid", preview=True, observations=observations)
+    result = {"status": "preview", "sent": False, "count": len(rows), "as_of": snapshot["as_of"],
+              "snapshot_run_id": snapshot["run_id"], "parts": len(files), "html": str(folder / "part-01.html")}
+    write_json(folder / "manifest.json", result)
+    return result
+
+
+def deliver_once(now=None, *, delay_notice=False):
+    now = now or datetime.now(SHANGHAI)
+    now = now.replace(tzinfo=SHANGHAI) if now.tzinfo is None else now.astimezone(SHANGHAI)
+    if now.time().replace(tzinfo=None) < day_time(18):
+        return {"status": "not_due", "next": str(now.date())+" 18:00 Asia/Shanghai"}
+    recipient, minimum, observations = options()
+    try:
+        settings = SmtpSettings.load()
+    except MailNotConfigured as error:
+        return {"status": "blocked", "reason": str(error)}
+    report_day = now.date()
+    target = expected_date(now)
+    profile = _profile(recipient, minimum, observations)
+    root = _root() / str(report_day) / profile
+    with file_lock(root / "delivery.lock") as acquired:
+        if not acquired:
+            return {"status": "busy"}
+        state_path = root / ("delay.json" if delay_notice else "delivery.json")
+        state = read_json(state_path, strict=True)
+        if state.get("status") in ("sent", "uncertain"):
+            return {"status": state["status"], "already_processed": True, "count": state.get("count")}
+        # A crash after SMTP acceptance may leave 'sending'; do not risk a duplicate.
+        if any(p.get("status") == "sending" for p in state.get("parts", [])):
+            state["status"] = "uncertain"
+            write_json(state_path, state)
+            return {"status": "uncertain", "reason": "上次发送确认中断，请核对收件箱；未自动重发"}
+        snapshot = load_dashboard(state.get("snapshot_run_id")) if state.get("parts") else load_dashboard()
+        if not state.get("parts"):
+            complete = target is not None and ready(snapshot, target, market_state(), scan_cutoffs(now.replace(tzinfo=None)))
+            if not complete and not delay_notice:
+                return {"status": "waiting_data", "target": str(target), "as_of": snapshot.get("as_of") if snapshot else None}
+            if complete and delay_notice:
+                return {"status": "retry", "reason": "数据刚完成，请发送正式日报"}
+            rows = [] if delay_notice else select_stocks(snapshot, minimum, observations)
+            cards = [] if delay_notice else stock_cards(snapshot, rows)
+            parts = _prepare(root / ("delay" if delay_notice else "report"), snapshot, cards, report_day,
+                             minimum, recipient, settings.sender, delayed=delay_notice, observations=observations)
+            state = {"status": "prepared", "snapshot_run_id": snapshot["run_id"] if snapshot else None,
+                     "as_of": snapshot["as_of"] if snapshot else None, "count": len(rows),
+                     "sender": settings.sender, "parts": parts}
+            write_json(state_path, state)
+        if state["sender"] != settings.sender:
+            return {"status": "blocked", "reason": "发件人已变更，请先核对已有发送记录"}
+        for part in state["parts"]:
+            if part["status"] == "sent":
+                continue
+            part["status"] = "sending"
+            write_json(state_path, state)
+            try:
+                payload = (root / ("delay" if delay_notice else "report") / part["file"]).read_bytes()
+                msg = BytesParser(policy=policy.default).parsebytes(payload)
+                if address(str(msg["To"])) != recipient or str(msg["Message-ID"]) != part["message_id"]:
+                    raise ValueError("缓存信件收件人或标识与发送记录不一致")
+                send(msg, settings)
+            except DeliveryUncertain:
+                part["status"], state["status"] = "uncertain", "uncertain"
+                write_json(state_path, state)
+                return {"status": "uncertain", "reason": "SMTP回执中断，未自动重发，请核对收件箱"}
+            except Exception as error:
+                # Never copy server responses, credentials or deployment details
+                # into mail status, logs, or automation replies.
+                part["status"], state["status"] = "retry", "retry"
+                state["error_type"] = type(error).__name__
+                write_json(state_path, state)
+                logger.warning("趋势邮件发送失败: %s", type(error).__name__)
+                blocked = (isinstance(error, (ValueError, smtplib.SMTPAuthenticationError, smtplib.SMTPRecipientsRefused, smtplib.SMTPNotSupportedError))
+                           or isinstance(error, smtplib.SMTPResponseException) and error.smtp_code >= 500)
+                return {"status": "blocked" if blocked else "retry", "error_type": type(error).__name__}
+            part["status"], part["sent_at"] = "sent", datetime.now(SHANGHAI).isoformat()
+            write_json(state_path, state)
+        state["status"], state["sent_at"] = "sent", datetime.now(SHANGHAI).isoformat()
+        write_json(state_path, state)
+        return {"status": "sent", "count": state["count"], "parts": len(state["parts"]),
+                "as_of": state["as_of"], "delay_notice": delay_notice}
+
+
+def _main():
+    parser = argparse.ArgumentParser(description="生成或发送盘后趋势图文邮件")
+    parser.add_argument("--send", action="store_true", help="实际发送；无此参数只生成本地预览")
+    parser.add_argument("--wait", action="store_true", help="数据或网络延迟时每10分钟重试，最多等至20:00")
+    args = parser.parse_args()
+    get_config()
+    if not args.send:
+        result = preview()
+    else:
+        deadline = datetime.combine(datetime.now(SHANGHAI).date(), day_time(20), SHANGHAI)
+        while True:
+            result = deliver_once()
+            if result["status"] not in ("waiting_data", "retry", "busy") or not args.wait:
+                break
+            if datetime.now(SHANGHAI) >= deadline:
+                if result["status"] == "waiting_data":
+                    result = deliver_once(delay_notice=True)
+                break
+            # Bounded sleeps keep shutdown responsive; no HTTP thread is held.
+            remaining = min(600, (deadline-datetime.now(SHANGHAI)).total_seconds())
+            while remaining > 0:
+                step = min(30, remaining)
+                time.sleep(step)
+                remaining -= step
+    print(json.dumps(result, ensure_ascii=False, default=str))
+    return 0 if result["status"] in ("sent", "preview", "not_due") else 2
+
+
+def main():
+    try:
+        return _main()
+    except Exception as error:
+        logger.error("趋势邮件任务失败: %s", type(error).__name__)
+        print(json.dumps({"status": "error", "error_type": type(error).__name__}))
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

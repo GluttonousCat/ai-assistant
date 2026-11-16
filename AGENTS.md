@@ -32,7 +32,8 @@ skills/      领域技能 (每技能一目录, 专业知识放 prompt):
              beta_alpha(产业链Beta+个股Alpha: chains种子链/analysis/tests) /
              content(内容资产管线: 画像/公众号文章/PPT/年报解读) /
              research(研究生产线: 证据→十章草稿→成稿, 任务分派见 docs/research/tasks/)
-jobs/        annotate_trend_context(离线派生母趋势/局部触发快照，原始pattern/eligible/风控不改；盘中只用已完成日K；scan_trend后续自动标注) /
+jobs/        send_market_digest(Codex每日18点调用;≥60分入场/观察分组;日K+60F同源前复权PNG/CSV;SMTP TLS/逐部分回执/延迟至20点;缺授权码不发) /
+             annotate_trend_context(离线派生母趋势/局部触发快照，原始pattern/eligible/风控不改；盘中只用已完成日K；scan_trend后续自动标注) /
              research_online_60f(v21每月只训练已结束历史标签/指数相对排序/532入场风险2.5%，2026-01-01—11-12样本内+8.69%/回撤2.76%，双倍滑点+7.14%但压力单股尾损-11.68%；预热持币/当前名单偏差/不改默认；领域online_priority在skills/quant) /
              research_market_context(指数环境/分批节奏/相对排序/软退出耐心四轮88组，均未达标；只离线研究，不改默认；market_context与signal_priority在skills/quant) /
              sync_remaining_market(沪深三板非ST剩余60F+原生日K/真实因子补齐,独立上市名单快照) / backtest_reversal(原池v6固定退出对照) /
@@ -184,6 +185,7 @@ vision=qwen3.8-flash（deepseek 不收图片）。**思考开关由 `llm.enable_
 | 安全 | [docs/ops/security.md](docs/ops/security.md) | 分层防护/事件审计/加固清单 |
 | 结构优化方案 | [docs/ops/module_boundaries.md](docs/ops/module_boundaries.md) | 模块化单体/仓储收敛/DDL与Agent拆分/旧入口兼容；DDL/路由/执行/认证及财务查询已首轮收敛；遗留依赖登记并阻止新增 |
 | 行情与新闻选型 | [docs/ops/data_sources.md](docs/ops/data_sources.md) | 五组指数成分池/免费盘后分钟与付费实时/新闻快照；含价格/探测记录；2026年60F五指数并集已入库，新闻待接入 |
+| 每日图文邮件 | [docs/ops/market_digest.md](docs/ops/market_digest.md) | 每日18点/评分≥60/入场与观察分组/日K与60F/SMTP与去重/缺授权不发 |
 | 日线定时采集 | [docs/ops/daily_sync.md](docs/ops/daily_sync.md) | 交易日上海时间17:00/日K→60F→看板/启动补漏/5交易日重叠回补/逐股审计与失败重试 |
 | 数据处理 | [docs/ops/data_process.md](docs/ops/data_process.md) | 历史：同步全流程 |
 | 爬虫 | [docs/ops/spider.md](docs/ops/spider.md) | 历史：反检测设计 |

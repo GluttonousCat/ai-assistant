@@ -1,0 +1,145 @@
+from datetime import date, datetime, timezone
+from email import policy
+from email.parser import BytesParser
+import smtplib
+
+import pytest
+
+from core.local_state import write_json
+from jobs import send_market_digest as job
+from skills.trend.tests.test_digest import row
+from tools.notifications.email import SmtpSettings, DeliveryUncertain
+
+
+@pytest.fixture
+def delivery(monkeypatch, tmp_path):
+    snapshot = {"run_id": "run-a", "as_of": "2026-11-16 15:00:00", "version": "same-rules",
+                "metadata": {"config": {"fresh_reversal": True}, "timeframes": {
+                    p: {"as_of": "2026-11-16 15:00:00"} for p in ("1D", "60F")}},
+                "data": [row("600000.SH")]}
+    monkeypatch.setattr(job, "_root", lambda: tmp_path)
+    monkeypatch.setattr(job, "options", lambda: ("reader@example.com", 60., True))
+    monkeypatch.setattr(job.SmtpSettings, "load", lambda: SmtpSettings("smtp.example.com", 465, "sender@example.com", "secret", "sender@example.com"))
+    monkeypatch.setattr(job, "load_dashboard", lambda *a, **kw: snapshot)
+    monkeypatch.setattr(job, "market_state", lambda: {"status": "complete", "target": "2026-11-16", "snapshot": {"run_id": "run-a"}})
+    monkeypatch.setattr(job, "scan_cutoffs", lambda now: {
+        "bar_end": datetime(2026, 11, 16, 15), "daily_end": date(2026, 11, 16), "factor_date": date(2026, 11, 16)})
+    monkeypatch.setattr(job, "stock_cards", lambda snap, rows: [
+        {"row": r, "cid": "stock-"+r["ts_code"].replace(".", "-"), "png": b"png"} for r in rows])
+    return snapshot, tmp_path
+
+
+def test_send_is_once_per_local_day_and_accepts_utc_clock(delivery, monkeypatch):
+    calls = []
+    monkeypatch.setattr(job, "send", lambda msg, cfg: calls.append(msg))
+    utc = datetime(2026, 11, 16, 10, tzinfo=timezone.utc)
+    assert job.deliver_once(utc)["status"] == "sent"
+    assert job.deliver_once(utc)["already_processed"]
+    assert len(calls) == 1 and calls[0]["To"] == "reader@example.com"
+
+
+def test_before_18_does_not_send_or_load_credentials(monkeypatch):
+    monkeypatch.setattr(job, "options", lambda: pytest.fail("not due"))
+    assert job.deliver_once(datetime(2026, 11, 16, 17, 59))["status"] == "not_due"
+
+
+def test_stale_snapshot_waits_without_sending_old_stocks(delivery, monkeypatch):
+    snapshot, _ = delivery
+    snapshot["as_of"] = "2026-11-13 15:00:00"
+    monkeypatch.setattr(job, "send", lambda *a: pytest.fail("stale snapshot must not send"))
+    assert job.deliver_once(datetime(2026, 11, 16, 18))["status"] == "waiting_data"
+
+
+def test_lost_ack_stops_retries_instead_of_sending_twice(delivery, monkeypatch):
+    calls = []
+
+    def lost(*args):
+        calls.append(True)
+        raise DeliveryUncertain()
+
+    monkeypatch.setattr(job, "send", lost)
+    assert job.deliver_once(datetime(2026, 11, 16, 18))["status"] == "uncertain"
+    assert job.deliver_once(datetime(2026, 11, 16, 19))["status"] == "uncertain"
+    assert len(calls) == 1
+
+
+def test_part_retry_resumes_without_resending_accepted_parts(delivery, monkeypatch):
+    snapshot, root = delivery
+    snapshot["data"] = [row(f"{n:06d}.SH") for n in range(21)]
+    attempted = []
+
+    def send(msg, cfg):
+        attempted.append(str(msg["Message-ID"]))
+        if len(attempted) == 2:
+            raise smtplib.SMTPConnectError(421, b"temporary")
+
+    monkeypatch.setattr(job, "send", send)
+    assert job.deliver_once(datetime(2026, 11, 16, 18))["status"] == "retry"
+    assert job.deliver_once(datetime(2026, 11, 16, 18, 10))["status"] == "sent"
+    assert len(attempted) == 3 and attempted[0] != attempted[1] == attempted[2]
+    for file in root.rglob("*.eml"):
+        msg = BytesParser(policy=policy.default).parsebytes(file.read_bytes())
+        assert len(file.read_bytes()) <= job.MAX_MESSAGE_BYTES
+        assert msg["To"] == "reader@example.com"
+
+
+def test_interrupted_sending_record_requires_review(delivery, monkeypatch):
+    _, root = delivery
+    profile = job._profile("reader@example.com", 60., True)
+    write_json(root / "2026-11-16" / profile / "delivery.json", {
+        "status": "prepared", "parts": [{"status": "sending"}], "count": 1})
+    monkeypatch.setattr(job, "send", lambda *a: pytest.fail("unknown receipt"))
+    assert job.deliver_once(datetime(2026, 11, 16, 18))["status"] == "uncertain"
+
+
+def test_deadline_notice_is_not_a_stale_recommendation(delivery, monkeypatch):
+    snapshot, _ = delivery
+    snapshot["as_of"] = "2026-11-13 15:00:00"
+    calls = []
+    monkeypatch.setattr(job, "send", lambda msg, cfg: calls.append(msg))
+    result = job.deliver_once(datetime(2026, 11, 16, 20), delay_notice=True)
+    assert result["status"] == "sent" and result["delay_notice"] and result["count"] == 0
+    assert not any(p.get_content_type() == "image/png" for p in calls[0].walk())
+    assert "行情更新延迟" in str(calls[0]["Subject"])
+
+
+def test_preview_never_calls_smtp(delivery, monkeypatch):
+    monkeypatch.setattr(job, "send", lambda *a: pytest.fail("preview never sends"))
+    result = job.preview()
+    assert result["status"] == "preview" and result["sent"] is False
+    assert result["count"] == 1
+
+
+def test_permanent_server_rejection_stops_the_wait_cycle(delivery, monkeypatch):
+    def reject(*args):
+        raise smtplib.SMTPDataError(550, b"permanent refusal")
+
+    monkeypatch.setattr(job, "send", reject)
+    assert job.deliver_once(datetime(2026, 11, 16, 18))["status"] == "blocked"
+
+
+def test_corrupt_delivery_ledger_does_not_become_an_unsent_day(delivery, monkeypatch):
+    _, root = delivery
+    profile = job._profile("reader@example.com", 60., True)
+    path = root / "2026-11-16" / profile / "delivery.json"
+    path.parent.mkdir(parents=True)
+    path.write_text("{broken", encoding="utf-8")
+    monkeypatch.setattr(job, "send", lambda *a: pytest.fail("corrupt receipt must not resend"))
+    with pytest.raises(ValueError):
+        job.deliver_once(datetime(2026, 11, 16, 18))
+
+
+def test_cached_mail_cannot_change_the_authorized_recipient(delivery, monkeypatch):
+    _, root = delivery
+
+    def disconnected(*args):
+        raise smtplib.SMTPConnectError(421, b"retry")
+
+    monkeypatch.setattr(job, "send", disconnected)
+    assert job.deliver_once(datetime(2026, 11, 16, 18))["status"] == "retry"
+    path = next(root.rglob("*.eml"))
+    msg = BytesParser(policy=policy.default).parsebytes(path.read_bytes())
+    msg.replace_header("To", "other@example.com")
+    path.write_bytes(msg.as_bytes(policy=policy.SMTP))
+    monkeypatch.setattr(job, "send", lambda *a: pytest.fail("recipient changed"))
+    assert job.deliver_once(datetime(2026, 11, 16, 18, 10))["status"] == "blocked"
