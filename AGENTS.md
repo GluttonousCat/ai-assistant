@@ -2,7 +2,7 @@
 
 > 本文件是给 AI Agent（及新成员）的**项目第一入口**。读完本文件即可建立全局认知，
 > 再按需深入 `docs/` 对应模块文档。人类同事请从 [docs/README.md](docs/README.md) 进。
-> 更新：2026-11-15
+> 更新：2026-11-16
 
 ## 1. 项目是什么
 
@@ -54,7 +54,8 @@ api/         路由+鉴权中间件(JWT) / agent_api(SSE) / chains_api / schema_
 web/src/     Login / Platform(侧边栏壳+角色门控) / AgentChat(智能对话,SSE) / ChainView(行业挖掘页)
              market/(StockDashboard+TrendChart+dashboard.css,股票行情#market) /
              quant/(QuantDashboard+EquityChart+quant.css,策略与回测#quant) /
-             Reports / UserAdmin / Monitor(实时监控SSE, adminOnly); Markdownish 共享渲染器
+             Reports / UserAdmin / Monitor(实时监控SSE, adminOnly); Markdownish 共享渲染器；
+             opportunities.js/OpportunityBadge.jsx统一趋势回调（蓝↑）与底部反转（紫■）展示，不修改历史信号
 ```
 
 **分层契约**：`api → harness(引擎)+skills(领域) → tools → storage`，

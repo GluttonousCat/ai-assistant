@@ -1,6 +1,8 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { CandlestickSeries, CrosshairMode, HistogramSeries, LineSeries, createChart, createSeriesMarkers } from 'lightweight-charts'
 import { boundedCache, captureView, chartRows, restoreView, seriesUpdate, signalMarkers } from './chartData'
+import OpportunityBadge from '../OpportunityBadge'
+import { opportunityFor } from '../opportunities'
 
 const dateFormat = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' })
 const minuteFormat = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })
@@ -130,9 +132,11 @@ const TrendChart = memo(function TrendChart({ data, instrumentKey, stop, stopLab
     <div className="trend-chart-legend">
       <span style={{ color: '#d89bc1' }}>M8{Number.isFinite(active?.ma8) ? ` · ${active.ma8.toFixed(2)}` : ''}</span><span className="trend-legend-fast">M13{Number.isFinite(active?.ma13) ? ` · ${active.ma13.toFixed(2)}` : ''}</span><span className="trend-legend-slow">M21{Number.isFinite(active?.ma21) ? ` · ${active.ma21.toFixed(2)}` : ''}</span>
       {config?.selection_mode === 'mtf' && active?.trend_state && <span>60F背景：{active.trend_state}</span>}
+      {active && opportunityFor(active).key !== 'unknown' && <OpportunityBadge value={active} />}
       {active && <span className="trend-ohlc">{timeLabel(active.time, timeframe)}　开 {active.open.toFixed(2)}　高 {active.high.toFixed(2)}　低 {active.low.toFixed(2)}　收 {active.close.toFixed(2)}</span>}
       {active?.startup_count > 0 && ['early', 'dual'].includes(config?.selection_mode) && <span className="trend-legend-fast">{active.pattern_label || ''} · {active.setup_phase === 'pullback_resume' ? '回调再起，本轮' : '本段'}第 {active.startup_count} 阳 / {active.startup_age} 根K线</span>}
     </div>
+    <div className="trend-signal-legend" aria-label="信号类型图例"><OpportunityBadge value="trend_pullback" /><OpportunityBadge value="base_rebound" /><span>箭头 / 方块为确认 · 圆点为观察 · 灰色为起势背景</span></div>
     <div ref={host} className="trend-chart" aria-label={`${timeframe === '1D' ? '日K' : '60分钟K线'}、均线及成交量，可拖动缩放`} />
   </>
 })

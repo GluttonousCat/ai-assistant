@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { platformApi } from '../platformApi'
 import TrendChart from './TrendChart'
 import useStockChart from './useStockChart'
+import OpportunityBadge from '../OpportunityBadge'
+import { opportunityFor } from '../opportunities'
 import './dashboard.css'
 
 const INDICES = { '000016.SH': '上证50', '000300.SH': '沪深300', '000905.SH': '中证500', '000852.SH': '中证1000', '932000.CSI': '中证2000' }
@@ -47,7 +49,7 @@ export default function StockDashboard({ user }) {
     return (snapshot?.data || []).filter((r) => (!search || `${r.name}${r.ts_code}`.toUpperCase().includes(search))
       && (!index || r.indices.includes(index))
       && (!board || r.board === board)
-      && (!pattern || r.pattern === pattern)
+      && (!pattern || opportunityFor(r).key === pattern)
       && (mode === 'all' || mode === 'star' && stars.includes(r.ts_code) || mode === 'candidate' && (riskMode ? r.setup_watch : freshMode ? r.trend60?.fresh : r.eligible) || mode === 'entry' && r.eligible || mode === 'first' && r.state === '首阳观察' || mode === 'resume' && r.state === '回调再起观察' || mode === 'observe' && ['首次回调观察', '早期反转观察', ...(freshMode ? [] : ['等待日K确认', '60F趋势未确认']), '回调再起观察', '趋势观察', '等待启动', '等待形态', '启动已过'].includes(r.state)))
       .sort((a, b) => sort === 'efficiency' && freshMode ? (a.trend60?.age_bars ?? 1e9) - (b.trend60?.age_bars ?? 1e9) : sort === 'efficiency' ? (b.startup?.efficiency ?? b.metrics?.efficiency ?? 0) - (a.startup?.efficiency ?? a.metrics?.efficiency ?? 0) : sort === 'risk' ? (a.risk_pct ?? 1e9) - (b.risk_pct ?? 1e9) : b.score - a.score || a.ts_code.localeCompare(b.ts_code))
   }, [snapshot, query, index, mode, sort, stars, pattern, board, freshMode, riskMode])
@@ -63,7 +65,7 @@ export default function StockDashboard({ user }) {
   }
   function exportCsv() {
     const escape = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`
-    const csv = [['代码', '名称', '板块', '60F原始起点', '反转根数', '距起点ATR', '入场周期', '机会类型', '状态', '质量分', '60F趋势背景', '本轮转强时间', '前次起势背景时间', '结构证据', '收复位', '推进阳线数', '启动总根数', '本段效率', 'ER20', 'ADX', '参考止损', '风险距离%', '筛选解释', '策略截止'], ...rows.map((r) => [r.ts_code, r.name, r.board, r.trend60?.origin, r.trend60?.age_bars, r.trend60?.gain_atr, SCREEN_TIMEFRAME, r.pattern_label, r.state, r.score, r.trend60?.state, r.startup?.start || (r.eligible ? r.bar_end : ''), r.startup?.parent_start, r.startup?.evidence, r.startup?.neckline, r.startup?.bullish_count, r.startup?.age_bars, r.startup?.efficiency, r.metrics?.efficiency, r.metrics?.adx, r.stop_price, r.risk_pct, r.reason, viewAsOf])].map((r) => r.map(escape).join(',')).join('\r\n')
+    const csv = [['代码', '名称', '板块', '60F原始起点', '反转根数', '距起点ATR', '入场周期', '机会分类', '机会类型', '状态', '质量分', '60F趋势背景', '本轮转强时间', '前次起势背景时间', '结构证据', '收复位', '推进阳线数', '启动总根数', '本段效率', 'ER20', 'ADX', '参考止损', '风险距离%', '筛选解释', '策略截止'], ...rows.map((r) => [r.ts_code, r.name, r.board, r.trend60?.origin, r.trend60?.age_bars, r.trend60?.gain_atr, SCREEN_TIMEFRAME, opportunityFor(r).label, r.pattern_label, r.state, r.score, r.trend60?.state, r.startup?.start || (r.eligible ? r.bar_end : ''), r.startup?.parent_start, r.startup?.evidence, r.startup?.neckline, r.startup?.bullish_count, r.startup?.age_bars, r.startup?.efficiency, r.metrics?.efficiency, r.metrics?.adx, r.stop_price, r.risk_pct, r.reason, viewAsOf])].map((r) => r.map(escape).join(',')).join('\r\n')
     const url = URL.createObjectURL(new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' }))
     const a = document.createElement('a'); a.href = url; a.download = `${SCREEN_TIMEFRAME}筛选_${viewAsOf.slice(0, 10)}.csv`; a.click(); URL.revokeObjectURL(url)
   }
@@ -97,14 +99,14 @@ export default function StockDashboard({ user }) {
           <div className="trend-search"><span>⌕</span><input aria-label="搜索股票" placeholder="搜索名称或代码" value={query} onChange={(e) => setQuery(e.target.value)} /></div>
           <select aria-label="指数成分池" value={index} onChange={(e) => setIndex(e.target.value)}><option value="">全部股票（可按指数缩小）</option>{Object.entries(INDICES).map(([key, label]) => <option value={key} key={key}>{label}</option>)}</select>
           <select aria-label="上市板块" value={board} onChange={e => setBoard(e.target.value)}><option value="">全部板块</option>{['主板', '创业板', '科创板', '北交所'].map(b => <option key={b} value={b}>{b}{meta.boards?.[b] != null ? ` · ${meta.boards[b]}` : ''}</option>)}</select>
-          {freshMode ? <p className="trend-list-note">{riskMode ? '反转与趋势首次回调分别观察；以结构失效距离衡量风险，不按绝对涨幅一刀切。' : '只观察阴跌 / 深坑后的早期反转；已涨高与回调再拉升不计新起点。'}</p> : dualMode && <select aria-label="机会类型" value={pattern} onChange={e=>setPattern(e.target.value)}><option value="">两类机会 · 全部</option><option value="trend_pullback">趋势中的回调介入</option><option value="base_rebound">横盘阴跌 / 砸坑反弹</option></select>}
-          {riskMode && <select aria-label="机会类型" value={pattern} onChange={e=>setPattern(e.target.value)}><option value="">全部结构机会</option><option value="trend_pullback">趋势回调（含首次）</option><option value="base_rebound">低位反转 / 缺口守稳</option></select>}
+          {freshMode && <p className="trend-list-note">{riskMode ? '底部反转与趋势回调分别观察；以结构失效距离衡量风险，首次与后续回调保留细分。' : '观察阴跌 / 深坑后的早期反转；观察标记不代表已经确认底部。'}</p>}
+          {(dualMode || freshMode || riskMode) && <select aria-label="机会类型" value={pattern} onChange={e=>setPattern(e.target.value)}><option value="">趋势回调 / 底部反转 · 全部</option><option value="trend_pullback">↑ 趋势回调（含首次与后续）</option><option value="base_rebound">■ 底部反转（含阴跌 / 深坑修复）</option></select>}
           <div className="trend-tabs">{[['candidate', riskMode ? '机会' : freshMode ? '反转' : '候选'], ...(freshMode ? [['entry', '入场']] : []), ...(earlyMode ? [['first', '首阳']] : []), ...(meta.config.track_swing_context ? [['resume', '再起']] : []), ['observe', '观察'], ['star', '自选'], ['all', '全部']].map(([key, label]) => <button key={key} className={mode === key ? 'active' : ''} onClick={() => setMode(key)}>{label}{key === 'star' ? ` ${stars.length}` : ''}</button>)}</div>
           <div className="trend-list-heading"><span>{rows.length} 只股票</span><select aria-label="排序" value={sort} onChange={(e) => setSort(e.target.value)}><option value="score">质量分排序</option><option value="efficiency">{freshMode ? "反转起点新近排序" : "趋势效率排序"}</option><option value="risk">风险距离排序</option></select><button onClick={exportCsv} title="导出当前筛选" aria-label="导出当前筛选">↓</button></div>
           <div className="trend-stock-list">
             {rows.slice(0, 250).map((r) => <div className={`trend-stock-row ${code === r.ts_code ? 'selected' : ''}`} key={r.ts_code}>
               <button className="trend-star" aria-label={`${stars.includes(r.ts_code) ? '移出' : '加入'}自选 ${r.name}`} onClick={() => toggleStar(r.ts_code)}>{stars.includes(r.ts_code) ? '★' : '☆'}</button>
-              <button className="trend-stock-select" onClick={() => setCode(r.ts_code)}><span><b>{r.name}</b><small>{r.ts_code} · {r.board || "未分类"} · {r.industry}</small></span><span><b className={r.eligible ? 'trend-gold' : ''}>{r.score.toFixed(1)}</b><small className={r.eligible ? 'trend-gold' : ''}>{r.state}</small></span></button>
+              <button className="trend-stock-select" onClick={() => setCode(r.ts_code)}><span><b>{r.name}</b><small>{r.ts_code} · {r.board || "未分类"} · {r.industry}</small><OpportunityBadge value={r} /></span><span><b className={r.eligible ? 'trend-gold' : ''}>{r.score.toFixed(1)}</b><small className={r.eligible ? 'trend-gold' : ''}>{r.state}</small></span></button>
             </div>)}
             {rows.length > 250 && <p className="trend-list-note">显示前 250 只，请搜索或切换指数缩小范围；导出包含全部筛选结果。</p>}
             {!rows.length && <div className="trend-empty">{mode === 'star' ? '暂无自选，点击股票旁的 ☆ 添加。' : '当前条件下没有股票。可切换“全部”查看过滤原因。'}</div>}
@@ -112,7 +114,7 @@ export default function StockDashboard({ user }) {
         </aside>
         <div className="trend-detail-panel">
           {selected ? <>
-            <div className="trend-stock-title"><div><h2>{selected.name} <small>{selected.ts_code} · {selected.board || "未分类"}</small></h2><p>{selected.indices.map((i) => INDICES[i] || i).join(' / ')} <span>· 名单日期 {selected.membership_date}</span></p></div><span className={`trend-state ${selected.eligible ? 'passed' : ''}`}>{selected.state}</span></div>
+            <div className="trend-stock-title"><div><h2>{selected.name} <small>{selected.ts_code} · {selected.board || "未分类"}</small></h2><p>{selected.indices.map((i) => INDICES[i] || i).join(' / ')} <span>· 名单日期 {selected.membership_date}</span></p></div><div className="trend-selected-tags"><OpportunityBadge value={selected} /><span className={`trend-state ${selected.eligible ? 'passed' : ''}`}>{selected.state}</span></div></div>
             {dualMode && <p className="trend-startup-info">机会类型：{selected.pattern_label || '等待有效形态'} · {mtfMode ? '60F趋势 → 日K入场' : `筛选周期：${SCREEN_TIMEFRAME}`}</p>}
             {freshMode && (!riskMode || selected.pattern !== 'trend_pullback') && selected.trend60?.origin && <p className="trend-startup-info">{selected.trend60.kind} · 60F起点 {dateLabel(selected.trend60.origin)} · 第 {selected.trend60.age_bars} 根 / 推进 {selected.trend60.bullish_count} 阳 · 距起点 {number(selected.trend60.gain_atr)} ATR。首阳是观察线索，须等日K确认，不代表已见底。</p>}
             {riskMode && selected.pattern === 'trend_pullback' && <p className="trend-startup-info">趋势回调轮次：{selected.pullback_round || '—'} · 首次与后续再起分开记录；不把回调转强称为新首阳，仍须通过结构风险检查。</p>}

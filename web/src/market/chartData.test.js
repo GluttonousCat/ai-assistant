@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { boundedCache, captureView, chartRows, restoreView, seriesUpdate, signalMarkers } from './chartData.js'
+import { opportunityFor } from '../opportunities.js'
 
 const bar = (time, close = 10) => ({ time, open: 10, high: 12, low: 9, close, volume: 100, ma13: 10, ma21: null })
 
@@ -18,7 +19,7 @@ test('chart distinguishes non-tradable background, original first and pullback r
     { time: 4, eligible: true, setup_phase: 'pullback_resume', startup_count: 2 },
     { time: 5 },
   ])
-  assert.deepEqual(markers.map((m) => m.text), ['起势背景', '首阳观察', '回调再起观察', '再起第2阳确认'])
+  assert.deepEqual(markers.map((m) => m.text), ['起势背景', '首阳观察', '趋势回调 · 再起观察', '趋势回调 · 再起第2阳确认'])
   assert.equal(markers[0].color, '#97948c')
   assert.equal(markers[2].shape, 'circle')
   assert.equal(markers[3].shape, 'arrowUp')
@@ -76,6 +77,32 @@ test('bounded caches isolate snapshot/stock/period keys and evict the least rece
 test('60F reversal observation is a non-executable circle distinct from daily entry', () => {
   const markers = signalMarkers([{time: 1, reversal_ignition: true, eligible: false}]);
   assert.equal(markers[0].shape, 'circle');
-  assert.equal(markers[0].text, '反转观察');
+  assert.equal(markers[0].text, '底部反转 · 观察');
   assert.equal(markers[0].position, 'aboveBar');
 });
+
+test('opportunity family and confirmation stage remain distinct across periods', () => {
+  const rows = [
+    { time: 1, pattern: 'trend_pullback', eligible: true, startup_count: 2 },
+    { time: 2, pattern: 'base_rebound', eligible: true, startup_count: 2 },
+    { time: 3, pattern: 'base_rebound', first_watch: true },
+    { time: 4, pattern: 'trend_pullback', swing_ignition: true },
+  ]
+  const markers = signalMarkers(rows)
+  assert.equal(markers[0].shape, 'arrowUp')
+  assert.equal(markers[1].shape, 'square')
+  assert.notEqual(markers[0].color, markers[1].color)
+  assert.equal(markers[2].shape, 'circle')
+  assert.equal(markers[2].color, markers[1].color)
+  assert.equal(markers[3].color, '#97948c')
+  assert.equal(markers[3].text, '起势背景')
+  assert.deepEqual(signalMarkers(rows.slice(0, 2), { dailyEntry: true }).map(m => m.text), ['趋势回调 · 日K入场', '底部反转 · 日K入场'])
+})
+
+test('backend family wins over old phase hints and an unclassified bullish bar stays unknown', () => {
+  assert.equal(opportunityFor({ pattern: 'base_rebound', setup_phase: 'pullback_resume' }).key, 'base_rebound')
+  assert.equal(opportunityFor({ family: 'trend_pullback' }).key, 'trend_pullback')
+  assert.equal(opportunityFor({ first_watch: true }).key, 'unknown')
+  assert.equal(opportunityFor({ pattern: 'future_setup', reversal_ignition: true }).key, 'unknown')
+  assert.equal(opportunityFor({ pattern: 'constructor' }).key, 'unknown')
+})

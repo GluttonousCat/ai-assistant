@@ -887,3 +887,6 @@ table.grid tbody td:last-child { border-right: 1px solid var(--border); border-r
 .ev-ic.llm_fail, .ev-ic.error { color: var(--up); }
 .ev-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ev-text.bad { color: var(--up); }
+/* Shared opportunity labels for stock charts, screeners and backtest trades. */
+.opportunity-badge { display: inline-flex; align-items: center; gap: 5px; width: fit-content; max-width: 100%; padding: 2px 7px; border: 1px solid color-mix(in srgb, var(--opportunity-color) 35%, transparent); border-radius: 4px; background: color-mix(in srgb, var(--opportunity-color) 9%, transparent); color: var(--opportunity-color); font-size: 10px; font-weight: 500; line-height: 1.6; white-space: nowrap; vertical-align: middle; }
+.opportunity-badge > span { font-size: 11px; }
