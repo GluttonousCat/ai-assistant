@@ -72,47 +72,27 @@ def ready(snapshot, target, status, bounds):
                         for key in ("bar_end", "daily_end", "factor_date")))
 
 
+class DigestTooLarge(ValueError):
+    """Do not turn one daily digest into several messages or omit candidates."""
+
+
 def _messages(snapshot, cards, report_day, minimum, recipient, sender, *, preview=False, delayed=False, observations=True, test=False):
-    # Candidate count is not a mail-size limit. Start with one complete digest
-    # and split only when its actual serialized MIME exceeds the byte budget.
-    groups = [cards]
+    html = render_html(snapshot, cards, report_day, minimum, preview=preview, delayed=delayed, test=test)
     profile = _profile(recipient, minimum, observations)
-    while True:
-        built, too_large = [], None
-        for n, group in enumerate(groups, 1):
-            first_number = 1 + sum(len(g) for g in groups[:n-1])
-            last_number = first_number + len(group) - 1
-            html = render_html(snapshot, group, report_day, minimum, part=n, total_parts=len(groups),
-                               total_count=len(cards), preview=preview, delayed=delayed, test=test,
-                               first_number=first_number)
-            kind = "test" if test else "delay" if delayed else "digest"
-            run = snapshot["run_id"] if snapshot else "none"
-            message_id = f"<afr.{kind}.{report_day}.{profile}.{run}.{n}@{sender.split('@')[1]}>"
-            subject = ("[测试] " if test else "[预览] " if preview else "") + f"Alpha Finance Radar | {report_day} | "
-            subject += "行情更新延迟" if delayed else (
-                f"≥{minimum:g}分候选 {len(group)}只 / 共{len(cards)}只 · 第{first_number}—{last_number}只"
-                if len(groups) > 1 else f"≥{minimum:g}分候选 {len(cards)}只")
-            if len(groups) > 1:
-                subject += f" ({n}/{len(groups)})"
-            text = f"{subject}\n数据截止: {snapshot['as_of'] if snapshot else '暂无'}（上海时间）\n"
-            if len(groups) > 1:
-                text += f"本封{len(group)}只，第{first_number}—{last_number}只；本期共{len(cards)}只。\n"
-            text += "观察不代表入场，评分不代表胜率。正文包含日K和60F图片。\n"
-            text += "\n".join(f"{c['row']['ts_code']} {c['row']['name']} {c['row']['score']}分 · {c['row']['state']}" for c in group)
-            msg = message(sender, recipient, subject, text, html, {c["cid"]: c["png"] for c in group},
-                          message_id, csv=export_csv([c["row"] for c in group]) if not delayed else None)
-            payload = msg.as_bytes(policy=policy.SMTP)
-            if len(payload) > MAX_MESSAGE_BYTES:
-                if len(group) <= 1:
-                    raise ValueError("单股邮件超过大小上限，未发送")
-                too_large = n-1
-                break
-            built.append((html, payload))
-        if too_large is None:
-            return built, groups
-        group = groups[too_large]
-        split = len(group)//2
-        groups[too_large:too_large+1] = [group[:split], group[split:]]
+    kind = "test" if test else "delay" if delayed else "digest"
+    run = snapshot["run_id"] if snapshot else "none"
+    message_id = f"<afr.{kind}.{report_day}.{profile}.{run}.1@{sender.split('@')[1]}>"
+    subject = ("[测试] " if test else "[预览] " if preview else "") + f"Alpha Finance Radar | {report_day} | "
+    subject += "行情更新延迟" if delayed else f"≥{minimum:g}分候选 {len(cards)}只"
+    text = f"{subject}\n数据截止: {snapshot['as_of'] if snapshot else '暂无'}（上海时间）\n"
+    text += "观察不代表入场，评分不代表胜率。正文按入场/观察分组，每股展示日K和60F图片。\n"
+    text += "\n".join(f"{c['row']['ts_code']} {c['row']['name']} {c['row']['score']}分 · {c['row']['state']}" for c in cards)
+    msg = message(sender, recipient, subject, text, html, {c["cid"]: c["png"] for c in cards},
+                  message_id, csv=export_csv([c["row"] for c in cards]) if not delayed else None)
+    payload = msg.as_bytes(policy=policy.SMTP)
+    if len(payload) > MAX_MESSAGE_BYTES:
+        raise DigestTooLarge("整封日报超过8MiB上限，未拆分、未发送，请检查预览")
+    return [(html, payload)], [cards]
 
 
 def _prepare(folder, snapshot, cards, report_day, minimum, recipient, sender, preview=False, delayed=False, observations=True, test=False):
@@ -214,8 +194,11 @@ def deliver_once(now=None, *, delay_notice=False, test=False, retry_uncertain_te
                 return {"status": "retry", "reason": "数据刚完成，请发送正式日报"}
             rows = [] if delay_notice else select_stocks(snapshot, minimum, observations)
             cards = [] if delay_notice else stock_cards(snapshot, rows)
-            parts = _prepare(root / ("delay" if delay_notice else "report"), snapshot, cards, report_day,
-                             minimum, recipient, settings.sender, delayed=delay_notice, observations=observations, test=test)
+            try:
+                parts = _prepare(root / ("delay" if delay_notice else "report"), snapshot, cards, report_day,
+                                 minimum, recipient, settings.sender, delayed=delay_notice, observations=observations, test=test)
+            except DigestTooLarge:
+                return {"status": "blocked", "reason": "整封日报超过8MiB上限，未拆分、未发送", "count": len(rows)}
             state = {**state, "status": "prepared", "snapshot_run_id": snapshot["run_id"] if snapshot else None,
                      "as_of": snapshot["as_of"] if snapshot else None, "count": len(rows),
                      "sender": settings.sender, "parts": parts}

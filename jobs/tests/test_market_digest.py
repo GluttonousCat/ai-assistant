@@ -100,9 +100,19 @@ def test_test_retry_requires_explicit_acknowledgement_and_preserves_history(deli
 def test_part_retry_resumes_without_resending_accepted_parts(delivery, monkeypatch):
     snapshot, root = delivery
     snapshot["data"] = [row(f"{n:06d}.SH") for n in range(21)]
-    complete, _ = job._messages(snapshot, job.stock_cards(snapshot, snapshot["data"]),
-                                 date(2026, 11, 16), 60., "reader@example.com", "sender@example.com")
-    monkeypatch.setattr(job, "MAX_MESSAGE_BYTES", len(complete[0][1]) * 3 // 5)
+    # An interrupted batch from the previous multipart version keeps its receipts.
+    folder = root / "2026-11-16" / job._profile("reader@example.com", 60., True)
+    cards = job.stock_cards(snapshot, snapshot["data"])
+    parts = job._prepare(folder / "report", snapshot, cards[:10], date(2026, 11, 16),
+                         60., "reader@example.com", "sender@example.com")
+    second = job._prepare(root / "legacy-second", snapshot, cards[10:], date(2026, 11, 16),
+                          60., "reader@example.com", "sender@example.com")[0]
+    msg = BytesParser(policy=policy.default).parsebytes((root / "legacy-second" / second["file"]).read_bytes())
+    msg.replace_header("Message-ID", "<legacy-part-2@example.com>")
+    (folder / "report" / "part-02.eml").write_bytes(msg.as_bytes(policy=policy.SMTP))
+    parts.append({"file": "part-02.eml", "status": "prepared", "message_id": str(msg["Message-ID"])})
+    write_json(folder / "delivery.json", {"status": "prepared", "count": 21, "parts": parts,
+               "sender": "sender@example.com", "snapshot_run_id": snapshot["run_id"], "as_of": snapshot["as_of"]})
     attempted = []
 
     def send(msg, cfg):
@@ -134,28 +144,15 @@ def test_47_candidates_fit_in_one_daily_email(delivery, monkeypatch):
     assert len(images) == len({str(p["Content-ID"]) for p in images}) == 47
 
 
-def test_size_split_labels_each_subset_and_preserves_every_stock(delivery, monkeypatch):
-    snapshot, _ = delivery
+def test_oversized_digest_never_splits_or_sends_partial_candidates(delivery, monkeypatch):
+    snapshot, root = delivery
     snapshot["data"] = [row(f"{n:06d}.SH") for n in range(47)]
-    cards = job.stock_cards(snapshot, snapshot["data"])
-    complete, _ = job._messages(snapshot, cards, date(2026, 11, 16), 60.,
-                                "reader@example.com", "sender@example.com")
-    monkeypatch.setattr(job, "MAX_MESSAGE_BYTES", len(complete[0][1]) * 3 // 5)
-    built, groups = job._messages(snapshot, cards, date(2026, 11, 16), 60.,
-                                  "reader@example.com", "sender@example.com")
-    assert len(built) == len(groups) == 2
-    cids, first = [], 1
-    for number, ((html, payload), group) in enumerate(zip(built, groups), 1):
-        msg = BytesParser(policy=policy.default).parsebytes(payload)
-        assert len(payload) <= job.MAX_MESSAGE_BYTES
-        assert f"候选 {len(group)}只 / 共47只" in str(msg["Subject"])
-        assert f"第{first}—{first + len(group) - 1}只" in html
-        assert f"第{number}/2部分" in html
-        assert f"本封 {len(group)} 只 · 本期共 47 只" in html
-        cids.extend(str(p["Content-ID"]) for p in msg.walk() if p.get_content_type() == "image/png")
-        first += len(group)
-    assert len(cids) == len(set(cids)) == 47
-    assert {cid.strip("<>") for cid in cids} == {c["cid"] for c in cards}
+    monkeypatch.setattr(job, "MAX_MESSAGE_BYTES", 1000)
+    monkeypatch.setattr(job, "send", lambda *a: pytest.fail("oversized mail must not send"))
+    result = job.deliver_once(datetime(2026, 11, 16, 18))
+    assert result["status"] == "blocked" and result["count"] == 47
+    assert "未拆分、未发送" in result["reason"]
+    assert not list(root.rglob("*.eml"))
 
 
 def test_previously_sent_three_parts_are_not_rebuilt_or_resent(delivery, monkeypatch):
