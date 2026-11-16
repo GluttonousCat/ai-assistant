@@ -133,6 +133,7 @@ const TrendChart = memo(function TrendChart({ data, instrumentKey, stop, stopLab
       <span style={{ color: '#d89bc1' }}>M8{Number.isFinite(active?.ma8) ? ` · ${active.ma8.toFixed(2)}` : ''}</span><span className="trend-legend-fast">M13{Number.isFinite(active?.ma13) ? ` · ${active.ma13.toFixed(2)}` : ''}</span><span className="trend-legend-slow">M21{Number.isFinite(active?.ma21) ? ` · ${active.ma21.toFixed(2)}` : ''}</span>
       {config?.selection_mode === 'mtf' && active?.trend_state && <span>60F背景：{active.trend_state}</span>}
       {active && opportunityFor(active).key !== 'unknown' && <OpportunityBadge value={active} />}
+      {active?.parent_trend_label && <span>母趋势：{active.parent_trend_label}{active.parent_pullback_bars > 0 ? ` · 回调${active.parent_pullback_bars}根日K` : ''}{active.local_trigger_label ? ` · ${active.local_trigger_label}` : ''}</span>}
       {active && <span className="trend-ohlc">{timeLabel(active.time, timeframe)}　开 {active.open.toFixed(2)}　高 {active.high.toFixed(2)}　低 {active.low.toFixed(2)}　收 {active.close.toFixed(2)}</span>}
       {active?.startup_count > 0 && ['early', 'dual'].includes(config?.selection_mode) && <span className="trend-legend-fast">{active.pattern_label || ''} · {active.setup_phase === 'pullback_resume' ? '回调再起，本轮' : '本段'}第 {active.startup_count} 阳 / {active.startup_age} 根K线</span>}
     </div>

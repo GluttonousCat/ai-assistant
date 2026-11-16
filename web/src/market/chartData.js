@@ -14,7 +14,7 @@ export function signalMarkers(rows, { dailyEntry = false } = {}) {
     const kind = opportunityFor(r)
     const typed = kind.key !== 'unknown' && !background
     const count = Number.isInteger(r.startup_count) && r.startup_count > 0 ? `${resumed ? '再起第' : '第'}${r.startup_count}阳确认` : '趋势确认'
-    const stage = confirmed ? dailyEntry ? '日K入场' : count : r.reversal_ignition ? '观察' : r.resume_watch ? '再起观察' : r.first_watch ? '首阳观察' : '起势背景'
+    const stage = confirmed ? dailyEntry ? '日K入场' : count : r.reversal_ignition ? r.context_pattern === 'trend_pullback' ? '局部反转观察' : '观察' : r.resume_watch ? '再起观察' : r.first_watch ? '首阳观察' : '起势背景'
     return {
       time: r.time, position: r.reversal_ignition ? 'aboveBar' : 'belowBar', shape: confirmed ? kind.shape : 'circle',
       color: background ? '#97948c' : typed ? kind.color : confirmed ? '#68bea2' : '#dfb671',

@@ -106,3 +106,13 @@ test('backend family wins over old phase hints and an unclassified bullish bar s
   assert.equal(opportunityFor({ pattern: 'future_setup', reversal_ignition: true }).key, 'unknown')
   assert.equal(opportunityFor({ pattern: 'constructor' }).key, 'unknown')
 })
+
+test('a local reversal inside a daily advance is annotated as a pullback, preserving observation status', () => {
+  const row = { time: 1, pattern: 'base_rebound', context_pattern: 'trend_pullback', parent_trend: 'pullback', reversal_ignition: true, eligible: false }
+  assert.equal(opportunityFor(row).key, 'trend_pullback')
+  const marker = signalMarkers([row])[0]
+  assert.equal(marker.shape, 'circle')
+  assert.equal(marker.text, '趋势回调 · 局部反转观察')
+  assert.equal(row.pattern, 'base_rebound')
+  assert.equal(opportunityFor({ ...row, context_pattern: '' }).key, 'base_rebound')
+})

@@ -19,6 +19,7 @@ from core.logger import get_logger
 from jobs.backtest_quant import _database_unit
 from tools.market.universe import board_of, risk_name
 from skills.trend.strategy import VERSION, TrendConfig, screen
+from skills.trend.parent_context import annotate_summary, VERSION as CONTEXT_VERSION
 from skills.trend.mtf import (
     MtfConfig,
     evaluate as evaluate_mtf,
@@ -118,6 +119,19 @@ def _scan_batch(batch, start, cutoff, cfg, daily_cutoff=None):
                     state="风险标的过滤",
                     reason="当前简称含ST或退市标记",
                 )
+        if daily_cutoff:
+            context_end = min(pd.Timestamp(cutoff), pd.Timestamp(daily_cutoff))
+            context_input = daily_groups.get(m["ts_code"], pd.DataFrame())
+            if not context_input.empty:
+                context_input = context_input[
+                    pd.to_datetime(context_input.bar_end) <= context_end
+                ]
+            context_daily, context_issue = adjust_prices(context_input)
+            result = annotate_summary(
+                result,
+                context_daily if not context_issue else pd.DataFrame(),
+                context_end,
+            )
         rows.append(
             {
                 **m,
@@ -241,6 +255,14 @@ def scan(
         pool.shutdown(wait=True, cancel_futures=True)
     rows.sort(key=lambda r: r["ts_code"])
     metadata = {
+        "parent_context_version": CONTEXT_VERSION,
+        "opportunity_patterns": dict(
+            Counter(
+                r.get("context_pattern") or r.get("pattern", "")
+                for r in rows
+                if r["eligible"]
+            )
+        ),
         "config": asdict(cfg),
         "cutoffs_source": available.get("snapshot_run_id", "local_latest"),
         "universe": len(members),

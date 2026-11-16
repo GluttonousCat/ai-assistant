@@ -7,6 +7,9 @@ const unknown = { key: 'unknown', label: '待识别', symbol: '·', color: '#979
 // Explicit backend classification wins over legacy phase hints. A first bullish
 // candle alone is insufficient to infer a bottom reversal.
 export function opportunityFor(source) {
+  // Versioned parent-wave annotations explain the larger context without
+  // overwriting the original local pattern/family stored in the snapshot.
+  if (Object.hasOwn(OPPORTUNITIES, source?.context_pattern || '')) return OPPORTUNITIES[source.context_pattern]
   const key = typeof source === 'string' ? source : source?.pattern || source?.family
   if (key) return Object.hasOwn(OPPORTUNITIES, key) ? OPPORTUNITIES[key] : unknown
   if (source?.setup_phase === 'pullback_resume' || source?.startup?.phase === 'pullback_resume') return OPPORTUNITIES.trend_pullback

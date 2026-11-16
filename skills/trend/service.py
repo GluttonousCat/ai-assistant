@@ -10,6 +10,11 @@ from tools.market.trend_data import (
     load_dashboard,
 )
 from skills.trend.strategy import TrendConfig, evaluated_bars
+from skills.trend.parent_context import (
+    annotate_chart,
+    CONTEXT_COLUMNS,
+    VERSION as CONTEXT_VERSION,
+)
 
 
 def dashboard(run_id=None, include_rows=True):
@@ -92,6 +97,11 @@ def stock_detail(
         ]
         if c in data.columns
     ]
+    if not issue and timeframe == "1D":
+        # Legacy single-period 60F requests keep their original I/O contract;
+        # the current MTF path already loads both native series below.
+        data = annotate_chart(data, frame)
+        cols += [c for c in CONTEXT_COLUMNS if c in data]
     clean = (
         data[cols]
         .tail(1000)
@@ -109,6 +119,7 @@ def stock_detail(
         "volume_unit": "share",
         "amount_unit": "CNY",
         "chart_averages": {"type": "sma", "windows": [8, 13, 21]},
+        "parent_context_version": CONTEXT_VERSION,
     }
 
 
@@ -141,6 +152,8 @@ def _mtf_detail(code, start, end, config, timeframe):
     data["first_watch"] = False
     data["resume_watch"] = False
     data["swing_ignition"] = False
+    if not issue:
+        data = annotate_chart(data, daily)
     cols = [
         c
         for c in [
@@ -174,6 +187,7 @@ def _mtf_detail(code, start, end, config, timeframe):
         ]
         if c in data
     ]
+    cols += [c for c in CONTEXT_COLUMNS if c in data]
     clean = (
         data[cols]
         .tail(1000)
@@ -193,6 +207,7 @@ def _mtf_detail(code, start, end, config, timeframe):
         "volume_unit": "share",
         "amount_unit": "CNY",
         "chart_averages": {"type": "sma", "windows": [cfg.fast, cfg.mid, cfg.slow]},
+        "parent_context_version": CONTEXT_VERSION,
         "version_notice": "该历史v5数值版本存在浮点走平误判，已由v5.1替代；仅供核查"
         if "slope_epsilon_atr" not in config
         else None,
