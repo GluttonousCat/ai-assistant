@@ -68,7 +68,7 @@ def _value(value, suffix=""):
 
 
 def render_html(snapshot, cards, report_day: date, minimum=60., *, part=1, total_parts=1,
-                total_count=None, preview=False, delayed=False):
+                total_count=None, preview=False, delayed=False, test=False):
     e = lambda value: escape(str(value if value is not None else "—"))
     count = len(cards) if total_count is None else total_count
     cutoff = str(snapshot["as_of"]).replace("T", " ")[:16] if snapshot else "暂无"
@@ -91,7 +91,7 @@ def render_html(snapshot, cards, report_day: date, minimum=60., *, part=1, total
 <p style="color:#b8ab99;font-size:13px;line-height:1.8;margin:0">{e(r.get('parent_trend_label', '母趋势待识别'))}{' · 回调 ' + e(r['parent_pullback_bars']) + ' 根日K' if r.get('parent_pullback_bars') else ''}<br>截止价 {_value(r.get('metrics',{}).get('close'))}　参考止损 {_value(r.get('stop_price'))}　风险距离 {_value(r.get('risk_pct'), '%')}</p>
 </td></tr><tr><td style="padding:6px 8px"><img src="cid:{card['cid']}" width="944" alt="{e(r['name'])} 日K与60F前复权K线，M8/13/21" style="display:block;width:100%;max-width:944px;height:auto;border:0"></td></tr>
 <tr><td style="padding:12px 22px 20px"><p style="color:#b4a793;font-size:13px;line-height:1.8;margin:0">筛选解释：{e(r.get('reason'))}</p><p style="color:#8d8273;font-size:12px;line-height:1.7;margin:6px 0 0">{e(checks)}</p></td></tr></table>''')
-    alert = ("预览文件 · 尚未发送" if preview else "数据更新延迟 · 暂缓发送选股名单" if delayed else
+    alert = ("测试邮件 · 使用最近已发布快照" if test else "预览文件 · 尚未发送" if preview else "数据更新延迟 · 暂缓发送选股名单" if delayed else
              "休市日报 · 沿用最近完整交易日数据" if snapshot and cutoff[:10] != report_day.isoformat() else "每日18:00 · 盘后趋势观察")
     empty = '<p style="padding:30px 0;color:#b8ab99">当天行情与快照尚未完整更新；不会将旧名单冒充今日结果。完成后将补发正式日报。</p>' if delayed else '<p style="padding:30px 0;color:#b8ab99">本期没有符合评分门槛的候选，未降低阈值或扩大筛选范围。</p>' if not cards else ''
     return f'''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Alpha Finance Radar · {report_day}</title></head>

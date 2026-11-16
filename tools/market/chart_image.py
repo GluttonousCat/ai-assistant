@@ -84,4 +84,11 @@ def render_pair(daily, minute, *, stop=None):
     buffer = BytesIO()
     canvas.print_png(buffer)
     fig.clear()
-    return buffer.getvalue()
+    # Indexed color keeps the full 1540x990 resolution while substantially
+    # reducing SMTP upload volume for these mostly flat-color financial plots.
+    from PIL import Image
+    image = Image.open(buffer).convert("RGB")
+    compact = BytesIO()
+    image.quantize(colors=128, method=Image.Quantize.MEDIANCUT,
+                   dither=Image.Dither.NONE).save(compact, format="PNG", optimize=True)
+    return compact.getvalue()

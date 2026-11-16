@@ -4,6 +4,7 @@ from email.message import EmailMessage
 from email.utils import formatdate, parseaddr
 import smtplib
 import ssl
+import time
 
 from core.config import get_config
 
@@ -33,6 +34,7 @@ class SmtpSettings:
     password: str = field(repr=False)
     sender: str
     security: str = "ssl"
+    data_timeout: float = 120
 
     @classmethod
     def load(cls):
@@ -48,8 +50,11 @@ class SmtpSettings:
         port = int(cfg.env("SMTP_PORT", "465" if security == "ssl" else "587"))
         if not 1 <= port <= 65535:
             raise MailNotConfigured("SMTP_PORT无效")
+        data_timeout = float(cfg.env("SMTP_DATA_TIMEOUT", "120"))
+        if not 30 <= data_timeout <= 300:
+            raise MailNotConfigured("SMTP_DATA_TIMEOUT必须为30~300秒")
         return cls(values["host"], port, values["user"], values["password"],
-                   address(values["from"] or values["user"]), security)
+                   address(values["from"] or values["user"]), security, data_timeout)
 
 
 def message(sender, recipient, subject, text, html, images, message_id, csv=None):
@@ -69,6 +74,42 @@ def message(sender, recipient, subject, text, html, images, message_id, csv=None
     return msg
 
 
+def _monitor_data(client, timeout):
+    """Observe protocol stages without logging mail content or AUTH commands."""
+    state = {"phase": "envelope", "uploaded_bytes": 0, "payload_bytes": 0, "final_chunk_started": False}
+    original_data, original_send = getattr(client, "data", None), getattr(client, "send", None)
+    if original_data is None or original_send is None:
+        return {"phase": "data_reply"}  # Conservative for custom transports.
+
+    def data(payload):
+        state["phase"] = "data_prompt"
+        result = original_data(payload)
+        state["phase"] = "accepted" if result[0] == 250 else "rejected"
+        return result
+
+    def write(payload):
+        if state["phase"] != "data_prompt" or not isinstance(payload, bytes):
+            return original_send(payload)
+        state["phase"] = "data_upload"
+        state["payload_bytes"] = len(payload)
+        deadline = time.monotonic() + timeout
+        for offset in range(0, len(payload), 16384):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("SMTP正文上传超时")
+            if getattr(client, "sock", None) is not None:
+                client.sock.settimeout(remaining)
+            state["final_chunk_started"] = offset+16384 >= len(payload)
+            original_send(payload[offset:offset+16384])
+            state["uploaded_bytes"] = min(offset+16384, len(payload))
+        if getattr(client, "sock", None) is not None:
+            client.sock.settimeout(timeout)
+        state["phase"] = "data_reply"
+
+    client.data, client.send = data, write
+    return state
+
+
 def send(msg, settings):
     """Return only after SMTP acceptance. Never log credentials or server text."""
     context = ssl.create_default_context()
@@ -82,6 +123,11 @@ def send(msg, settings):
             client.starttls(context=context)
             client.ehlo()
         client.login(settings.username, settings.password)
+        if getattr(client, "sock", None) is not None:
+            # Large CID image messages and server-side scanning need a longer
+            # DATA/ack deadline; connection and login retain their 30s timeout.
+            client.sock.settimeout(settings.data_timeout)
+        stage = _monitor_data(client, settings.data_timeout)
         try:
             refused = client.send_message(msg, from_addr=settings.sender, to_addrs=[str(msg["To"])])
             if refused:
@@ -91,7 +137,19 @@ def send(msg, settings):
         except smtplib.SMTPRecipientsRefused:
             raise
         except Exception as error:
-            raise DeliveryUncertain("发送确认中断，请人工核对收件箱后处理，未自动重发") from error
+            error.smtp_phase = stage["phase"]
+            error.smtp_transfer = {key: stage.get(key) for key in ("uploaded_bytes", "payload_bytes", "final_chunk_started")}
+            chain, current = [], error
+            while current is not None and len(chain) < 5:
+                chain.append(type(current).__name__)
+                current = current.__cause__ or current.__context__
+            error.smtp_error_chain = chain
+            if stage["phase"] in ("envelope", "data_prompt") or (stage["phase"] == "data_upload" and not stage.get("final_chunk_started", True)):
+                raise  # No body could have been accepted; retry is safe.
+            uncertain = DeliveryUncertain("发送确认中断，请人工核对收件箱后处理，未自动重发")
+            uncertain.phase = stage["phase"]
+            uncertain.transfer = {key: stage.get(key) for key in ("uploaded_bytes", "payload_bytes", "final_chunk_started")}
+            raise uncertain from error
     finally:
         # A disconnect during QUIT must not turn a successful DATA acceptance into
         # an apparent failure and a duplicate on the next scheduled attempt.

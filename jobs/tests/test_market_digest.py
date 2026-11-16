@@ -43,6 +43,18 @@ def test_before_18_does_not_send_or_load_credentials(monkeypatch):
     assert job.deliver_once(datetime(2026, 11, 16, 17, 59))["status"] == "not_due"
 
 
+def test_explicit_test_send_is_labeled_and_does_not_consume_daily_delivery(delivery, monkeypatch):
+    calls = []
+    monkeypatch.setattr(job, "send", lambda msg, cfg: calls.append(msg))
+    result = job.deliver_once(datetime(2026, 11, 16, 14), test=True)
+    assert result["status"] == "sent" and result["test"]
+    assert "[测试]" in str(calls[0]["Subject"])
+    assert "测试邮件" in calls[0].get_body(preferencelist=("html",)).get_content()
+    assert job.deliver_once(datetime(2026, 11, 16, 14), test=True)["already_processed"]
+    assert job.deliver_once(datetime(2026, 11, 16, 18))["status"] == "sent"
+    assert len(calls) == 2 and calls[0]["Message-ID"] != calls[1]["Message-ID"]
+
+
 def test_stale_snapshot_waits_without_sending_old_stocks(delivery, monkeypatch):
     snapshot, _ = delivery
     snapshot["as_of"] = "2026-11-13 15:00:00"
@@ -61,6 +73,28 @@ def test_lost_ack_stops_retries_instead_of_sending_twice(delivery, monkeypatch):
     assert job.deliver_once(datetime(2026, 11, 16, 18))["status"] == "uncertain"
     assert job.deliver_once(datetime(2026, 11, 16, 19))["status"] == "uncertain"
     assert len(calls) == 1
+
+
+def test_test_retry_requires_explicit_acknowledgement_and_preserves_history(delivery, monkeypatch):
+    _, root = delivery
+    attempts = []
+
+    def lost(*args):
+        attempts.append(True)
+        raise DeliveryUncertain()
+
+    monkeypatch.setattr(job, "send", lost)
+    assert job.deliver_once(datetime(2026, 11, 16, 14), test=True)["status"] == "uncertain"
+    assert job.deliver_once(datetime(2026, 11, 16, 14), test=True)["status"] == "uncertain"
+    monkeypatch.setattr(job, "send", lambda *args: attempts.append(True))
+    assert job.deliver_once(datetime(2026, 11, 16, 15), test=True, retry_uncertain_test=True)["status"] == "sent"
+    from core.local_state import read_json
+    state = read_json(next(root.rglob("delivery.json")), strict=True)
+    assert len(state["uncertain_history"]) == 1
+    assert state["uncertain_history"][0]["parts"][0]["status"] == "uncertain"
+    assert len(attempts) == 2
+    with pytest.raises(ValueError):
+        job.deliver_once(datetime(2026, 11, 16, 18), retry_uncertain_test=True)
 
 
 def test_part_retry_resumes_without_resending_accepted_parts(delivery, monkeypatch):
