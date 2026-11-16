@@ -280,3 +280,10 @@ def get_scheduler() -> DailySyncScheduler:
     if _scheduler is None:
         _scheduler = DailySyncScheduler()
     return _scheduler
+
+
+def get_digest_scheduler():
+    """Lifecycle composition entry; mail runs independently of quote/finance IO."""
+    from jobs.market_digest_scheduler import get_digest_scheduler as get_digest
+
+    return get_digest()

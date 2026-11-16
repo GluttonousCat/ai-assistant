@@ -12,7 +12,7 @@ from fastapi import FastAPI
 
 from core.config import get_config
 from core.logger import get_logger
-from jobs.scheduler import get_scheduler
+from jobs.scheduler import get_scheduler, get_digest_scheduler
 
 logger = get_logger(__name__)
 
@@ -45,6 +45,12 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"增量调度器启动失败 (非致命): {e}")
 
+    # Independent of the 17:00 job, whose financial tail can run beyond 18:00.
+    try:
+        get_digest_scheduler().start()
+    except Exception as e:
+        logger.warning("趋势邮件调度器启动失败: %s", type(e).__name__)
+
     # Start the zsxq report crawler scheduler (daily configured-time fetch + sync +
     # LLM extraction, with a startup catch-up pass as a safety net)
     if config.get("zsxq_schedule.enabled", True):
@@ -62,6 +68,10 @@ async def lifespan(app: FastAPI):
     yield
 
     # Stop schedulers
+    try:
+        await get_digest_scheduler().stop()
+    except Exception:
+        pass
     try:
         await get_scheduler().stop()
     except Exception:
