@@ -8,6 +8,7 @@ from tools.market.trend_data import (
     adjusted_daily_bars,
     adjust_prices,
     load_dashboard,
+    refresh_freshness,
 )
 from skills.trend.strategy import TrendConfig, evaluated_bars
 from skills.trend.parent_context import (
@@ -23,7 +24,13 @@ def dashboard(run_id=None, include_rows=True):
         from skills.trend.mtf import DUAL_VERSION
 
         snapshot = {**snapshot, "latest_rules_version": DUAL_VERSION}
+        if include_rows:
+            snapshot["freshness"] = refresh_freshness(snapshot)
     return snapshot
+
+
+def freshness():
+    return refresh_freshness()
 
 
 def stock_detail(

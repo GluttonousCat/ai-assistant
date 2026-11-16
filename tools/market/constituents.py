@@ -35,3 +35,14 @@ def fetch_suspensions(codes: list[str], day: date) -> list[dict]:
         frame = pro.suspend_d(ts_code=code, trade_date=day.strftime("%Y%m%d"))
         result.extend(frame.to_dict(orient="records"))
     return result
+
+
+def full_day_suspensions(day: date) -> set[str]:
+    """One market-wide request; intraday halts are not whole-day exemptions."""
+    import tushare as ts
+    pro = ts.pro_api(get_config().tushare_token, timeout=20)
+    frame = pro.suspend_d(trade_date=day.strftime("%Y%m%d"), suspend_type="S")
+    if frame is None or frame.empty:
+        return set()
+    whole_day = frame.suspend_timing.isna() | frame.suspend_timing.eq("")
+    return set(frame.loc[whole_day & frame.suspend_type.eq("S"), "ts_code"])

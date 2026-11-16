@@ -153,6 +153,7 @@ def scan(
     cfg: TrendConfig = TrendConfig(),
     workers: int = 2,
     batch_size: int = 100,
+    progress=None,
 ):
     if type(batch_size) is not int or not 1 <= batch_size <= 100:
         raise ValueError("batch_size必须为1到100")
@@ -235,6 +236,8 @@ def scan(
     if not 1 <= workers <= 4:
         raise ValueError("workers必须在1到4之间")
     rows = []
+    if progress:
+        progress(0, len(members))
     pool = ThreadPoolExecutor(max_workers=workers)
     try:
         futures = [
@@ -250,6 +253,8 @@ def scan(
         ]
         for future in as_completed(futures):
             rows.extend(future.result())
+            if progress:
+                progress(len(rows), len(members))
             logger.info("60F筛选 %s/%s", len(rows), len(members))
     finally:
         pool.shutdown(wait=True, cancel_futures=True)

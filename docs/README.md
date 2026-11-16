@@ -39,7 +39,7 @@ docs/
 | 数据库命名与兼容迁移 | [ops/schema_naming.md](ops/schema_naming.md) |
 | 模块拆分、合并与依赖收敛 | [ops/module_boundaries.md](ops/module_boundaries.md) |
 | 分钟行情、非ST扩池补齐、新闻快照和指数成分股池 | [ops/data_sources.md](ops/data_sources.md) |
-| 每天17:00采集日线与重启补漏 | [ops/daily_sync.md](ops/daily_sync.md) |
+| 每天17:00更新日K、60F与看板 / 重启补漏 | [ops/daily_sync.md](ops/daily_sync.md) |
 | 股票行情、日K母趋势与60F局部触发、反转/回调分类标注、板块筛选及历史兼容 | [frontend/stock_dashboard.md](frontend/stock_dashboard.md) |
 | 主板60F策略、指数相对强弱因果学习、442/532分批、风险对照及2026回测偏差 | [agents/quant_backtesting.md](agents/quant_backtesting.md) |
 | 改登录/注册逻辑 | [frontend/login.md](frontend/login.md) |

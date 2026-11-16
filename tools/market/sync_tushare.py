@@ -90,7 +90,7 @@ def get_whitelist(pro=None, use_cache: bool = True,
     # PG cache (the stock_basic table itself is the whitelist; no status filter needed)
     try:
         with PgClient() as pg:
-            if pg.table_exists("stock", "stock_basic"):
+            if use_cache and pg.table_exists("stock", "stock_basic"):
                 rows = pg.fetch_all(
                     "SELECT ts_code FROM stock.stock_basic"
                 )
@@ -224,6 +224,9 @@ def backfill_table(
     fields: Sequence[str],
     start: date,
     end: date,
+    *,
+    resume: bool = True,
+    allowed_codes: Optional[Iterable[str]] = None,
 ) -> int:
     """
     Generic backfiller: fetch per trading day -> batch write to PG
@@ -244,7 +247,9 @@ def backfill_table(
         actual_max_d = actual_max["m"] if actual_max and actual_max["m"] else None
 
     start_for_sync = start
-    if actual_max_d is not None:
+    if not resume:
+        logger.info("重叠回补 %s: %s~%s", table, start, end)
+    elif actual_max_d is not None:
         if actual_max_d >= end:
             logger.info(
                 f"断点续传: 表 {table} 区间内已有数据至 {actual_max_d} "
@@ -287,7 +292,8 @@ def backfill_table(
         if df is None or df.empty:
             continue
 
-        df = filter_allowed_codes(df)
+        df = (df[df["ts_code"].isin(allowed_codes)]
+              if allowed_codes is not None else filter_allowed_codes(df))
         if df.empty:
             continue
 
@@ -384,9 +390,10 @@ class TusharePgSyncer:
         os.environ.setdefault("NO_PROXY", "*")
 
     def run(self, start=None, end=None,
-            tables: Optional[Iterable[str]] = None) -> Dict[str, int]:
+            tables: Optional[Iterable[str]] = None, *, resume: bool = True,
+            allowed_codes: Optional[Iterable[str]] = None) -> Dict[str, int]:
         import tushare as ts
-        pro = ts.pro_api(self.config.tushare_token)
+        pro = ts.pro_api(self.config.tushare_token, timeout=20)
 
         start = _to_date(start) if start else date(2000, 1, 1)
         end = _to_date(end) if end else date.today()
@@ -397,7 +404,8 @@ class TusharePgSyncer:
             init_schema(pg)
 
         # 2. Whitelist (first run fetches remotely and persists to PG; later runs read PG directly)
-        codes = get_whitelist(pro, use_cache=False, refresh_remote=True)
+        codes = (set(allowed_codes) if allowed_codes is not None else
+                 get_whitelist(pro, use_cache=False, refresh_remote=True))
         logger.info(f"白名单股票数: {len(codes)}")
 
         # 3. Trading calendar
@@ -413,7 +421,8 @@ class TusharePgSyncer:
                 continue
             api_name, keys, fields = TABLE_CONFIG[t]
             result[t] = backfill_table(
-                pro, t, api_name, keys, fields, start, end
+                pro, t, api_name, keys, fields, start, end, resume=resume,
+                allowed_codes=codes,
             )
 
         return result

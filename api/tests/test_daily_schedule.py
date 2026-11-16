@@ -35,16 +35,16 @@ def test_startup_before_17_does_not_claim_today_is_due(monkeypatch):
 
 def test_startup_database_read_is_off_event_loop(monkeypatch):
     import threading
-    from tools.market import queries
+    from jobs import refresh_market
 
     main = threading.get_ident()
     seen = []
 
-    def latest():
+    def missing(target):
         seen.append(threading.get_ident())
-        return date(2026, 11, 12)
+        return False
 
-    monkeypatch.setattr(queries, "latest_daily_date", latest)
+    monkeypatch.setattr(refresh_market, "needs_refresh", missing)
     monkeypatch.setattr(
         scheduler.DailySyncScheduler,
         "_expected_latest_trade_date",
@@ -54,14 +54,15 @@ def test_startup_database_read_is_off_event_loop(monkeypatch):
     assert seen and seen[0] != main
 
 
-def test_unexpected_sync_failure_does_not_kill_the_schedule():
+def test_unexpected_sync_failure_does_not_kill_the_schedule(monkeypatch):
+    monkeypatch.setattr("jobs.refresh_market.needs_refresh", lambda target: True)
     job = scheduler.DailySyncScheduler()
     calls = []
 
     async def skip_catchup():
         pass
 
-    async def fail_then_stop():
+    async def fail_then_stop(**kwargs):
         calls.append(True)
         if len(calls) == 1:
             raise RuntimeError("temporary source failure")
@@ -72,3 +73,99 @@ def test_unexpected_sync_failure_does_not_kill_the_schedule():
     job._run_sync = fail_then_stop
     asyncio.run(asyncio.wait_for(job._loop(), timeout=2))
     assert len(calls) == 2
+
+
+def test_startup_repairs_minutes_or_snapshot_even_when_daily_is_current(monkeypatch):
+    from jobs import refresh_market
+    monkeypatch.setattr(refresh_market, "needs_refresh", lambda target: True)
+    monkeypatch.setattr(scheduler.DailySyncScheduler, "_expected_latest_trade_date",
+                        staticmethod(lambda: date(2026, 11, 13)))
+    job = scheduler.DailySyncScheduler()
+    seen = []
+
+    async def sync(**kwargs):
+        seen.append(kwargs)
+
+    job._run_sync = sync
+    asyncio.run(job._catchup_if_missed())
+    assert seen == [{"include_financial": False, "end": date(2026, 11, 13)}]
+
+
+def test_retry_is_bounded_and_success_clears_it():
+    job = scheduler.DailySyncScheduler()
+    target = date(2026, 11, 13)
+    for _ in range(3):
+        job._record_retry(target, {"status": "error"})
+        assert job._retry_at is not None
+    job._record_retry(target, {"status": "error"})
+    assert job._retry_at is None
+    job._record_retry(target, {"status": "complete"})
+    assert job._retry_at is None and job._retry_count == 0
+
+
+def test_manual_trigger_queues_instead_of_waiting_for_provider_io():
+    async def scenario():
+        job = scheduler.DailySyncScheduler()
+        gate = asyncio.Event()
+        job._run_sync = gate.wait
+        assert await job.trigger_now() == {"status": "queued"}
+        assert await job.trigger_now() == {"status": "busy"}
+        gate.set()
+        await job._manual_task
+
+    asyncio.run(scenario())
+
+
+def test_market_pipeline_runs_off_loop_before_financials(monkeypatch):
+    import threading
+    from jobs import refresh_market
+    main = threading.get_ident()
+    seen = []
+
+    def refresh(target, **kwargs):
+        seen.append(("market", threading.get_ident()))
+        return {"status": "complete"}
+
+    def finance(*args):
+        seen.append(("financial", threading.get_ident()))
+        return {}
+
+    monkeypatch.setattr(refresh_market, "refresh", refresh)
+    monkeypatch.setattr(scheduler, "_run_financial_incremental", finance)
+    monkeypatch.setattr(scheduler, "_run_dividend_daily", lambda *a: 0)
+    monkeypatch.setattr(scheduler, "_run_disclosure_daily", lambda *a: 0)
+    result = asyncio.run(scheduler.DailySyncScheduler()._run_sync(end=date(2026, 11, 13)))
+    assert result["status"] == "complete"
+    assert [name for name, thread in seen] == ["market", "financial"]
+    assert all(thread != main for name, thread in seen)
+
+
+def test_retry_skips_a_pipeline_already_completed_by_another_process(monkeypatch):
+    job = scheduler.DailySyncScheduler()
+    job._retry_at = scheduler._market_time()
+
+    async def skip():
+        pass
+
+    def no_longer_missing(target):
+        job._stop_event.set()
+        return False
+
+    async def unexpected(**kwargs):
+        raise AssertionError("completed CLI work must not rescan")
+
+    monkeypatch.setattr("jobs.refresh_market.needs_refresh", no_longer_missing)
+    job._catchup_if_missed = skip
+    job._seconds_until = lambda target: 0
+    job._run_sync = unexpected
+    asyncio.run(asyncio.wait_for(job._loop(), timeout=2))
+
+
+def test_long_catchup_crossing_today_slot_does_not_skip_today(monkeypatch):
+    monkeypatch.setattr("jobs.refresh_market.refresh", lambda *a, **kw: {"status": "complete"})
+    monkeypatch.setattr(scheduler.DailySyncScheduler, "_expected_latest_trade_date",
+                        staticmethod(lambda: date(2026, 11, 16)))
+    job = scheduler.DailySyncScheduler()
+    asyncio.run(job._run_sync(include_financial=False, end=date(2026, 11, 13)))
+    assert job._retry_at is not None and job._retry_target == date(2026, 11, 16)
+    assert job._retry_count == 0

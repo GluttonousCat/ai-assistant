@@ -13,6 +13,30 @@ def latest_daily_date():
         return row["latest"] if row else None
 
 
+def daily_coverage(codes, day):
+    """Exact-date counts, including absent symbols; do not infer suspensions."""
+    with PgClient(read_only=True) as pg:
+        rows = pg.fetch_all(
+            """SELECT u.ts_code,d.vol,a.adj_factor,k.ts_code AS basic_code
+            FROM unnest(%s::text[]) AS u(ts_code)
+            LEFT JOIN stock.daily d ON d.ts_code=u.ts_code AND d.trade_date=%s
+            LEFT JOIN stock.adj_factor a ON a.ts_code=u.ts_code AND a.trade_date=%s
+            LEFT JOIN stock.daily_basic k ON k.ts_code=u.ts_code AND k.trade_date=%s""",
+            (codes, day, day, day),
+        )
+    active = [r["ts_code"] for r in rows if r["vol"] is not None and r["vol"] > 0]
+    active_set = set(active)
+    return {
+        "universe": len(codes),
+        "active": active,
+        "daily_absent": [r["ts_code"] for r in rows if r["vol"] is None],
+        "factor_absent": [r["ts_code"] for r in rows if r["ts_code"] in active_set
+                          and (r["adj_factor"] is None or r["adj_factor"] <= 0)],
+        "basic_absent": [r["ts_code"] for r in rows if r["vol"] is not None and r["vol"] > 0
+                         and r["basic_code"] is None],
+    }
+
+
 def save_memberships(frame: pd.DataFrame) -> None:
     with PgClient() as pg:
         pg.upsert_df(

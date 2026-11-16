@@ -224,7 +224,7 @@ BaoStock已加入`pyproject.toml`的可选依赖`market`组；AKShare沿用项�
 
 - API：`GET /api/v1/market/bars?code=000001.SZ&period=60&start=2026-01-01&end=2026-11-12`，沿用全局JWT，查询PG、不访问供应商。
 - MCP/Agent：`query_intraday(stock, start, end, period=60, limit=1000)`，只读；分钟请求不走日线快车道。
-- 本轮未开启自动每日采集；后续增量调用需使用新的end日期，并按交易日与停牌情况复核，不把旧区间检查点当新数据。
+- 11月12日首轮入库未开启每日采集；11月16日起已接入交易日17:00日K→60F→看板自动链路，逐股审计、启动补漏与失败重试见[行情定时更新](daily_sync.md)。旧区间检查点不代表新交易日已齐。
 - 详细采集清单与最终审计在 `output/market/intraday_import/`；不把数百万行原始行情提交进Git。
 
 本轮最终代码验收：382项Python测试通过，分层检查无新增违规；真实stdio MCP调用query_intraday读取BJ分钟数据通过。人工可读验收清单在 `output/market/intraday_import/VERIFICATION.md`。

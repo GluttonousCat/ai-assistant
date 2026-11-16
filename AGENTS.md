@@ -42,7 +42,8 @@ jobs/        annotate_trend_context(离线派生母趋势/局部触发快照，�
              sync_intraday(2026年60F入库/五指数成分并集/断点续传) / check_boundaries(分层检查) /
              backtest_mtf(双周期日K入场/三退出方案开发段选择与分段验证) / backtest_quant(旧v4两周期三策略对照) / sync_backtest_inputs(原生日K查缺/真实限价/基准,不推水位线) /
              scan_trend(全池离线筛票/原子发布) / repair_trend_factors(精确补缺真实复权因子,不推进日线水位线) /
-             任务层一体: scheduler(Tushare 17:00 Asia/Shanghai,交易日) / zsxq_scheduler(爬虫 00:00/12:00) /
+             refresh_market(日K/因子→60F逐股审计→沿用参数重算快照,同池重叠回补/OS锁/持久进度) /
+             任务层一体: scheduler(17:00 Asia/Shanghai,交易日;启动三阶段补漏,失败30分钟重试最多3次) / zsxq_scheduler(爬虫 00:00/12:00) /
              管线入口(daily_fetch_zxsq, sync_zxsq_to_pg, merge_report_duplicates, smoke) /
              health_sentinel(独立心跳哨兵: API探活+WS广播+自动拉起, 8209) /
              wecom_bot(企微智能机器人 wss 长连接桥接→本地Agent, 见 docs/agents/wecom_bot.md)
@@ -183,7 +184,7 @@ vision=qwen3.8-flash（deepseek 不收图片）。**思考开关由 `llm.enable_
 | 安全 | [docs/ops/security.md](docs/ops/security.md) | 分层防护/事件审计/加固清单 |
 | 结构优化方案 | [docs/ops/module_boundaries.md](docs/ops/module_boundaries.md) | 模块化单体/仓储收敛/DDL与Agent拆分/旧入口兼容；DDL/路由/执行/认证及财务查询已首轮收敛；遗留依赖登记并阻止新增 |
 | 行情与新闻选型 | [docs/ops/data_sources.md](docs/ops/data_sources.md) | 五组指数成分池/免费盘后分钟与付费实时/新闻快照；含价格/探测记录；2026年60F五指数并集已入库，新闻待接入 |
-| 日线定时采集 | [docs/ops/daily_sync.md](docs/ops/daily_sync.md) | 交易日上海时间17:00/跨时区/重启补漏/5交易日重叠回补；分钟采集与筛票独立 |
+| 日线定时采集 | [docs/ops/daily_sync.md](docs/ops/daily_sync.md) | 交易日上海时间17:00/日K→60F→看板/启动补漏/5交易日重叠回补/逐股审计与失败重试 |
 | 数据处理 | [docs/ops/data_process.md](docs/ops/data_process.md) | 历史：同步全流程 |
 | 爬虫 | [docs/ops/spider.md](docs/ops/spider.md) | 历史：反检测设计 |
 | 产品全貌 | [docs/PRD.md](docs/PRD.md) | v1.0 需求与架构（部分过时，以本文件为准） |

@@ -288,7 +288,7 @@ async def sync_today():
     """Manually trigger the daily job scheduled at 17:00 Asia/Shanghai."""
     from jobs.scheduler import get_scheduler
     result = await get_scheduler().trigger_now()
-    return {"status": "done", "result": result}
+    return {"status": result["status"], "result": result}
 
 
 @router.get("/admin/scheduler-status", tags=["admin"], dependencies=[Depends(require_admin)])
@@ -302,4 +302,6 @@ async def scheduler_status():
         "last_result": s.last_result,
         "next_run": s._next_run_time().isoformat(),
         "time_zone": "Asia/Shanghai",
+        "updating": s._run_lock.locked(),
+        "retry_count": s._retry_count,
     }

@@ -42,7 +42,7 @@ def test_stock_chart_is_pinned_to_requested_snapshot(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "path", ["/api/v1/market/dashboard", "/api/v1/market/dashboard/600000.SH"]
+    "path", ["/api/v1/market/dashboard", "/api/v1/market/dashboard/600000.SH", "/api/v1/market/freshness"]
 )
 def test_global_auth_covers_dashboard(path):
     app = FastAPI()

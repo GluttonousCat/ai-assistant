@@ -6,7 +6,8 @@ Schedule rules:
 - Runs on every trading day at 17:00 Asia/Shanghai.
 - Incremental: last 5 trading days of quotes (daily/daily_basic/adj_factor) + current
   week's financials
-- Idempotent: safe to re-run (checkpoint resume + upsert)
+- Native 60F gap repair, coverage audit and atomic trend snapshot publication
+- Idempotent overlap upserts; failures retry every 30 minutes, up to three times
 
 Design:
 - asyncio task attached to the FastAPI lifespan
@@ -34,8 +35,6 @@ SYNC_HOUR = int(_cfg().get("schedule.sync_hour", 17))
 SYNC_MINUTE = int(_cfg().get("schedule.sync_minute", 0))
 if not 0 <= SYNC_HOUR <= 23 or not 0 <= SYNC_MINUTE <= 59:
     raise ValueError("schedule.sync_hour/sync_minute超出合法范围")
-# Incremental lookback window (trading days)
-BACKFILL_DAYS = 5
 # Financial-report announcement lookback (calendar days; covers weekend/holiday
 # announcement pile-ups)
 FIN_BACKFILL_DAYS = 10
@@ -77,9 +76,14 @@ class DailySyncScheduler:
 
     def __init__(self):
         self._task: Optional[asyncio.Task] = None
+        self._manual_task: Optional[asyncio.Task] = None
         self._stop_event = asyncio.Event()
         self.last_run: Optional[datetime] = None
         self.last_result: Optional[dict] = None
+        self._run_lock = asyncio.Lock()
+        self._retry_at: Optional[datetime] = None
+        self._retry_count = 0
+        self._retry_target: Optional[date] = None
 
     def _next_run_time(self, now: Optional[datetime] = None) -> datetime:
         """Next trading-day slot in Shanghai time, including weekends/holidays."""
@@ -91,6 +95,8 @@ class DailySyncScheduler:
             target += timedelta(days=1)
         while not is_trading_day(target.date()):
             target += timedelta(days=1)
+        if self._retry_at is not None:
+            return min(target, self._retry_at)
         return target
 
     def _seconds_until(self, target: datetime) -> float:
@@ -102,33 +108,34 @@ class DailySyncScheduler:
         start: Optional[date] = None,
         end: Optional[date] = None,
     ) -> dict:
-        """Run one incremental sync (quotes + optional financial announcements)."""
-        logger.info("开始每日增量同步")
-        from tools.market.sync_tushare import TusharePgSyncer
+        """Serialize scheduled/manual runs; IO stays off the HTTP event loop."""
+        async with self._run_lock:
+            return await self._run_sync_locked(include_financial, start, end)
 
-        end = end or _market_time().date()
-        # Look back N trading days (or use the caller-specified start)
-        if start is None:
-            start = end
-            back = 0
-            while back < BACKFILL_DAYS:
-                start -= timedelta(days=1)
-                if is_trading_day(start):
-                    back += 1
+    def _record_retry(self, end, result):
+        if self._retry_target != end:
+            self._retry_target, self._retry_count = end, 0
+        self._retry_at = None
+        if result.get("status") != "complete":
+            self._retry_count += 1
+            if self._retry_count <= 3:
+                self._retry_at = _market_time() + timedelta(minutes=30)
+                logger.warning("行情未完成，30分钟后第%s次重试", self._retry_count)
+        else:
+            self._retry_count = 0
 
-        syncer = TusharePgSyncer()
+    async def _run_sync_locked(self, include_financial=True, start=None, end=None):
+        from jobs.refresh_market import refresh
+
+        end = end or self._expected_latest_trade_date()
+        if end is None:
+            raise ValueError("无法确定已完成交易日")
         try:
-            # One run covers multiple tables (internally reuses
-            # connection/whitelist/calendar); blocking IO goes to the thread pool
-            result = await asyncio.to_thread(
-                syncer.run,
-                start,
-                end,
-                ["daily", "daily_basic", "adj_factor"],
-            )
-        except Exception as e:
-            logger.error(f"增量同步异常: {e}")
-            result = {"error": str(e)}
+            result = await asyncio.to_thread(refresh, end, start=start)
+        except Exception as error:
+            logger.exception("行情更新异常")
+            result = {"status": "error", "error": str(error)}
+        self._record_retry(end, result)
 
         # Financial-report increment: pull reports announced within the last
         # FIN_BACKFILL_DAYS days (run in the thread pool, not blocking the event loop)
@@ -166,6 +173,12 @@ class DailySyncScheduler:
                 if isinstance(result, dict):
                     result["disclosure_date"] = {"error": str(e)}
 
+        # A slow startup catch-up or financial sync may cross today's slot.
+        # Catch the newly due session now instead of sleeping until tomorrow.
+        due = self._expected_latest_trade_date()
+        if due is not None and due > end:
+            self._retry_at = _market_time()
+            self._retry_target, self._retry_count = due, 0
         self.last_run = _market_time()
         self.last_result = result
         logger.info(f"每日增量同步完成: {result}")
@@ -178,72 +191,36 @@ class DailySyncScheduler:
         - At/after the configured market slot on a trading day -> today
         - Otherwise                     -> previous trading day
         """
-        now = _market_time(now)
-        d = now.date()
-        if is_trading_day(d) and (now.hour, now.minute) >= (SYNC_HOUR, SYNC_MINUTE):
-            return d
-        d -= timedelta(days=1)
-        for _ in range(20):  # covers the longest holidays
-            if is_trading_day(d):
-                return d
-            d -= timedelta(days=1)
-        return None
+        from tools.market.refresh_clock import expected_date
+
+        return expected_date(_market_time(now), SYNC_HOUR, SYNC_MINUTE)
 
     async def _catchup_if_missed(self):
-        """
-        Startup self-check catch-up: whenever started, compare the 'expected latest
-        trading date' with the actual latest daily row in the DB; if there is a gap,
-        backfill it immediately (covers: downtime during the scheduled slot /
-        weekend restarts / post-holiday restarts / missed runs due to PG being
-        unreachable — all scenarios). Quotes only (minutes-level work); financials
-        are left to the routine scheduled task.
-        """
+        """Check quotes, minute coverage and published snapshot after a restart."""
         expected = self._expected_latest_trade_date()
         if expected is None:
             logger.warning("无法计算应有最新交易日, 跳过启动自检")
             return
 
         try:
-            from tools.market.queries import latest_daily_date
+            from jobs.refresh_market import needs_refresh
 
-            latest = await asyncio.to_thread(latest_daily_date)
-        except Exception as e:
-            logger.error(f"启动自检查询失败 (PG 不可达?): {e}")
+            missing = await asyncio.to_thread(needs_refresh, expected)
+        except Exception as error:
+            logger.exception("启动行情自检失败")
+            self._record_retry(expected, {"status": "error", "error": str(error)})
             return
-
-        if latest is not None and latest >= expected:
-            logger.info(
-                f"启动自检: 行情已最新 (daily 至 {latest} >= 应有 {expected}), 无需补漏"
-            )
+        if not missing:
+            logger.info("启动自检: 日K/60F/快照已完成至 %s", expected)
             return
-
-        # Gap start: the day after the DB's latest; with no data, look back 10
-        # trading days
-        if latest is not None:
-            start = latest + timedelta(days=1)
-        else:
-            start = expected
-            back = 0
-            while back < 10:
-                start -= timedelta(days=1)
-                if is_trading_day(start):
-                    back += 1
-
-        logger.info(
-            f"启动自检: 发现行情缺口 (库内最新 {latest}, 应有 {expected}), "
-            f"立即补齐 {start} ~ {expected}"
-        )
-        try:
-            await self._run_sync(include_financial=False, start=start, end=expected)
-        except Exception as e:
-            logger.error(f"启动补漏失败: {e}")
+        logger.info("启动自检: 补齐日K/60F/快照至 %s", expected)
+        await self._run_sync(include_financial=False, end=expected)
 
     async def _loop(self):
         """Scheduling loop."""
         logger.info(f"增量同步调度器已启动 (每日 {SYNC_HOUR}:{SYNC_MINUTE:02d})")
 
-        # Startup self-check: compare expected latest trading date with the DB;
-        # backfill any gap immediately (works at any start time, weekends, post-holiday)
+        # Check all market stages; a fresh daily MAX cannot hide stale minutes.
         await self._catchup_if_missed()
 
         while not self._stop_event.is_set():
@@ -255,9 +232,19 @@ class DailySyncScheduler:
                 break
             except asyncio.TimeoutError:
                 try:
-                    await self._run_sync()
+                    retry = self._retry_at is not None and next_run == self._retry_at
+                    self._retry_at = None
+                    if retry:
+                        # A concurrent CLI may have finished while we waited.
+                        from jobs.refresh_market import needs_refresh
+                        expected = self._expected_latest_trade_date()
+                        if expected and await asyncio.to_thread(needs_refresh, expected):
+                            await self._run_sync(include_financial=False)
+                    else:
+                        await self._run_sync()
                 except Exception:
-                    logger.exception("定时增量同步失败；保留调度任务，下一交易日继续")
+                    logger.exception("定时增量同步失败；保留调度任务")
+                    self._record_retry(self._expected_latest_trade_date(), {"status": "error"})
 
     def start(self):
         """Start the scheduler task."""
@@ -277,8 +264,11 @@ class DailySyncScheduler:
         logger.info("每日增量调度器已停止")
 
     async def trigger_now(self) -> dict:
-        """Manually trigger one sync immediately."""
-        return await self._run_sync()
+        """Queue a background job; the admin HTTP request never fetches minutes."""
+        if self._run_lock.locked() or (self._manual_task and not self._manual_task.done()):
+            return {"status": "busy"}
+        self._manual_task = asyncio.create_task(self._run_sync())
+        return {"status": "queued"}
 
 
 # Singleton

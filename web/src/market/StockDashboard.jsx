@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { platformApi } from '../platformApi'
 import TrendChart from './TrendChart'
+import MarketFreshness from './MarketFreshness'
 import useStockChart from './useStockChart'
 import OpportunityBadge from '../OpportunityBadge'
 import { opportunityFor } from '../opportunities'
@@ -14,6 +15,7 @@ const EMPTY_BARS = []
 
 export default function StockDashboard({ user }) {
   const [snapshot, setSnapshot] = useState(null)
+  const [freshness, setFreshness] = useState(null)
   const mtfMode = snapshot?.metadata?.config?.selection_mode === 'mtf'
   const riskMode = !!snapshot?.metadata?.config?.risk_setups
   const freshMode = !!snapshot?.metadata?.config?.fresh_reversal
@@ -44,6 +46,28 @@ export default function StockDashboard({ user }) {
     finally { setBusy(false) }
   }
   useEffect(() => { let active = true; platformApi.marketDashboard().then((r) => { if (active) setSnapshot(r) }).catch((e) => { if (active) setError(e.message) }).finally(() => { if (active) setBusy(false) }); return () => { active = false } }, [])
+  useEffect(() => {
+    let active = true
+    let pending = false
+    setFreshness(snapshot?.freshness || null)
+    const poll = async () => {
+      if (pending || document.visibilityState === 'hidden') return
+      pending = true
+      try {
+        const next = await platformApi.marketFreshness()
+        if (!active) return
+        setFreshness(next)
+        if (next.snapshot_run_id && next.snapshot_run_id !== snapshot?.run_id) {
+          const updated = await platformApi.marketDashboard()
+          if (active) setSnapshot(updated)
+        }
+      } catch { /* Keep the last readable snapshot during transient outages. */ }
+      finally { pending = false }
+    }
+    const timer = setInterval(poll, 60000)
+    document.addEventListener('visibilitychange', poll)
+    return () => { active = false; clearInterval(timer); document.removeEventListener('visibilitychange', poll) }
+  }, [snapshot?.run_id, snapshot?.freshness])
   const rows = useMemo(() => {
     const search = query.trim().toUpperCase()
     return (snapshot?.data || []).filter((r) => (!search || `${r.name}${r.ts_code}`.toUpperCase().includes(search))
@@ -85,8 +109,9 @@ export default function StockDashboard({ user }) {
     </header>
     {error && <div className="trend-notice error" role="alert">{error}<button className="btn ghost" onClick={load}>重试</button></div>}
     {busy && !snapshot && <div className="trend-placeholder">正在读取行情与筛选结果…</div>}
+    <MarketFreshness value={freshness} />
     {snapshot && <>
-      {snapshot.latest_rules_version && snapshot.version !== snapshot.latest_rules_version && <div className="trend-notice">当前展示的是上一版筛选快照；新回调与缺口规则的全池重算尚未发布。历史结果保持原有解释。</div>}
+      {snapshot.latest_rules_version && snapshot.version !== snapshot.latest_rules_version && <div className="trend-notice">当前沿用已发布的策略规则，新版规则尚未启用。行情更新会重算现有规则，数据日期以更新状态为准。</div>}
       <div className="trend-cards">
         <div><span>扫描股票池</span><strong>{meta.universe.toLocaleString()}<small>只</small></strong><p>{freshMode ? '非ST上市股票 · 按板块区分' : '五指数成分去重'}</p></div>
         <div className="trend-card-gold"><span>{mtfMode ? '日K入场候选' : dualMode ? '两类机会确认' : earlyMode ? '启动第2—4阳候选' : '规则通过'}</span><strong>{viewMeta.eligible}<small>只</small></strong><p>{meta.opportunity_patterns ? `趋势回调 ${meta.opportunity_patterns.trend_pullback || 0} · 反转候选 ${meta.opportunity_patterns.base_rebound || 0}` : riskMode ? `首次回调 ${viewMeta.patterns?.["趋势首次回调"] || 0} · 缺口 ${viewMeta.patterns?.["低位缺口守稳"] || 0}` : freshMode ? `阴跌 ${viewMeta.patterns?.["阴跌反转"] || 0} · 深坑 ${viewMeta.patterns?.["深坑反转"] || 0}` : dualMode ? `趋势回调 ${viewMeta.patterns?.['趋势回调'] || 0} · 修复 ${viewMeta.patterns?.[mtfMode ? '止跌修复' : '阴跌/砸坑反弹'] || 0}` : earlyMode ? `2阳 ${viewMeta.states['启动第2阳'] || 0} · 3阳 ${viewMeta.states['启动第3阳'] || 0} · 4阳 ${viewMeta.states['启动第4阳'] || 0}` : `突破 ${viewMeta.states['突破候选'] || 0} · 回踩 ${viewMeta.states['回踩候选'] || 0}`}</p></div>

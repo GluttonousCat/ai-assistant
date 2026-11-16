@@ -6,9 +6,15 @@ from uuid import UUID
 from typing import Literal
 from fastapi import APIRouter, HTTPException, Query
 from tools.market.queries import query_intraday
-from skills.trend.service import dashboard, stock_detail
+from skills.trend.service import dashboard, stock_detail, freshness
 
 market_router = APIRouter(prefix="/api/v1/market", tags=["market"])
+
+
+@market_router.get("/freshness")
+async def market_freshness():
+    """Warehouse, published cutoff and background progress; never fetch providers."""
+    return await asyncio.to_thread(freshness)
 
 
 @market_router.get("/dashboard")
