@@ -100,6 +100,9 @@ def test_test_retry_requires_explicit_acknowledgement_and_preserves_history(deli
 def test_part_retry_resumes_without_resending_accepted_parts(delivery, monkeypatch):
     snapshot, root = delivery
     snapshot["data"] = [row(f"{n:06d}.SH") for n in range(21)]
+    complete, _ = job._messages(snapshot, job.stock_cards(snapshot, snapshot["data"]),
+                                 date(2026, 11, 16), 60., "reader@example.com", "sender@example.com")
+    monkeypatch.setattr(job, "MAX_MESSAGE_BYTES", len(complete[0][1]) * 3 // 5)
     attempted = []
 
     def send(msg, cfg):
@@ -115,6 +118,56 @@ def test_part_retry_resumes_without_resending_accepted_parts(delivery, monkeypat
         msg = BytesParser(policy=policy.default).parsebytes(file.read_bytes())
         assert len(file.read_bytes()) <= job.MAX_MESSAGE_BYTES
         assert msg["To"] == "reader@example.com"
+
+
+def test_47_candidates_fit_in_one_daily_email(delivery, monkeypatch):
+    snapshot, _ = delivery
+    snapshot["data"] = [row(f"{n:06d}.SH") for n in range(47)]
+    sent = []
+    monkeypatch.setattr(job, "send", lambda msg, cfg: sent.append(msg))
+    assert job.deliver_once(datetime(2026, 11, 16, 18))["count"] == 47
+    assert len(sent) == 1
+    assert "候选 47只" in str(sent[0]["Subject"])
+    assert "(1/" not in str(sent[0]["Subject"])
+    assert "第1/1部分" not in sent[0].get_body(preferencelist=("html",)).get_content()
+    images = [p for p in sent[0].walk() if p.get_content_type() == "image/png"]
+    assert len(images) == len({str(p["Content-ID"]) for p in images}) == 47
+
+
+def test_size_split_labels_each_subset_and_preserves_every_stock(delivery, monkeypatch):
+    snapshot, _ = delivery
+    snapshot["data"] = [row(f"{n:06d}.SH") for n in range(47)]
+    cards = job.stock_cards(snapshot, snapshot["data"])
+    complete, _ = job._messages(snapshot, cards, date(2026, 11, 16), 60.,
+                                "reader@example.com", "sender@example.com")
+    monkeypatch.setattr(job, "MAX_MESSAGE_BYTES", len(complete[0][1]) * 3 // 5)
+    built, groups = job._messages(snapshot, cards, date(2026, 11, 16), 60.,
+                                  "reader@example.com", "sender@example.com")
+    assert len(built) == len(groups) == 2
+    cids, first = [], 1
+    for number, ((html, payload), group) in enumerate(zip(built, groups), 1):
+        msg = BytesParser(policy=policy.default).parsebytes(payload)
+        assert len(payload) <= job.MAX_MESSAGE_BYTES
+        assert f"候选 {len(group)}只 / 共47只" in str(msg["Subject"])
+        assert f"第{first}—{first + len(group) - 1}只" in html
+        assert f"第{number}/2部分" in html
+        assert f"本封 {len(group)} 只 · 本期共 47 只" in html
+        cids.extend(str(p["Content-ID"]) for p in msg.walk() if p.get_content_type() == "image/png")
+        first += len(group)
+    assert len(cids) == len(set(cids)) == 47
+    assert {cid.strip("<>") for cid in cids} == {c["cid"] for c in cards}
+
+
+def test_previously_sent_three_parts_are_not_rebuilt_or_resent(delivery, monkeypatch):
+    _, root = delivery
+    profile = job._profile("reader@example.com", 60., True)
+    write_json(root / "2026-11-16" / profile / "delivery.json", {
+        "status": "sent", "count": 47,
+        "parts": [{"status": "sent", "file": f"part-{n:02d}.eml"} for n in range(1, 4)]})
+    monkeypatch.setattr(job, "load_dashboard", lambda *a, **kw: pytest.fail("sent batch must not rebuild"))
+    monkeypatch.setattr(job, "send", lambda *a: pytest.fail("sent batch must not resend"))
+    assert job.deliver_once(datetime(2026, 11, 16, 18, 30)) == {
+        "status": "sent", "already_processed": True, "count": 47}
 
 
 def test_interrupted_sending_record_requires_review(delivery, monkeypatch):

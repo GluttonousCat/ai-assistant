@@ -68,9 +68,13 @@ def _value(value, suffix=""):
 
 
 def render_html(snapshot, cards, report_day: date, minimum=60., *, part=1, total_parts=1,
-                total_count=None, preview=False, delayed=False, test=False):
+                total_count=None, preview=False, delayed=False, test=False, first_number=1):
     e = lambda value: escape(str(value if value is not None else "—"))
     count = len(cards) if total_count is None else total_count
+    part_label = f" · 第{part}/{total_parts}部分" if total_parts > 1 else ""
+    scope = (f'<p style="font-size:16px;color:#dfb671">本封 {len(cards)} 只 · 本期共 {count} 只 · '
+             f'第{first_number}—{first_number + len(cards) - 1}只</p>' if total_parts > 1 else "")
+    count_label = "本封候选" if total_parts > 1 else "符合条件"
     cutoff = str(snapshot["as_of"]).replace("T", " ")[:16] if snapshot else "暂无"
     rows = [card["row"] for card in cards]
     table_rows = "".join(f'<tr><td style="padding:10px;border-bottom:1px solid #352f26">{e(r["name"])}<br><span style="color:#978b79;font-size:11px">{e(r["ts_code"])} · {e(r.get("board"))}</span></td><td style="color:{opportunity(r)[1]};border-bottom:1px solid #352f26">{e(opportunity(r)[0])}</td><td style="color:#dfb671;border-bottom:1px solid #352f26">{float(r["score"]):.1f}</td><td style="border-bottom:1px solid #352f26">{"入场候选" if r.get("eligible") else "观察候选"}</td></tr>' for r in rows)
@@ -96,8 +100,8 @@ def render_html(snapshot, cards, report_day: date, minimum=60., *, part=1, total
     empty = '<p style="padding:30px 0;color:#b8ab99">当天行情与快照尚未完整更新；不会将旧名单冒充今日结果。完成后将补发正式日报。</p>' if delayed else '<p style="padding:30px 0;color:#b8ab99">本期没有符合评分门槛的候选，未降低阈值或扩大筛选范围。</p>' if not cards else ''
     return f'''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Alpha Finance Radar · {report_day}</title></head>
 <body style="margin:0;padding:0;background:#0c0b09;color:#d8cbbb;font-family:'Microsoft YaHei',Arial,sans-serif"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#0c0b09"><tr><td align="center" style="padding:28px 10px"><table role="presentation" width="980" cellpadding="0" cellspacing="0" style="width:100%;max-width:980px"><tr><td>
-<p style="color:#b79b70;font-size:11px;letter-spacing:3px;margin:0 0 16px">ALPHA FINANCE RADAR / DAILY DIGEST</p><h1 style="font-size:31px;color:#f2e8d9;font-weight:500;margin:0 0 10px">盘后趋势雷达</h1><p style="font-size:13px;color:#b39f80;margin:0 0 22px">{e(alert)} · 上海时间 {report_day} · 第{part}/{total_parts}部分</p>
-<table role="presentation" width="100%" cellpadding="16" cellspacing="0" style="border:1px solid #453824;background:#1d1811"><tr><td><span style="font-size:12px;color:#ac9b82">评分门槛</span><br><strong style="font-size:27px;color:#dfb671">≥ {minimum:g}</strong></td><td><span style="font-size:12px;color:#ac9b82">符合条件</span><br><strong style="font-size:27px;color:#f2e8d9">{count} 只</strong></td><td><span style="font-size:12px;color:#ac9b82">行情 / 策略截止</span><br><strong style="font-size:17px;color:#f2e8d9">{e(cutoff)}</strong></td></tr></table>
+<p style="color:#b79b70;font-size:11px;letter-spacing:3px;margin:0 0 16px">ALPHA FINANCE RADAR / DAILY DIGEST</p><h1 style="font-size:31px;color:#f2e8d9;font-weight:500;margin:0 0 10px">盘后趋势雷达</h1><p style="font-size:13px;color:#b39f80;margin:0 0 22px">{e(alert)} · 上海时间 {report_day}{part_label}</p>{scope}
+<table role="presentation" width="100%" cellpadding="16" cellspacing="0" style="border:1px solid #453824;background:#1d1811"><tr><td><span style="font-size:12px;color:#ac9b82">评分门槛</span><br><strong style="font-size:27px;color:#dfb671">≥ {minimum:g}</strong></td><td><span style="font-size:12px;color:#ac9b82">{count_label}</span><br><strong style="font-size:27px;color:#f2e8d9">{len(cards)} 只</strong></td><td><span style="font-size:12px;color:#ac9b82">行情 / 策略截止</span><br><strong style="font-size:17px;color:#f2e8d9">{e(cutoff)}</strong></td></tr></table>
 <p style="font-size:12px;color:#958a79;line-height:1.9">60F判断趋势，日K用于日级执行。观察候选与入场候选分开展示；评分用于排序，不是胜率或收益承诺。K线与前端使用同一快照、相同真实因子前复权和M8/13/21。</p>
 {empty}<table width="100%" cellpadding="0" cellspacing="0" style="font-size:13px;color:#d8cbbb">{table_rows}</table>{''.join(sections)}
 <p style="border-top:1px solid #332c22;padding-top:18px;font-size:11px;color:#817665;line-height:1.8">↑ 蓝色：趋势回调　■ 紫色：底部反转　▲ 日K入场标记　● 60F观察标记<br>股票清单随信附CSV；若本期分多部分发送，每部分均保留明确的截止日期。</p>

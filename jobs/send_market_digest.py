@@ -73,21 +73,30 @@ def ready(snapshot, target, status, bounds):
 
 
 def _messages(snapshot, cards, report_day, minimum, recipient, sender, *, preview=False, delayed=False, observations=True, test=False):
-    groups = [cards[i:i+20] for i in range(0, len(cards), 20)] or [[]]
+    # Candidate count is not a mail-size limit. Start with one complete digest
+    # and split only when its actual serialized MIME exceeds the byte budget.
+    groups = [cards]
     profile = _profile(recipient, minimum, observations)
     while True:
         built, too_large = [], None
         for n, group in enumerate(groups, 1):
+            first_number = 1 + sum(len(g) for g in groups[:n-1])
+            last_number = first_number + len(group) - 1
             html = render_html(snapshot, group, report_day, minimum, part=n, total_parts=len(groups),
-                               total_count=len(cards), preview=preview, delayed=delayed, test=test)
+                               total_count=len(cards), preview=preview, delayed=delayed, test=test,
+                               first_number=first_number)
             kind = "test" if test else "delay" if delayed else "digest"
             run = snapshot["run_id"] if snapshot else "none"
             message_id = f"<afr.{kind}.{report_day}.{profile}.{run}.{n}@{sender.split('@')[1]}>"
             subject = ("[测试] " if test else "[预览] " if preview else "") + f"Alpha Finance Radar | {report_day} | "
-            subject += "行情更新延迟" if delayed else f"≥{minimum:g}分候选 {len(cards)}只"
+            subject += "行情更新延迟" if delayed else (
+                f"≥{minimum:g}分候选 {len(group)}只 / 共{len(cards)}只 · 第{first_number}—{last_number}只"
+                if len(groups) > 1 else f"≥{minimum:g}分候选 {len(cards)}只")
             if len(groups) > 1:
                 subject += f" ({n}/{len(groups)})"
             text = f"{subject}\n数据截止: {snapshot['as_of'] if snapshot else '暂无'}（上海时间）\n"
+            if len(groups) > 1:
+                text += f"本封{len(group)}只，第{first_number}—{last_number}只；本期共{len(cards)}只。\n"
             text += "观察不代表入场，评分不代表胜率。正文包含日K和60F图片。\n"
             text += "\n".join(f"{c['row']['ts_code']} {c['row']['name']} {c['row']['score']}分 · {c['row']['state']}" for c in group)
             msg = message(sender, recipient, subject, text, html, {c["cid"]: c["png"] for c in group},
