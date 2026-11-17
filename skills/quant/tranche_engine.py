@@ -28,6 +28,8 @@ def simulate(series, timeline, strategy_id, cfg=TrancheConfig(), market_policy=N
         raise ValueError("分批模型每交易日一根原生日K")
     if strategy_id not in STRATEGIES:
         raise ValueError("未知策略")
+    if STRATEGIES[strategy_id].get("generation") == "rules":
+        raise ValueError("组合规则首版不支持分批撮合")
     stocks = {s.code: s for s in series}
     if market_policy is not None and not isinstance(market_policy, MarketPolicy):
         raise ValueError("指数策略需要MarketPolicy")

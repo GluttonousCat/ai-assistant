@@ -113,6 +113,7 @@ def test_new_rules_notice_does_not_reinterpret_old_snapshots(monkeypatch):
         version="60f-early-reversal-daily-entry-v6.1", data=[dict(eligible=False)]
     )
     monkeypatch.setattr(service, "load_dashboard", lambda *a: old)
+    monkeypatch.setattr(service, "refresh_freshness", lambda snapshot: {})
     latest = service.dashboard()
     assert latest["latest_rules_version"] == DUAL_VERSION
     assert latest["version"] == old["version"] and latest["data"] == old["data"]

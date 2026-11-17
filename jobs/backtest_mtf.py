@@ -445,7 +445,7 @@ def legacy_daily(folder, payload):
     results = []
     suite = str(uuid4())
     for strategy, definition in STRATEGIES.items():
-        if definition.get("generation") == "v5":
+        if definition.get("generation") in ("v5", "rules"):
             continue
         result = simulate(stocks, timeline, strategy, "1D")
         result.update(

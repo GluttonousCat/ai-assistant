@@ -57,7 +57,7 @@ def test_unknown_result_and_invalid_pagination(monkeypatch):
 
 def test_registry_contains_both_opportunities_and_combined_strategy():
     rows = client().get("/api/v1/quant/strategies").json()["data"]
-    assert len(rows) == 14
+    assert len(rows) == 15
     swing = [r for r in rows if r.get("generation") == "v8"]
     assert len(swing) == 3
     assert all(r["execution_schedule"] == "after_close" for r in swing)

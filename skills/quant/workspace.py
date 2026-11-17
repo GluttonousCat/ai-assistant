@@ -13,7 +13,7 @@ def catalog(owner):
     return {
         "drafts": store.list_drafts(owner),
         "tasks": store.list_tasks(owner),
-        "defaults": StrategyDraft().model_dump(),
+        "defaults": StrategyDraft(mode="rules", name="我的组合规则策略").model_dump(),
     }
 
 

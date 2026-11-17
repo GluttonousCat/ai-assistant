@@ -99,6 +99,25 @@ class BacktestConfig:
 
 
 @dataclass(frozen=True)
+class RuleExecutionConfig(BacktestConfig):
+    stop_loss_pct: float = 3
+    take_profit_pct: float | None = 8
+    close_only: bool = True
+    trend_exit: bool = False
+
+    def __post_init__(self):
+        super().__post_init__()
+        if not self.close_only or self.trend_exit or self.exit_policy != "legacy":
+            raise ValueError("组合规则只支持盘后决策，均线离场需显式定义为规则")
+        if not math.isfinite(self.stop_loss_pct) or not 0 < self.stop_loss_pct <= 5:
+            raise ValueError("组合规则计划止损必须在0—5%之间")
+        if self.take_profit_pct is not None and (
+            not math.isfinite(self.take_profit_pct) or self.take_profit_pct <= 0
+        ):
+            raise ValueError("止盈必须为正数或不设置")
+
+
+@dataclass(frozen=True)
 class StructureExitConfig(BacktestConfig):
     exit_policy: str = "structure"
     protect_after_r: float = 1.5

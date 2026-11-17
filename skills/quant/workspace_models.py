@@ -5,6 +5,7 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from skills.quant.rule_models import RuleStrategy
 
 
 class Model(BaseModel):
@@ -80,6 +81,8 @@ class ExecutionRules(Model):
 
 
 class StrategyDraft(Model):
+    mode: Literal["template", "rules"] = "template"
+    rules: RuleStrategy = Field(default_factory=RuleStrategy)
     name: str = Field("我的60F双机会策略", min_length=1, max_length=80)
     description: str = Field("", max_length=2000)
     interpretation_notes: list[Note] = Field(default_factory=list, max_length=30)
@@ -95,6 +98,15 @@ class StrategyDraft(Model):
     ] = "mainboard"
     entry: EntryRules = Field(default_factory=EntryRules)
     execution: ExecutionRules = Field(default_factory=ExecutionRules)
+
+    @model_validator(mode="after")
+    def supported_execution(self):
+        if self.mode == "rules" and (
+            self.execution.entry_plan != "single"
+            or self.execution.exit_plan != "single"
+        ):
+            raise ValueError("组合规则首版支持单次进出；442/532请使用已有60F模板模式")
+        return self
 
 
 class BacktestRequest(Model):

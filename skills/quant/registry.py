@@ -1,8 +1,14 @@
-"""Versioned entry strategies; all reuse the dashboard's existing v4 rules."""
+"""Versioned strategy catalog, including the declarative rule entrypoint."""
 
 from skills.trend.strategy import VERSION, TrendConfig
 
 STRATEGIES = {
+    "custom_rules_v1": {
+        "name": "自定义组合规则",
+        "family": None,
+        "generation": "rules",
+        "description": "自由组合60F/日K指标、比较、交叉及全部/任一条件；盘后评估、次日开盘执行。规则工作台首版采用单次进出。",
+    },
     "swing_structure_v9": {
         "name": "60F结构趋势·反转与回调",
         "family": None,
@@ -93,6 +99,22 @@ def catalog():
     result = []
     for key, value in STRATEGIES.items():
         gen = value.get("generation")
+        if gen == "rules":
+            from skills.quant.rule_models import RuleStrategy
+            from skills.quant.rule_prepare import VERSION as RULE_VERSION
+
+            result.append(
+                {
+                    **value,
+                    "id": key,
+                    "version": RULE_VERSION,
+                    "timeframes": ["1D"],
+                    "entry_config": RuleStrategy().model_dump(),
+                    "trend_timeframe": "60F",
+                    "execution_schedule": "after_close",
+                }
+            )
+            continue
         if gen in ("v8", "v9"):
             from skills.trend.swing import SwingConfig, VERSION as SWING_VERSION
             from skills.trend.structure import (

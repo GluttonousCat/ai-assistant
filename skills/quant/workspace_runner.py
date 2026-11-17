@@ -8,7 +8,8 @@ import numpy as np
 import pandas as pd
 
 from skills.quant.engine import simulate
-from skills.quant.models import BacktestConfig
+from skills.quant.models import BacktestConfig, RuleExecutionConfig
+from skills.quant.rule_prepare import prepare_rules, VERSION as RULE_VERSION
 from skills.quant.prepare import MarketSeries, _normalized, prepare_swing
 from skills.quant.tranche_engine import simulate as simulate_tranches
 from skills.quant.tranche_prepare import attach_confirmations
@@ -24,6 +25,25 @@ WORKSPACE_VERSION = "workspace-60f-v1"
 def execution_config(draft):
     values = draft.execution.model_dump()
     fields = BacktestConfig.__dataclass_fields__
+    if draft.mode == "rules":
+        shared = (
+            "initial_cash",
+            "max_positions",
+            "position_weight",
+            "risk_budget_pct",
+            "max_holding_bars",
+            "commission_rate",
+            "minimum_commission",
+            "stamp_tax",
+            "transfer_fee",
+            "slippage",
+        )
+        return RuleExecutionConfig(
+            **{key: values[key] for key in shared},
+            max_entry_risk_pct=5,
+            stop_loss_pct=draft.rules.stop_loss_pct,
+            take_profit_pct=draft.rules.take_profit_pct,
+        )
     return BacktestConfig(
         **{k: v for k, v in values.items() if k in fields},
         max_entry_risk_pct=draft.entry.max_risk_pct,
@@ -131,7 +151,11 @@ def run_task(task, progress=lambda **fields: None):
         .date()
         .isoformat()
     )
-    entry_cfg = SwingConfig(**draft.entry.model_dump())
+    entry_cfg = (
+        draft.rules
+        if draft.mode == "rules"
+        else SwingConfig(**draft.entry.model_dump())
+    )
     staged = (
         draft.execution.entry_plan != "single" or draft.execution.exit_plan != "single"
     )
@@ -153,7 +177,9 @@ def run_task(task, progress=lambda **fields: None):
                     "observed_at": str(observed.get(code)),
                 }
             )
-            if code not in mg:
+            if code not in mg and (
+                draft.mode != "rules" or draft.rules.needs_minutes()
+            ):
                 excluded.append({"code": code, "reason": "60F原生行情缺失"})
                 continue
             frame, data, issue = _normalized(dg.get(code, pd.DataFrame()))
@@ -166,9 +192,8 @@ def run_task(task, progress=lambda **fields: None):
                     data,
                     [],
                 )
-                stock, issue = prepare_swing(
-                    mg.get(code, pd.DataFrame()), frozen, entry_cfg
-                )
+                prepare = prepare_rules if draft.mode == "rules" else prepare_swing
+                stock, issue = prepare(mg.get(code, pd.DataFrame()), frozen, entry_cfg)
                 if not issue:
                     if staged:
                         stock = attach_confirmations(mg[code], stock)
@@ -197,11 +222,15 @@ def run_task(task, progress=lambda **fields: None):
         [pd.Timestamp(day) + pd.Timedelta(hours=15) for day in days]
     )
     config = execution_config(draft)
-    strategy_id = {
-        "both": "swing_60f_v8",
-        "base_rebound": "swing_reversal_v8",
-        "trend_pullback": "swing_pullback_v8",
-    }[draft.entry.family]
+    strategy_id = (
+        "custom_rules_v1"
+        if draft.mode == "rules"
+        else {
+            "both": "swing_60f_v8",
+            "base_rebound": "swing_reversal_v8",
+            "trend_pullback": "swing_pullback_v8",
+        }[draft.entry.family]
+    )
     progress(progress="模拟组合撮合与资金曲线")
     if staged:
         weights = {"single": (1.0,), "442": (0.4, 0.4, 0.2), "532": (0.5, 0.3, 0.2)}
@@ -226,13 +255,19 @@ def run_task(task, progress=lambda **fields: None):
         universe_mode="fixed_snapshot",
         start=start,
         end=end,
-        strategy_version=VERSION,
-        strategy_config=asdict(entry_cfg),
+        strategy_version=RULE_VERSION if draft.mode == "rules" else VERSION,
+        strategy_config=entry_cfg.model_dump()
+        if draft.mode == "rules"
+        else asdict(entry_cfg),
         workspace_spec=draft.model_dump(),
-        workspace_version=WORKSPACE_VERSION,
+        workspace_version="workspace-rules-v2"
+        if draft.mode == "rules"
+        else WORKSPACE_VERSION,
         diagnostics={
             "research_kind": "workspace",
-            "trend_timeframe": "60F",
+            "trend_timeframe": "1D"
+            if draft.mode == "rules" and not draft.rules.needs_minutes()
+            else "60F",
             "execution_schedule": "after_close",
             "eligible_for_default": False,
             "universe_size": len(members),
@@ -250,7 +285,9 @@ def run_task(task, progress=lambda **fields: None):
                 "抽样按股票代码取前N只，仅用于快速检查，不能代表全池表现"
                 if request.sample_limit
                 else "本次按所选成分股票池全量运行",
-                "日K仅供下一交易日开盘执行；60F信号需当日四根完整且收盘未失效",
+                "按声明的周期与采样评估条件，收盘后形成计划，次日开盘执行；自定义模式不隐含模板形态与均线过滤"
+                if draft.mode == "rules"
+                else "日K仅供下一交易日开盘执行；60F信号需当日四根完整且收盘未失效",
             ],
         },
     )

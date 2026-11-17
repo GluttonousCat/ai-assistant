@@ -42,7 +42,7 @@ docs/
 | 后端每天18:00趋势选股图文邮件（无需Codex） | [ops/market_digest.md](ops/market_digest.md) |
 | 每天17:00更新日K、60F与看板 / 重启补漏 | [ops/daily_sync.md](ops/daily_sync.md) |
 | 股票行情、独立盘中60F观察、5年日K、连续信号合轮/归档与T+1/3/5/10跟踪 | [frontend/stock_dashboard.md](frontend/stock_dashboard.md) |
-| 页面策略工作台/自然语言草稿/后台回测、主板60F策略、442/532分批及研究偏差 | [agents/quant_backtesting.md](agents/quant_backtesting.md) |
+| 策略创作工作台/可组合指标条件/自然语言规则/后台回测、主板60F策略、442/532分批及研究偏差 | [agents/quant_backtesting.md](agents/quant_backtesting.md) |
 | 改登录/注册逻辑 | [frontend/login.md](frontend/login.md) |
 | 改问答链路/加流式 | [frontend/chat.md](frontend/chat.md) |
 | 改研报展示/提取 | [frontend/reports.md](frontend/reports.md) |

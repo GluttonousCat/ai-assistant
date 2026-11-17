@@ -1,8 +1,11 @@
+import { summarizeRules } from './ruleVocabulary.js'
+
 export const opportunityNames = { both: '底部反转 + 上涨回调', base_rebound: '底部反转', trend_pullback: '上涨回调' }
 export const poolNames = { mainboard: '五指数成分 · 主板', five_indices: '五指数成分 · 全板块', '000300.SH': '沪深300', '000016.SH': '上证50', '000905.SH': '中证500', '000852.SH': '中证1000', '932000.CSI': '中证2000' }
 export const statusNames = { queued: '排队中', running: '运行中', completed: '已完成', failed: '失败', interrupted: '已中断' }
 export const isStaged = (draft) => draft.execution.entry_plan !== 'single' || draft.execution.exit_plan !== 'single'
 export function summarizeDraft(draft) {
+  if (draft.mode === 'rules') return [`${poolNames[draft.universe]}，排除当前ST及退市简称。`, ...summarizeRules(draft)]
   const e = draft.entry, x = draft.execution
   const exits = isStaged(draft)
     ? `${x.exit_plan === 'single' ? '不分批止盈' : `盈利${x.profit_first_pct}% / ${x.profit_second_pct}%后按${x.exit_plan}分批卖出，保留尾仓`}；${x.profit_first_pct}%后启动成本保护及M21跟踪`

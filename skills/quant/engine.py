@@ -8,7 +8,7 @@ from collections import Counter, defaultdict
 from dataclasses import asdict
 import numpy as np
 import pandas as pd
-from skills.quant.models import BacktestConfig, StructureExitConfig
+from skills.quant.models import BacktestConfig, StructureExitConfig, RuleExecutionConfig
 from skills.quant.metrics import summarize
 from skills.quant.registry import STRATEGIES
 
@@ -54,8 +54,16 @@ def simulate(
     ):
         raise ValueError("回测交易时间轴必须非空且严格递增")
     family = STRATEGIES[strategy_id]["family"]
+    rule_execution = isinstance(cfg, RuleExecutionConfig)
+    if (strategy_id == "custom_rules_v1") != rule_execution:
+        raise ValueError("组合规则策略必须使用RuleExecutionConfig及已编译信号")
+    uses_target = cfg.exit_policy not in ("reversal", "structure") and (
+        not rule_execution or cfg.take_profit_pct is not None
+    )
     stocks = {s.code: s for s in series}
     for s in series:
+        if rule_execution and "rule_exit" not in s.data:
+            raise ValueError("组合规则执行缺少已编译的离场条件")
         if cfg.exit_policy == "structure" and not {
             "structural_support",
             "support_origin",
@@ -231,7 +239,10 @@ def simulate(
                 continue
             raw_fill = raw * (1 + cfg.slippage)
             fill = raw_fill * d["scale"][i]
-            risk = (fill - sig["stop"]) / fill * 100
+            stop = (
+                fill * (1 - cfg.stop_loss_pct / 100) if rule_execution else sig["stop"]
+            )
+            risk = cfg.stop_loss_pct if rule_execution else (fill - stop) / fill * 100
             if (
                 raw_fill > d["up_limit"][i] + 1e-8
                 or not 0 < risk <= cfg.max_entry_risk_pct
@@ -274,16 +285,18 @@ def simulate(
                 "entry_time": start.isoformat(),
                 "signal_time": s.times[sig["i"]].isoformat(),
                 "entry_step": step,
-                "stop": sig["stop"],
-                "target": fill + (fill - sig["stop"]) * cfg.take_profit_r,
+                "stop": stop,
+                "target": fill * (1 + cfg.take_profit_pct / 100)
+                if rule_execution and cfg.take_profit_pct is not None
+                else fill + (fill - stop) * cfg.take_profit_r,
                 "family": sig["family"],
                 "leg": sig["leg"],
                 "pending": None,
                 "last_mark": fill,
                 "last_seen": end.isoformat(),
                 "entry_adjusted": fill,
-                "initial_risk": fill - sig["stop"],
-                "initial_stop": sig["stop"],
+                "initial_risk": fill - stop,
+                "initial_stop": stop,
                 "peak": fill,
                 "trough": fill,
                 "failure_count": 0,
@@ -305,9 +318,7 @@ def simulate(
                 d["adjusted_high"][i],
             )
             stop_hit = lo <= p["stop"]
-            target_hit = (
-                cfg.exit_policy not in ("reversal", "structure") and hi >= p["target"]
-            )
+            target_hit = uses_target and hi >= p["target"]
             if cfg.close_only:
                 # A close-derived decision is executable next session only,
                 # including a threshold reached on the entry day (T+1).
@@ -318,12 +329,10 @@ def simulate(
                         if p["stop"] > p["initial_stop"]
                         else "stop_loss"
                     )
-                elif (
-                    not p["pending"]
-                    and cfg.exit_policy not in ("reversal", "structure")
-                    and close >= p["target"]
-                ):
+                elif not p["pending"] and uses_target and close >= p["target"]:
                     p["pending"] = "take_profit"
+                elif not p["pending"] and rule_execution and bool(d["rule_exit"][i]):
+                    p["pending"] = "rule_exit"
             elif day == p["entry_day"]:
                 if stop_hit:
                     p["pending"] = "t1_deferred_stop"
@@ -340,11 +349,7 @@ def simulate(
                     audit["ambiguous_bracket_stop_first"] += 1
                 when = (
                     start
-                    if op <= p["stop"]
-                    or (
-                        cfg.exit_policy not in ("reversal", "structure")
-                        and op >= p["target"]
-                    )
+                    if op <= p["stop"] or (uses_target and op >= p["target"])
                     else end
                 )
                 if sell(code, i, price, reason, when):
@@ -465,7 +470,9 @@ def simulate(
     metrics = summarize(equity, trades, cfg.initial_cash, len(positions))
     metrics["total_fees"] = fees
     return {
-        "execution_version": "confirmed-support-close-next-open-v1"
+        "execution_version": "composable-rule-fixed-percent-v1"
+        if rule_execution
+        else "confirmed-support-close-next-open-v1"
         if cfg.exit_policy == "structure"
         else "scheduled-close-next-open-v1"
         if cfg.close_only
