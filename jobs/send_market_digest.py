@@ -183,8 +183,8 @@ def deliver_once(now=None, *, delay_notice=False, test=False, retry_uncertain_te
             state.pop("error_type", None)
             state.pop("error_phase", None)
             write_json(state_path, state)
-        snapshot = load_dashboard(state["snapshot_run_id"]) if state.get("snapshot_run_id") else load_dashboard()
         if not state.get("parts"):
+            snapshot = load_dashboard(state["snapshot_run_id"]) if state.get("snapshot_run_id") else load_dashboard()
             # Explicit tests use the latest published snapshot at any hour; its
             # actual cutoff is displayed. Per-stock chart validation still runs.
             complete = bool(snapshot) if test else target is not None and ready(snapshot, target, market_state(), scan_cutoffs(now.replace(tzinfo=None)))

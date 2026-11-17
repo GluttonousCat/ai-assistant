@@ -121,6 +121,7 @@ def test_part_retry_resumes_without_resending_accepted_parts(delivery, monkeypat
             raise smtplib.SMTPConnectError(421, b"temporary")
 
     monkeypatch.setattr(job, "send", send)
+    monkeypatch.setattr(job, "load_dashboard", lambda *a: pytest.fail("prepared mail must resume without database access"))
     assert job.deliver_once(datetime(2026, 11, 16, 18))["status"] == "retry"
     assert job.deliver_once(datetime(2026, 11, 16, 18, 10))["status"] == "sent"
     assert len(attempted) == 3 and attempted[0] != attempted[1] == attempted[2]
