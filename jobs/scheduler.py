@@ -237,14 +237,30 @@ class DailySyncScheduler:
                     if retry:
                         # A concurrent CLI may have finished while we waited.
                         from jobs.refresh_market import needs_refresh
+
                         expected = self._expected_latest_trade_date()
-                        if expected and await asyncio.to_thread(needs_refresh, expected):
+                        if expected and await asyncio.to_thread(
+                            needs_refresh, expected
+                        ):
                             await self._run_sync(include_financial=False)
                     else:
                         await self._run_sync()
                 except Exception:
                     logger.exception("定时增量同步失败；保留调度任务")
-                    self._record_retry(self._expected_latest_trade_date(), {"status": "error"})
+                    self._record_retry(
+                        self._expected_latest_trade_date(), {"status": "error"}
+                    )
+
+    def status(self):
+        return {
+            "running": self._task is not None and not self._task.done(),
+            "last_run": self.last_run.isoformat() if self.last_run else None,
+            "last_result": self.last_result,
+            "next_run": self._next_run_time().isoformat(),
+            "time_zone": "Asia/Shanghai",
+            "updating": self._run_lock.locked(),
+            "retry_count": self._retry_count,
+        }
 
     def start(self):
         """Start the scheduler task."""
@@ -265,7 +281,9 @@ class DailySyncScheduler:
 
     async def trigger_now(self) -> dict:
         """Queue a background job; the admin HTTP request never fetches minutes."""
-        if self._run_lock.locked() or (self._manual_task and not self._manual_task.done()):
+        if self._run_lock.locked() or (
+            self._manual_task and not self._manual_task.done()
+        ):
             return {"status": "busy"}
         self._manual_task = asyncio.create_task(self._run_sync())
         return {"status": "queued"}
@@ -292,4 +310,5 @@ def get_digest_scheduler():
 def get_intraday_scheduler():
     """Lifecycle composition entry for the independent closed-60F observer."""
     from jobs.intraday_scheduler import get_intraday_scheduler as get_intraday
+
     return get_intraday()

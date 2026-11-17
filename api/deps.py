@@ -11,16 +11,30 @@ Auth scope is enforced by the global middleware in app.py (whitelist: login/
 register/health check/static assets), so routes generally need no explicit
 Depends; these dependencies are for endpoints that need user identity/role.
 """
+
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Protocol
 
-from fastapi import Depends, HTTPException, WebSocket
+from fastapi import Depends, HTTPException, Request, WebSocket
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from core.security import TokenPayload, decode_token
 
 _bearer = HTTPBearer(auto_error=False)
+
+
+class Operations(Protocol):
+    async def trigger_sync(self) -> dict: ...
+    def scheduler_status(self) -> dict: ...
+    def sync_reports(self, group_id: str) -> None: ...
+
+
+def get_operations(request: Request) -> Operations:
+    operations = getattr(request.app.state, "operations", None)
+    if operations is None:
+        raise HTTPException(503, "后台服务尚未初始化")
+    return operations
 
 
 def _extract_token(authorization: Optional[str]) -> Optional[str]:
@@ -48,6 +62,7 @@ def get_current_user(
 def require_admin(current: TokenPayload = Depends(get_current_user)) -> TokenPayload:
     """Admin check: the live DB role is authoritative (token role is not trusted, so demotion takes effect immediately)"""
     from tools.auth.users import active_role
+
     try:
         row = active_role(current.user_id)
     except Exception:

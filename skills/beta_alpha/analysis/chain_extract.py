@@ -6,20 +6,20 @@ Research report -> industry-chain segment extraction (atomic capability)
 - Callers: skills/report/skill.py in a background thread after deep extraction / scripts/backfill_chain_extract.py
 - Must be called outside business transactions (contains second-level LLM calls; never hold a transaction)
 """
+
 from __future__ import annotations
 
-import json
+from core.json_response import parse_json_response
 import threading
 from typing import Dict, List, Optional
 
 from core.logger import get_logger
 from harness.llm import get_extract_llm
-from storage.pg import PgClient
-from skills.beta_alpha.schema import init_chain_extract_schema
+from tools.finance import chain_extract as chain_store
 
 logger = get_logger(__name__)
 
-_MAX_TEXT_CHARS = 12000       # same window as report deep extraction
+_MAX_TEXT_CHARS = 12000  # same window as report deep extraction
 _DIRECTIONS = {"upstream", "midstream", "downstream", "other"}
 
 # In-flight dedup (do not extract the same report twice)
@@ -30,23 +30,13 @@ _inflight_lock = threading.Lock()
 def _parse_json(text: str) -> Optional[Dict]:
     if not text:
         return None
-    t = text.strip()
-    if t.startswith("```"):
-        t = t.strip("`")
-        if t.startswith("json"):
-            t = t[4:]
-        t = t.strip()
-    try:
-        return json.loads(t)
-    except json.JSONDecodeError:
-        import re
-        m = re.search(r"\{.*\}", t, re.DOTALL)
-        if m:
-            try:
-                return json.loads(m.group(0))
-            except json.JSONDecodeError:
-                return None
-    return None
+    value = text.strip()
+    if value.startswith("```"):
+        value = value.strip("`")
+        if value.startswith("json"):
+            value = value[4:]
+        value = value.strip()
+    return parse_json_response(value, fences="raw")
 
 
 def extract_chain(report_id: int, prompt: str) -> int:
@@ -64,11 +54,7 @@ def extract_chain(report_id: int, prompt: str) -> int:
 
 
 def _extract_chain_inner(report_id: int, prompt: str) -> int:
-    with PgClient() as pg:
-        init_chain_extract_schema(pg)
-        row = pg.fetch_one(
-            "SELECT content_text FROM fin.report_meta WHERE report_id=%s",
-            (report_id,))
+    row = chain_store.extraction_text(report_id)
     if not row or not (row.get("content_text") or "").strip():
         return 0
     text = row["content_text"][:_MAX_TEXT_CHARS]
@@ -92,22 +78,22 @@ def _extract_chain_inner(report_id: int, prompt: str) -> int:
         if direction not in _DIRECTIONS:
             direction = "other"
         companies = "、".join(
-            str(c)[:32] for c in (seg.get("companies") or [])[:4] if c)
+            str(c)[:32] for c in (seg.get("companies") or [])[:4] if c
+        )
         try:
             conf = max(0.0, min(1.0, float(seg.get("confidence", 0.5))))
         except (TypeError, ValueError):
             conf = 0.5
-        rows.append({"segment": name, "direction": direction,
-                     "companies": companies, "confidence": conf})
+        rows.append(
+            {
+                "segment": name,
+                "direction": direction,
+                "companies": companies,
+                "confidence": conf,
+            }
+        )
 
-    with PgClient() as pg:
-        pg.execute("DELETE FROM fin.chain_extract WHERE report_id=%s", (report_id,))
-        if rows:
-            pg.executemany(
-                "INSERT INTO fin.chain_extract (report_id, segment, direction, "
-                "companies, confidence) VALUES (%s, %s, %s, %s, %s)",
-                [(report_id, r["segment"], r["direction"], r["companies"],
-                  r["confidence"]) for r in rows])
+    chain_store.replace_segments(report_id, rows)
     logger.info(f"链抽取完成 report_id={report_id}: {len(rows)} 个环节")
     return len(rows)
 
@@ -115,13 +101,14 @@ def _extract_chain_inner(report_id: int, prompt: str) -> int:
 def spawn_chain_extract(report_id: int) -> None:
     """Run chain extraction in a background thread (fire-and-forget hook on the
     report main pipeline; for long-lived processes only)"""
+
     def _worker():
         try:
             from skills.beta_alpha.prompts import CHAIN_EXTRACT_PROMPT
+
             extract_chain(report_id, CHAIN_EXTRACT_PROMPT)
         except Exception as e:
             logger.warning(f"后台链抽取失败 report_id={report_id}: {e}")
 
-    t = threading.Thread(target=_worker, daemon=True,
-                         name=f"chain-extract-{report_id}")
+    t = threading.Thread(target=_worker, daemon=True, name=f"chain-extract-{report_id}")
     t.start()

@@ -28,6 +28,7 @@ Entry points:
 """
 from __future__ import annotations
 
+from core.json_response import parse_json_response
 import json
 import re
 from typing import Any, Dict, Optional
@@ -132,24 +133,7 @@ def _thinking_kwargs() -> Dict[str, Any]:
     return kw
 
 
-def _parse_json(text: str) -> Optional[Dict[str, Any]]:
-    if not text:
-        return None
-    t = text.strip()
-    if t.startswith("```"):
-        t = t.strip("`").strip()
-        if t.startswith("json"):
-            t = t[4:]
-    try:
-        return json.loads(t)
-    except json.JSONDecodeError:
-        m = re.search(r"\{.*\}", t, re.DOTALL)
-        if m:
-            try:
-                return json.loads(m.group(0))
-            except json.JSONDecodeError:
-                return None
-    return None
+_parse_json = parse_json_response
 
 
 def analyze_report_meta(report_id: int, pg: Optional[PgClient] = None,

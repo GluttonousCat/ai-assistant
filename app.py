@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from core.lifespan import lifespan
+from jobs.lifecycle import lifespan
 from api.middleware import AuthMiddleware
 from api import router
 from api.finance import fin_router

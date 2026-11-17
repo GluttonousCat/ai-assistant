@@ -11,6 +11,7 @@ CLI verification:
 """
 from __future__ import annotations
 
+from core.json_response import parse_json_response
 import json
 from typing import Any, Dict, Optional
 
@@ -28,26 +29,15 @@ logger = get_logger(__name__)
 
 
 def _extract_json(text: str) -> Optional[Dict]:
-    """Lenient JSON extraction (strips ```json fences)"""
     if not text:
         return None
-    t = text.strip()
-    if t.startswith("```"):
-        t = t.strip("`")
-        if t.startswith("json"):
-            t = t[4:]
-        t = t.strip()
-    try:
-        return json.loads(t)
-    except json.JSONDecodeError:
-        import re
-        m = re.search(r"\{.*\}", t, re.DOTALL)
-        if m:
-            try:
-                return json.loads(m.group(0))
-            except json.JSONDecodeError:
-                return None
-    return None
+    value = text.strip()
+    if value.startswith("```"):
+        value = value.strip("`")
+        if value.startswith("json"):
+            value = value[4:]
+        value = value.strip()
+    return parse_json_response(value, fences="raw")
 
 
 class BetaSkill(BaseSkill):

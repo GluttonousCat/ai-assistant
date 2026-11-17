@@ -108,22 +108,9 @@ def build_company_profile(stock: str, years: int = 5) -> Dict[str, Any]:
 def _load_holders(ts_code: str) -> Dict[str, Any]:
     """Top-10 holders of the latest report period + change signals (holding
     ratio/change; source stock.top10_holders)"""
-    from storage.pg import PgClient
+    from tools.finance import data as finance_data
     try:
-        with PgClient() as pg:
-            latest = pg.fetch_one(
-                "SELECT MAX(end_date) d FROM stock.top10_holders WHERE ts_code=%s",
-                (ts_code,))
-            if not latest or not latest["d"]:
-                return {}
-            rows = pg.fetch_all(
-                "SELECT holder_name, hold_ratio, hold_float_ratio, "
-                "       hold_change, holder_type, end_date "
-                "FROM stock.top10_holders WHERE ts_code=%s AND end_date=%s "
-                "ORDER BY hold_ratio DESC NULLS LAST LIMIT 10",
-                (ts_code, latest["d"]))
-            return {"end_date": str(latest["d"]),
-                    "holders": [dict(r) for r in rows]}
+        return finance_data.holder_snapshot(ts_code)
     except Exception as e:  # noqa: BLE001 the table may not be synced yet
         logger.debug(f"十大股东读取跳过: {e}")
         return {}

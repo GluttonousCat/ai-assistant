@@ -33,7 +33,7 @@ RETRIES = 3
 
 def _load_stocks(index_code: str = "", stock: str = "") -> List[Dict[str, str]]:
     if stock:
-        from skills.fin_query.skill import lookup_ts_code
+        from tools.finance.query import lookup_ts_code
         ts = lookup_ts_code(stock.strip())
         return [{"ts_code": ts, "name": stock}] if ts else []
     if index_code:

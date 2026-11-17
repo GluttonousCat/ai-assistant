@@ -25,6 +25,7 @@ module body has zero project dependencies); the CLI is the injection point:
 """
 from __future__ import annotations
 
+from core.json_response import parse_json_response
 import argparse
 import json
 import re
@@ -97,24 +98,8 @@ def _outline(md: str, key: str, cap: int = 160) -> str:
 
 
 def _parse_json(text: str) -> Optional[Dict[str, Any]]:
-    if not text:
-        return None
-    t = text.strip()
-    if t.startswith("```"):
-        t = t.strip("`").strip()
-        if t.startswith("json"):
-            t = t[4:]
-    try:
-        d = json.loads(t)
-        return d if isinstance(d, dict) else None
-    except json.JSONDecodeError:
-        m = re.search(r"\{.*\}", t, re.DOTALL)
-        if m:
-            try:
-                return json.loads(m.group(0))
-            except json.JSONDecodeError:
-                return None
-    return None
+    data = parse_json_response(text)
+    return data if isinstance(data, dict) else None
 
 
 def _locate(llm, kind: str, key: str, md: str, feedback: str) -> Optional[Dict]:

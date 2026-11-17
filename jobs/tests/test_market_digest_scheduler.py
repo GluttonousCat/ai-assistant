@@ -16,8 +16,12 @@ def at(hour, minute=0, day=16):
 
 
 def test_clock_is_shanghai_and_weekends_also_have_a_slot():
-    assert module.MarketDigestScheduler.next_slot(datetime(2026, 11, 16, 9, 59, tzinfo=timezone.utc)) == at(18)
-    assert module.MarketDigestScheduler.next_slot(datetime(2026, 11, 16, 10, tzinfo=timezone.utc)) == at(18, day=17)
+    assert module.MarketDigestScheduler.next_slot(
+        datetime(2026, 11, 16, 9, 59, tzinfo=timezone.utc)
+    ) == at(18)
+    assert module.MarketDigestScheduler.next_slot(
+        datetime(2026, 11, 16, 10, tzinfo=timezone.utc)
+    ) == at(18, day=17)
     assert module.MarketDigestScheduler.next_slot(at(17, day=14)) == at(18, day=14)
 
 
@@ -115,7 +119,9 @@ def test_missing_data_after_deadline_only_sends_delay_notice(monkeypatch):
 def test_stop_during_wait_prevents_another_send(monkeypatch):
     monkeypatch.setattr(module, "market_now", lambda: at(18))
     calls = []
-    monkeypatch.setattr(module, "deliver_once", lambda **kw: calls.append(kw) or {"status": "retry"})
+    monkeypatch.setattr(
+        module, "deliver_once", lambda **kw: calls.append(kw) or {"status": "retry"}
+    )
     job = module.MarketDigestScheduler()
 
     async def stop(seconds):
@@ -129,7 +135,9 @@ def test_stop_during_wait_prevents_another_send(monkeypatch):
 
 def test_retry_does_not_turn_into_tomorrows_email(monkeypatch):
     state = {"completed": False}
-    monkeypatch.setattr(module, "market_now", lambda: at(0, 1, 17) if state["completed"] else at(19, 59))
+    monkeypatch.setattr(
+        module, "market_now", lambda: at(0, 1, 17) if state["completed"] else at(19, 59)
+    )
     calls = []
 
     def send(**kwargs):
@@ -165,15 +173,20 @@ def test_unexpected_worker_error_keeps_retry_alive_without_exposing_text(monkeyp
 
 
 def test_disabled_scheduler_does_not_start(monkeypatch):
-    monkeypatch.setattr(module, "get_config", lambda: SimpleNamespace(
-        get=lambda key, default: default, env=lambda key, default: "false"))
+    monkeypatch.setattr(
+        module,
+        "get_config",
+        lambda: SimpleNamespace(
+            get=lambda key, default: default, env=lambda key, default: "false"
+        ),
+    )
     job = module.MarketDigestScheduler()
     job.start()
     assert job._task is None and job.status()["enabled"] is False
 
 
 def test_lifespan_starts_and_stops_mail_even_when_quotes_are_disabled(monkeypatch):
-    import core.lifespan as lifespan_module
+    import jobs.lifecycle as lifespan_module
     from core import security
     from jobs import zsxq_scheduler
 
@@ -185,16 +198,35 @@ def test_lifespan_starts_and_stops_mail_even_when_quotes_are_disabled(monkeypatc
     async def noop():
         pass
 
-    monkeypatch.setattr(lifespan_module, "get_config", lambda: SimpleNamespace(
-        get=lambda key, default=None: False if key in ("schedule.enabled", "zsxq_schedule.enabled") else default))
+    monkeypatch.setattr(
+        lifespan_module,
+        "get_config",
+        lambda: SimpleNamespace(
+            get=lambda key, default=None: False
+            if key in ("schedule.enabled", "zsxq_schedule.enabled")
+            else default
+        ),
+    )
     monkeypatch.setattr(security, "ensure_auth_schema", lambda: None)
-    monkeypatch.setattr(lifespan_module, "get_digest_scheduler", lambda: SimpleNamespace(
-        start=lambda: calls.append("mail-start"), stop=stop))
-    monkeypatch.setattr(lifespan_module, "get_scheduler", lambda: SimpleNamespace(stop=noop))
-    monkeypatch.setattr(zsxq_scheduler, "get_zsxq_scheduler", lambda: SimpleNamespace(stop=noop))
+    monkeypatch.setattr(
+        lifespan_module,
+        "get_digest_scheduler",
+        lambda: SimpleNamespace(start=lambda: calls.append("mail-start"), stop=stop),
+    )
+    monkeypatch.setattr(
+        lifespan_module, "get_scheduler", lambda: SimpleNamespace(stop=noop)
+    )
+    monkeypatch.setattr(
+        lifespan_module,
+        "get_intraday_scheduler",
+        lambda: SimpleNamespace(start=lambda: None, stop=noop),
+    )
+    monkeypatch.setattr(
+        zsxq_scheduler, "get_zsxq_scheduler", lambda: SimpleNamespace(stop=noop)
+    )
 
     async def scenario():
-        async with lifespan_module.lifespan(None):
+        async with lifespan_module.lifespan(SimpleNamespace(state=SimpleNamespace())):
             assert calls == ["mail-start"]
 
     asyncio.run(scenario())

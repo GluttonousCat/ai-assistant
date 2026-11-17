@@ -1,4 +1,4 @@
-"""Provider-free report catalog operations for HTTP and other adapters."""
+"""Data operations shared by domain skills and protocol adapters."""
 
 from storage.repositories.reports import (
     list_reports,
@@ -9,6 +9,8 @@ from storage.repositories.reports import (
     legacy_reports,
     legacy_detail,
     add_report,
+    search_research,
+    report_body,
 )
 
 __all__ = [
@@ -20,4 +22,6 @@ __all__ = [
     "legacy_reports",
     "legacy_detail",
     "add_report",
+    "search_research",
+    "report_body",
 ]

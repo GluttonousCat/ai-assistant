@@ -69,14 +69,18 @@ def list_reports(
             f"SELECT COUNT(*) AS n FROM fin.report_meta WHERE {where_sql}", tuple(args)
         )["n"]
         rows = pg.fetch_all(
-            f"""SELECT report_id, topic_id, ts_code, title, author, org_name,
-                       target, industry, region, market, publish_date, report_type,
-                       source, file_name, content_chars, extraction_status,
-                       analysis_status, symbols, tags_industries, tags_regions,
-                       tags_commodities, tags_themes, tags_targets, created_at
-                FROM fin.report_meta WHERE {where_sql}
-                ORDER BY COALESCE(publish_date, created_at::date) DESC, report_id DESC
-                LIMIT %s OFFSET %s""",
+            (
+                "SELECT report_id, topic_id, ts_code, title, author, org_name,"
+                "\n                       target, industry, region, market, "
+                "publish_date, report_type,\n                       source, file_name,"
+                " content_chars, extraction_status,\n                       "
+                "analysis_status, symbols, tags_industries, tags_regions,"
+                "\n                       tags_commodities, tags_themes, tags_targets,"
+                " created_at\n                FROM fin.report_meta WHERE "
+                f"{where_sql}"
+                "\n                ORDER BY COALESCE(publish_date, created_at::date) "
+                "DESC, report_id DESC\n                LIMIT %s OFFSET %s"
+            ),
             tuple(args) + (page_size, (page - 1) * page_size),
         )
     for r in rows:
@@ -91,14 +95,18 @@ def report_tags():
     """Aggregate dedicated classifications and comma-separated extraction tags."""
     with PgClient(read_only=True) as pg:
         industries = pg.fetch_all(
-            "SELECT industry AS tag, COUNT(*) AS n FROM fin.report_meta "
-            "WHERE industry IS NOT NULL AND industry <> '' "
-            "GROUP BY 1 ORDER BY n DESC LIMIT 60"
+            (
+                "SELECT industry AS tag, COUNT(*) AS n FROM fin.report_meta WHERE "
+                "industry IS NOT NULL AND industry <> '' GROUP BY 1 ORDER BY n DESC "
+                "LIMIT 60"
+            )
         )
         regions = pg.fetch_all(
-            "SELECT region AS tag, COUNT(*) AS n FROM fin.report_meta "
-            "WHERE region IS NOT NULL AND region <> '' "
-            "GROUP BY 1 ORDER BY n DESC LIMIT 60"
+            (
+                "SELECT region AS tag, COUNT(*) AS n FROM fin.report_meta WHERE "
+                "region IS NOT NULL AND region <> '' GROUP BY 1 ORDER BY n DESC LIMIT"
+                " 60"
+            )
         )
 
         def _unnest(col: str) -> str:
@@ -125,14 +133,17 @@ def report_stocks():
     """Coverage by stock, retaining the catalog's top-200 ordering."""
     with PgClient(read_only=True) as pg:
         rows = pg.fetch_all(
-            """SELECT m.ts_code, MAX(b.name) AS name, COUNT(*) AS report_count,
-                      MAX(COALESCE(m.publish_date, m.created_at::date)) AS latest_date,
-                      (SELECT COUNT(*) FROM fin.report_forecast f
-                       WHERE f.ts_code = m.ts_code) AS forecast_count
-               FROM fin.report_meta m
-               LEFT JOIN stock.stock_basic b ON b.ts_code = m.ts_code
-               WHERE m.ts_code IS NOT NULL
-               GROUP BY m.ts_code ORDER BY report_count DESC LIMIT 200"""
+            (
+                "SELECT m.ts_code, MAX(b.name) AS name, COUNT(*) AS report_count,"
+                "\n                      MAX(COALESCE(m.publish_date, "
+                "m.created_at::date)) AS latest_date,\n                      (SELECT "
+                "COUNT(*) FROM fin.report_forecast f\n                       WHERE "
+                "f.ts_code = m.ts_code) AS forecast_count\n               FROM "
+                "fin.report_meta m\n               LEFT JOIN stock.stock_basic b ON "
+                "b.ts_code = m.ts_code\n               WHERE m.ts_code IS NOT NULL"
+                "\n               GROUP BY m.ts_code ORDER BY report_count DESC LIMIT "
+                "200"
+            )
         )
     for r in rows:
         if r.get("latest_date"):
@@ -143,17 +154,24 @@ def report_stocks():
 def report_detail(report_id: int):
     with PgClient(read_only=True) as pg:
         row = pg.fetch_one(
-            """SELECT report_id, topic_id, file_id, ts_code, title, author, org_name,
-                      publish_date, report_type, source, file_name, file_path,
-                      content_chars, content_text, content_text_cn, extraction_status,
-                      analysis_status, analysis_json, created_at
-               FROM fin.report_meta WHERE report_id=%s""",
+            (
+                "SELECT report_id, topic_id, file_id, ts_code, title, author, "
+                "org_name,\n                      publish_date, report_type, source, "
+                "file_name, file_path,\n                      content_chars, "
+                "content_text, content_text_cn, extraction_status,"
+                "\n                      analysis_status, analysis_json, created_at"
+                "\n               FROM fin.report_meta WHERE report_id=%s"
+            ),
             (report_id,),
         )
         if not row:
             raise LookupError("研报不存在")
         forecasts = pg.fetch_all(
-            "SELECT forecast_type, forecast_period, forecast_value, forecast_unit, confidence, raw_text FROM fin.report_forecast WHERE report_id=%s ORDER BY forecast_period, forecast_type",
+            (
+                "SELECT forecast_type, forecast_period, forecast_value, "
+                "forecast_unit, confidence, raw_text FROM fin.report_forecast WHERE "
+                "report_id=%s ORDER BY forecast_period, forecast_type"
+            ),
             (report_id,),
         )
     for k in ("publish_date", "created_at"):
@@ -213,9 +231,56 @@ def legacy_detail(report_id, include_text=False):
 def add_report(ts_code, title, content):
     with PgClient() as pg:
         row = pg.fetch_one(
-            """INSERT INTO fin.report_meta
-                (ts_code, title, content_text, content_chars, source, extraction_status)
-                VALUES (%s, %s, %s, %s, 'upload', 'extracted') RETURNING report_id""",
+            (
+                "INSERT INTO fin.report_meta\n                (ts_code, title, "
+                "content_text, content_chars, source, extraction_status)"
+                "\n                VALUES (%s, %s, %s, %s, 'upload', 'extracted') "
+                "RETURNING report_id"
+            ),
             (ts_code, title or content[:80], content, len(content)),
         )
     return {"status": "ok", "report_id": row["report_id"]}
+
+
+def search_research(keyword="", stock=None, days=180, limit=10):
+    conds, args = ([], [])
+    if stock:
+        hit = stock
+        conds.append("(rm.ts_code=%s OR rm.title ILIKE %s OR rm.tags_targets ILIKE %s)")
+        name = hit["name"]
+        args += [hit["ts_code"], f"%{name}%", f"%{name}%"]
+    if keyword:
+        kw = f"%{keyword}%"
+        conds.append(
+            "(rm.title ILIKE %s OR rm.tags_industries ILIKE %s OR rm.tags_themes ILIKE %s OR rm.tags_commodities ILIKE %s OR rm.target ILIKE %s OR rm.analysis_json ILIKE %s)"
+        )
+        args += [kw, kw, kw, kw, kw, kw]
+    if days and days > 0:
+        conds.append("rm.publish_date >= current_date - %s")
+        args.append(int(days))
+    where = " AND ".join(conds) or "TRUE"
+    with PgClient(read_only=True) as pg:
+        rows = pg.fetch_all(
+            (
+                "SELECT report_id, title, org_name, publish_date, market, target,"
+                "        symbols, tags_targets, analysis_json FROM fin.report_meta rm"
+                " WHERE "
+                f"{where}"
+                " ORDER BY rm.publish_date DESC NULLS LAST LIMIT %s"
+            ),
+            tuple(args) + (min(int(limit), 30),),
+        )
+    return rows
+
+
+def report_body(report_id):
+    with PgClient(read_only=True) as pg:
+        row = pg.fetch_one(
+            (
+                "SELECT report_id, title, org_name, publish_date, market, target,"
+                "        industry, content_text, analysis_json FROM fin.report_meta "
+                "WHERE report_id=%s"
+            ),
+            (int(report_id),),
+        )
+    return row

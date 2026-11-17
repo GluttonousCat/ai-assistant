@@ -4,6 +4,21 @@
 
 ## 一、系统设计
 
+第二轮后端结构（2026-11-17）：
+
+```mermaid
+flowchart TD
+  entry[api / harness.mcp：协议适配] --> domain[skills：规则、规范化、业务编排]
+  entry --> capabilities[tools：具体数据与原子能力]
+  domain --> capabilities
+  capabilities --> repositories[storage.repositories：查询与事务]
+  repositories --> schemas[storage.schema：物理结构与独立DDL]
+  lifecycle[jobs.lifecycle / operations：应用组合与任务注入] --> entry
+```
+
+core提供配置、日志与JSON解析；应用启停不再放在core，HTTP通过操作接口使用后台任务。
+图示为目标契约；剩余5项历史依赖逐项保留在基线，不以间接导入或整目录豁免隐藏。
+
 保留模块化单体及现有 `api → harness/skills → tools → storage` 契约，core 提供通用设施。
 优化目标是让职责与依赖清晰，不以文件数量减少为目标，也不为个人平台引入微服务、消息中间件或额外数据库。
 
@@ -18,6 +33,16 @@
 MCP 与 HTTP 只做协议、校验、鉴权和结果转换，不能成为另一套查询实现。
 
 ## 三、问题
+
+| 第二轮问题 | 根因 | 处理 |
+|---|---|---|
+| MCP混合协议、SQL与业务计算 | 20个数据库会话散落在适配器中 | 全部下沉仓储，工具层提供具体数据操作；Alpha计算独立为纯函数 |
+| 两套向量集合重复维护生命周期 | 领域模块各自创建、重建、删除 | 共用ChunkCollection，字段保留各自schema，首次创建加锁合并 |
+| 多处模型JSON解析逐渐漂移 | 6处重复解码/代码围栏/对象提取 | 统一core.json_response，旧调用名及围栏处理差异保留 |
+| 研报入口职责过多、OCR/扫描件重复回写 | 规范化、排队及正文SQL混在Skill中 | normalization、ocr、report_text分离，共用正文写入 |
+| API知道调度器内部状态，core负责任务编排 | 缺少应用组合与操作接口 | 启动迁到jobs.lifecycle，API经依赖注入访问operations，调度器提供status |
+| 拆分OCR时遗漏续跑门槛（回归发现） | SQL所在with内还包含正文与rowcount分支 | 仅替换存储调用并保留控制流，覆盖正常、空正文、失败、删除后停止 |
+| MCP日志污染协议输出（集成发现） | 仓储提前导入后，logger提前绑定stdout | 协议保留独立输出流，现有/后续诊断均导向stderr，增加真实stdio验收 |
 
 | 本轮发现 | 根因 | 处理与边界 |
 |---|---|---|
@@ -46,6 +71,17 @@ MCP 与 HTTP 只做协议、校验、鉴权和结果转换，不能成为另一�
 | 项目根pip/pytest临时目录 | 默认临时目录落在根目录，安装/测试结束后残留混入工作区 | P2 |
 
 ## 四、处理方案
+
+第二轮收敛后的职责：
+
+- `harness/mcp/tools/`保留33个工具的参数、协议错误与结果适配，完全移除直接查库与SQL实现。
+- `skills/beta_alpha/analysis/alpha_context.py`只做四象限计算；`tools/finance/data.py`提供数据，`storage/repositories/financial.py`持有查询与只读事务。
+- `skills/report/normalization.py`统一字段处理，`ocr.py`负责队列与续接；OCR/扫描件/翻译共用`tools/finance/report_text.py`。
+- 报告与年报向量schema归`storage/schema/vector_chunks.py`，生命周期归`storage/repositories/vector_chunks.py`，旧collection入口保留兼容。
+- 产业链DDL归`storage/schema/industry.py`，独立连接执行；旧`skills.beta_alpha.schema`调用名兼容，传入业务连接也不会提交该连接。
+- `jobs/lifecycle.py`是应用启动组合根，`jobs/operations.py`提供后台操作，API只依赖`api.deps`声明的接口；内部旧core.lifespan导入已更新。
+
+保留策略、筛选口径、物理集合字段和现有HTTP/MCP协议；移除重复章节横幅、过时入口说明及搬迁后无效注释，保留事务、复权和数据口径说明。
 
 本轮新增职责：`storage/repositories/reports.py`、`monitoring.py`集中查询；
 `tools/finance/report_catalog.py`、`tools/monitoring.py`、`tools/zsxq/accounts.py`提供协议无关能力。
@@ -90,6 +126,15 @@ pytest默认发现范围固定在项目测试目录，排除产物/迁移/依赖
 
 ## 五、验证记录
 
+2026-11-17第二轮：历史跨层导入45→5，无新增豁免；API不再导入jobs，MCP不再导入storage。
+完整715项Python测试通过，全仓关键静态检查通过；应用操作注入、生命周期与stdio隔离均有回归覆盖。
+33个MCP工具定义逐项一致；40组成功/空数据对照的返回值、SQL与绑定参数一致。
+完整52个HTTP路径的OpenAPI与重构前一致；真实stdio握手、30只读工具清单及当日60F查询通过。
+新增JSON兼容、向量schema/并发创建/重建失效、OCR续接、DDL隔离、操作注入与协议输出回归；
+单篇研报验证采用回滚事务，6个元数据字段成功生成，验证产物未作为正式元数据更新。
+pytest与ruff缓存移到output目录；用户原有未跟踪资料目录保留。
+部署后主服务健康，日线、盘中与邮件调度均运行；日线任务继续启动补漏，未手动投递额外邮件。
+
 2026-11-17：687项Python测试、25项Node测试通过；全仓关键语法/未定义名检查及前端lint通过。
 研报51组旧/新查询对照：返回内容、SQL语义与绑定参数一致。16只真实行情样本的观察结果及
 整段60F指标逐字段精确一致，原始输入不改写；同机8轮交替基准中位数1.204→1.082秒（约快11%）。
@@ -99,7 +144,7 @@ pytest默认发现范围固定在项目测试目录，排除产物/迁移/依赖
 真实浏览器验收对话、研报首次搜索、量化、盘中69只及交互图、hash直达与390px无横向溢出通过。
 最终部署核对：52个HTTP路径的完整OpenAPI与重构前逐项一致，主服务健康、日线/盘中/邮件调度均在运行；
 正式行情快照与邮件回执未被本轮重构改写。
-剩余45项历史跨层依赖继续精确登记；本轮未声称全仓债务归零。
+首轮结束时还有45项历史依赖；第二轮进一步收敛为5项，结果见本节最新记录。
 
 2026-11-12 首轮实施：
 

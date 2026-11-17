@@ -1,8 +1,5 @@
 # -*- encoding: utf-8 -*-
-"""
-FastAPI application lifecycle management
-On startup: init auth schema + daily incremental sync schedulers; on shutdown: release resources
-"""
+"""Application startup and shutdown composition for authentication and jobs."""
 
 from __future__ import annotations
 
@@ -13,6 +10,7 @@ from fastapi import FastAPI
 from core.config import get_config
 from core.logger import get_logger
 from jobs.scheduler import get_scheduler, get_digest_scheduler, get_intraday_scheduler
+from jobs.operations import BackendOperations
 
 logger = get_logger(__name__)
 
@@ -21,6 +19,7 @@ logger = get_logger(__name__)
 async def lifespan(app: FastAPI):
     """Application lifecycle: initialize and clean up resources"""
     config = get_config()
+    app.state.operations = BackendOperations()
 
     # Init auth (idempotently create auth.users + seed admin; failure does not block
     # startup — the error surfaces at login time)

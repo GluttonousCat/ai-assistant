@@ -24,16 +24,17 @@ harness/     prompts(数据口径)/execution(工具沙盒)/loop(决策入口)；
              (ctx 事件总线/插件化: 已有设计, 按 YAGNI 未落地)
 core/        基础设施 (引擎与各层共用的地基, 不含业务):
              config(.env+yaml)/logger(按顶层包分桶)/security(JWT+bcrypt)/
-             lifespan(调度器启停)/net/helpers·paths
+             net/helpers·paths/json_response(共用模型JSON解析)
              config并发初始化完整发布/失败可重试；logger并发只建一组handler
 skills/      领域技能 (每技能一目录, 专业知识放 prompt):
              quant(v10 tranches/tranche_engine/tranche_prepare:442/532分批、逐批T+1/FIFO、完整周期胜率及部分已实现盈亏；v9结构持有/固定对照；v8参数研究/盘后触发次日执行; 见 docs/agents/quant_backtesting.md) /
              trend(episodes.py连续入选合轮/升级不重开/20交易日归档；chart_history.py独立5年日K展示不改冻结信号；tracking.py历史名单前向跟踪/T+1·3·5·10/真实因子/交易日/缺失分离；parent_context.py独立日K母趋势标注，局部60F反转可属上涨回调，保留原信号与入场条件；structure.py V9有序结构；swing.py V8底背离/回调；V7及更早快照兼容; M8/M13/M21; 见 docs/frontend/stock_dashboard.md) /
-             fin_query(Text-to-SQL) / report(研报) / scanned_report(OCR) /
+             fin_query(Text-to-SQL) / report(skill编排/normalization纯规范化/ocr后台队列/collection兼容出口) / scanned_report(OCR) /
              beta_alpha(产业链Beta+个股Alpha: chains种子链/analysis/tests) /
              content(内容资产管线: 画像/公众号文章/PPT/年报解读) /
              research(研究生产线: 证据→十章草稿→成稿, 任务分派见 docs/research/tasks/)
-jobs/        market_digest_scheduler(后端每日18点/当日启动补漏/独立于17点行情/Codex任务已暂停) /
+jobs/        lifecycle(应用启停组合根，原core.lifespan职责迁入)/operations(向API注入后台操作接口；API不导入jobs或读调度器私有状态) /
+             market_digest_scheduler(后端每日18点/当日启动补漏/独立于17点行情/Codex任务已暂停) /
              intraday_scheduler(交易日10:32/11:32/14:02/15:02，收盘120秒后采集/扫描；当天固定来源与池/串行OS锁/回执/启动只补最新到期轮次) /
              cache_intraday_prefix(当天已完成60F前缀/小窗口/断点续传/不推进完整日状态) / scan_intraday_watch(已发布60F规则复用/盘中80分观察/此前完整日K/独立原子归档，PNG可选导出，不覆盖正式快照) /
              send_market_digest(后端定时或CLI调用;≥60分入场/观察分组;日K+60F同源前复权PNG/CSV;SMTP TLS/逐部分回执/延迟至20点;缺授权码不发) /
@@ -54,7 +55,9 @@ jobs/        market_digest_scheduler(后端每日18点/当日启动补漏/独立
              wecom_bot(企微智能机器人 wss 长连接桥接→本地Agent, 见 docs/agents/wecom_bot.md)
 tools/       pdf(通用PDF工具: 文本/渲染/OCR/表格) / zsxq爬虫 / market行情同步 /
              cninfo巨潮定期报告(获取+解析, 自包含) / langgraph(LangGraph原子封装: 建图/记忆) / finance(SQL guard, KB, 研报文件提取器)
+             finance/data·report_text·vector_collections(具体数据能力出口，不暴露PG连接给MCP/领域层)
 storage/     pg.py(连接池) / sqlite(爬虫) / schema/(领域DDL) / repositories/(仓储SQL)
+             vector_chunks(共用向量集合生命周期/并发首次创建合并)；报告/年报字段与产业链DDL归schema
              pg_schema.py保留旧导入兼容；新增DDL按域归档，独立连接部署
 api/         路由+鉴权中间件(JWT) / agent_api(SSE) / chains_api / schema_api / market_api / reports / auth
              finance.py仅保留兼容路由聚合；events.py统一SSE编码

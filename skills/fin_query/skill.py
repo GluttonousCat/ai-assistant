@@ -10,6 +10,7 @@ Design notes:
 """
 from __future__ import annotations
 
+from core.json_response import parse_json_response
 import json
 import re
 import time
@@ -381,19 +382,4 @@ def _fmt(v) -> str:
 
 
 def _extract_json(text: str) -> Optional[Dict[str, Any]]:
-    """Extract a JSON object from LLM output"""
-    if not text:
-        return None
-    # strip ```json ... ``` wrapping
-    text = re.sub(r"```(?:json)?|```", "", text).strip()
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        # extract the first {...}
-        m = re.search(r"\{.*\}", text, re.DOTALL)
-        if m:
-            try:
-                return json.loads(m.group(0))
-            except json.JSONDecodeError:
-                return None
-    return None
+    return parse_json_response(text, fences="all")

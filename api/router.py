@@ -16,7 +16,7 @@ from typing import Dict, Any
 
 from fastapi import HTTPException, BackgroundTasks, APIRouter, Depends
 
-from api.deps import require_admin
+from api.deps import require_admin, get_operations
 
 from api.schemas import (
     CrawlRequest,
@@ -206,17 +206,18 @@ def upload_report(request: dict):
 @router.post(
     "/crawl/sync-reports", tags=["zsxq"], dependencies=[Depends(require_admin)]
 )
-def sync_zxsq_reports(group_id: str = None, background_tasks: BackgroundTasks = None):
+def sync_zxsq_reports(
+    group_id: str = None,
+    background_tasks: BackgroundTasks = None,
+    operations=Depends(get_operations),
+):
     """Sync locally crawled zsxq data into the PG report store"""
 
     def task():
-        from jobs.sync_zxsq_to_pg import ZSXQ2PGSync
-
         gid = group_id or get_config().zsxq_group_id
         if not gid:
             raise HTTPException(status_code=400, detail="未指定群组ID")
-        sync = ZSXQ2PGSync(gid)
-        sync.run()
+        operations.sync_reports(gid)
 
     if background_tasks:
         background_tasks.add_task(task)
@@ -257,34 +258,15 @@ async def agent_chat(request: dict):
 
 # ---------- Data sync scheduling ----------
 @router.post("/admin/sync-today", tags=["admin"], dependencies=[Depends(require_admin)])
-async def sync_today():
+async def sync_today(operations=Depends(get_operations)):
     """Manually trigger the daily job scheduled at 17:00 Asia/Shanghai."""
-    from jobs.scheduler import get_scheduler
-
-    result = await get_scheduler().trigger_now()
+    result = await operations.trigger_sync()
     return {"status": result["status"], "result": result}
 
 
 @router.get(
     "/admin/scheduler-status", tags=["admin"], dependencies=[Depends(require_admin)]
 )
-async def scheduler_status():
+async def scheduler_status(operations=Depends(get_operations)):
     """Scheduler status"""
-    from jobs.scheduler import (
-        get_scheduler,
-        get_digest_scheduler,
-        get_intraday_scheduler,
-    )
-
-    s = get_scheduler()
-    return {
-        "running": s._task is not None and not s._task.done(),
-        "last_run": s.last_run.isoformat() if s.last_run else None,
-        "last_result": s.last_result,
-        "next_run": s._next_run_time().isoformat(),
-        "time_zone": "Asia/Shanghai",
-        "updating": s._run_lock.locked(),
-        "retry_count": s._retry_count,
-        "mail_digest": get_digest_scheduler().status(),
-        "intraday_watch": get_intraday_scheduler().status(),
-    }
+    return operations.scheduler_status()
