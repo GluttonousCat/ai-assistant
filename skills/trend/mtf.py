@@ -109,9 +109,9 @@ def features(bars, cfg=MtfConfig()):
     return f
 
 
-def evaluate(minute, daily, cfg=MtfConfig()):
-    """Input prices must be adjusted; outputs never create a 60F entry order."""
-    m, d = features(minute, cfg), features(daily, cfg)
+def minute_context(minute, cfg=MtfConfig()):
+    """The same causal 60F context used by daily decisions and intraday review."""
+    m = features(minute, cfg)
     fast, mid, slow = [m[f"ma{n}"] for n in [cfg.fast, cfg.mid, cfg.slow]]
     eps = cfg.slope_epsilon_atr * m.atr
     # Economic prices are scale invariant. A flat MA can differ by 1 ULP after
@@ -137,18 +137,23 @@ def evaluate(minute, daily, cfg=MtfConfig()):
     )
     m["continuation_ready"] = m.trend_ready
     m["early_repair_ready"] = (m.close.ge(fast) & fast.diff(2).gt(eps)).fillna(False)
-    reversal_cols = []
     if cfg.fresh_reversal:
         from skills.trend.reversal import reversal_context
 
         m = reversal_context(m, cycle_reset=cfg.reversal_cycle_reset)
-        reversal_cols = [c for c in m if c.startswith("reversal_")]
         m["trend_ready"] = (
             m.reversal_fresh
             & m.close.ge(m[f"ma{cfg.fast}"])
             & m[f"ma{cfg.fast}"].diff().gt(eps)
         ).fillna(False)
         m["trend_state"] = m.reversal_state
+    return m
+
+
+def evaluate(minute, daily, cfg=MtfConfig()):
+    """Input prices must be adjusted; outputs never create a 60F entry order."""
+    m, d = minute_context(minute, cfg), features(daily, cfg)
+    reversal_cols = [c for c in m if c.startswith("reversal_")] if cfg.fresh_reversal else []
     # A stale previous-day context, or a day with a missing 60F bar, cannot trade.
     count = m.groupby(m.bar_end.dt.normalize()).bar_end.transform("size")
     complete = m.bar_end.dt.hour.eq(15) & m.bar_end.dt.minute.eq(0) & count.eq(4)

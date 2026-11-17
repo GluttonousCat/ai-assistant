@@ -237,3 +237,11 @@ BaoStock已加入`pyproject.toml`的可选依赖`market`组；AKShare沿用项�
 修复任务不推进日线同步水位线，不推定除权日、也不填充因子。
 随后真实扫描3800只，策略截止2026-11-12收盘，5只回踩候选、36只观察；结果是横截面筛选，非收益回测。
 看板/公式/边界与验证见 [股票看板与60F策略](../frontend/stock_dashboard.md)。
+
+### 5.4 2026-11-17 当天已完成60F前缀
+
+已核对[AKShare官方行情文档](https://akshare.akfamily.xyz/data/stock/stock_quote.html)：新浪/东财分钟接口支持60分钟，免费网页源需控制调用频率，不作为逐笔推送或有SLA的实时订阅。
+当前SDK1.18.44的stock_zh_a_minute实测可取当天数据；官方新版新浪名称stock_zh_a_hist_min_sina，本次未升级依赖。
+适配器同源请求limit=8并校验已完成的10:30/11:30；5070只池中5066只通过，10132根入库，晚于截止的桶剔除。原始价入库，Tushare当天真实因子匹配，不沿用昨日因子，也不推进完整日同步状态。
+依次运行`python -m jobs.cache_intraday_prefix --day 2026-11-17 --cutoff 11:30`及`python -m jobs.scan_intraday_watch --day 2026-11-17 --cutoff 11:30`。
+扫描CLI的--wait最多等待采集30分钟。结果独立发布，HTTP不抓行情；本轮33观察/6新起点，不替代17点完整刷新与18点邮件。

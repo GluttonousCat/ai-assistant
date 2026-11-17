@@ -36,6 +36,16 @@ def tracking_history(end):
     return repository.tracking_history(end)
 
 
+def intraday_report():
+    from storage.repositories.intraday_watch import read_report
+    return read_report()
+
+
+def intraday_chart(run_id, code):
+    from storage.repositories.intraday_watch import chart_bytes
+    return chart_bytes(run_id, code)
+
+
 def refresh_freshness(snapshot=None):
     from datetime import datetime
     from zoneinfo import ZoneInfo

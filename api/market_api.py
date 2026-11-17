@@ -10,8 +10,27 @@ from skills.trend.service import dashboard, freshness
 from skills.trend.chart_history import stock_chart as stock_detail
 from skills.trend.tracking import follow_up, follow_up_chart
 from skills.trend.episodes import episode_tracking
+from skills.trend.intraday import dashboard as intraday_dashboard, chart as intraday_chart
 
 market_router = APIRouter(prefix="/api/v1/market", tags=["market"])
+
+
+@market_router.get("/intraday")
+async def market_intraday():
+    result = await asyncio.to_thread(intraday_dashboard)
+    return result or {"data": [], "as_of": None, "note": "尚未发布盘中观察结果，等待离线采集与扫描完成"}
+
+
+@market_router.get("/intraday/{code}")
+async def market_intraday_chart(code: str, run_id: str = Query(pattern=r"^\d{4}-\d{2}-\d{2}_\d{4}$")):
+    import re
+
+    if not re.fullmatch(r"\d{6}\.(SH|SZ|BJ)", code):
+        raise HTTPException(422, "股票代码必须包含SH/SZ/BJ后缀")
+    try:
+        return await asyncio.to_thread(intraday_chart, code, run_id)
+    except LookupError as error:
+        raise HTTPException(404, str(error)) from error
 
 
 @market_router.get("/tracking")

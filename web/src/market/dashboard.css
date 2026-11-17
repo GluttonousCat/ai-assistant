@@ -6,6 +6,7 @@
 .trend-history-range { display:flex; flex-wrap:wrap; align-items:center; gap:7px; margin:8px 0 13px; font-size:10px; color:#9b8b73; }
 .trend-history-range > span { margin-right:auto; }
 .trend-history-range button { cursor:pointer; font:inherit; color:#c9af83; border:1px solid #483925; border-radius:4px; background:#211b12; padding:5px 10px; }
+@media(max-width:600px) { .market-section-tabs small { display:none; } .market-section-tabs button { flex:1; padding:9px 10px; } }
 .trend-header { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 25px; }
 .trend-eyebrow { font-size: 10px; color: #95816a; letter-spacing: 2.4px; margin-bottom: 10px; }
 .trend-header h1 { margin: 0; font-size: 29px; font-weight: 600; letter-spacing: 1px; }

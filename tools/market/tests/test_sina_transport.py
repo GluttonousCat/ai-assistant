@@ -40,3 +40,13 @@ def test_bj_constituents_are_requested_with_the_bj_prefix(monkeypatch):
     frame = fetch_sina_history("920001.BJ", "2026-01-01", "2026-11-11")
     assert frame.empty
     assert seen == ["bj920001"]
+
+
+def test_intraday_collection_can_request_a_small_window(monkeypatch):
+    seen = []
+    monkeypatch.setattr("tools.market.sina_transport.requests.get", lambda *a, **kw:
+                        seen.append(kw["params"]["datalen"]) or SimpleNamespace(text="=([]);", raise_for_status=lambda: None))
+    fetch_sina_history("600000.SH", "2026-11-17", "2026-11-17", limit=8)
+    assert seen == ["8"]
+    with pytest.raises(ValueError):
+        fetch_sina_history("600000.SH", "2026-11-17", "2026-11-17", limit=0)

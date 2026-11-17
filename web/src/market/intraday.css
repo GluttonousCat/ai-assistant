@@ -1,0 +1,15 @@
+.intraday-header { display:flex; justify-content:space-between; align-items:center; gap:20px; margin:8px 0 22px; }
+.intraday-header h2 { font-size:23px; font-weight:500; color:#e5d9c5; margin:0 0 9px; }
+.intraday-header p { color:#9c8f7d; font-size:12px; margin:0; }
+.intraday-scope { padding:15px 18px; background:#211b12; border:1px solid #574228; border-radius:8px; margin-bottom:18px; color:#d1b584; font-size:12px; }
+.intraday-scope > span { margin-left:20px; color:#b39e7e; }
+.intraday-scope p { font-size:11px; color:#a89a83; margin:10px 0 0; line-height:1.7; }
+.intraday-stats { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin-bottom:20px; }
+.intraday-stats > div { border:1px solid #342e24; border-radius:10px; background:linear-gradient(135deg,#1c1812,#111110); padding:18px 20px; }
+.intraday-stats span { font-size:11px; color:#a49b8c; }.intraday-stats strong { display:block; font-size:29px; font-weight:500; color:#dfb671; margin:9px 0; }.intraday-stats small { font-size:12px; margin-left:7px; color:#9e9587; }.intraday-stats p { font-size:10px; color:#80796d; margin:0; }
+.intraday-filters { display:flex; flex-wrap:wrap; gap:9px; align-items:center; margin:16px 0; }.intraday-filters > span { color:#978b78; font-size:10px; margin-left:auto; }
+.intraday-selected { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; }.intraday-selected h3 { font-size:24px; font-weight:500; margin:0; color:#e5d9c5; }.intraday-selected h3 small { font-size:12px; color:#9b8b72; margin-left:7px; }.intraday-selected p { color:#9f9079; font-size:11px; }
+.intraday-two-bars { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; margin:18px 0; }.intraday-two-bars > div { border:1px solid #3c3225; border-radius:7px; background:#191610; padding:14px; }.intraday-two-bars span { font-size:10px; color:#9e907b; }.intraday-two-bars strong { display:block; margin:9px 0; font-size:23px; font-weight:500; color:#dfb671; }.intraday-two-bars .up { color:#e87768; }.intraday-two-bars .down { color:#55ad92; }.intraday-two-bars small { display:block; font-size:10px; color:#998b75; line-height:1.7; }
+.intraday-reason { font-size:12px; line-height:1.8; color:#b7a181; }.intraday-chart-note, .intraday-footnote { color:#887e6d; font-size:10px; line-height:1.9; }.intraday-chart-image { display:block; width:100%; height:auto; margin-top:12px; }.intraday-empty { padding:35px 15px; color:#9d907b; font-size:12px; }.intraday-footnote { margin:18px 0; }
+@media(max-width:1000px) { .intraday-stats { grid-template-columns:repeat(2,minmax(0,1fr)); }.intraday-filters > span { margin-left:0; } }
+@media(max-width:600px) { .intraday-header { align-items:flex-start; flex-direction:column; }.intraday-scope > span { display:block; margin:9px 0 0; }.intraday-two-bars { grid-template-columns:1fr 1fr; }.intraday-selected { flex-wrap:wrap; }.intraday-stats > div { padding:14px 12px; } }

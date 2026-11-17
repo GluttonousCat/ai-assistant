@@ -13,13 +13,15 @@ import requests
 from tools.market.minute_history import _symbol, _boundary, normalize
 
 
-def fetch_sina_history(code: str, start: str, end: str, period: int = 60) -> pd.DataFrame:
+def fetch_sina_history(code: str, start: str, end: str, period: int = 60, *, limit: int = 1970) -> pd.DataFrame:
     symbol, market = _symbol(code)
     if period not in (5, 15, 30, 60):
         raise ValueError("unsupported minute period")
+    if type(limit) is not int or not 1 <= limit <= 1970:
+        raise ValueError("minute window limit must be 1..1970")
     response = requests.get(
         "https://quotes.sina.cn/cn/api/jsonp_v2.php/=/CN_MarketDataService.getKLineData",
-        params={"symbol": f"{market}{symbol}", "scale": str(period), "ma": "no", "datalen": "1970"},
+        params={"symbol": f"{market}{symbol}", "scale": str(period), "ma": "no", "datalen": str(limit)},
         timeout=(5, 15))
     response.raise_for_status()
     match = re.search(r"=\s*\((.*)\)\s*;?\s*$", response.text, re.S)

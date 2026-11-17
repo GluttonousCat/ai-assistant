@@ -218,6 +218,13 @@ def save_result(
     return {"ts_code": code, "status": status, "rows": rows}
 
 
+def save_closed_prefix(frame):
+    """Store audited closed bars without claiming a complete daily sync."""
+    with PgClient() as pg:
+        return pg.upsert_df(frame, "stock", "intraday_bar",
+                            ["ts_code", "interval_minutes", "bar_end", "source", "adjustment"])
+
+
 def read_bars(
     code: str, start: str, end: str, period: int = 60, limit: int = 1000
 ) -> pd.DataFrame:

@@ -1,0 +1,135 @@
+"""Rank a collected closed prefix; official EOD scans and email state stay intact."""
+import argparse
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
+from html import escape
+import json
+from pathlib import Path
+import time
+from zoneinfo import ZoneInfo
+
+import pandas as pd
+
+from core.config import get_config
+from core.local_state import read_json, write_json, file_lock
+from core.logger import get_logger
+from skills.trend.intraday import observe
+from skills.trend.chart_history import stock_chart
+from skills.trend.digest import export_csv
+from skills.trend.mtf import MtfConfig, minute_context
+from skills.trend.parent_context import annotate_chart
+from storage.repositories.intraday_watch import publish_report
+from tools.market.chart_image import render_pair
+from tools.market.trend_data import load_dashboard, scan_inputs, scan_daily_inputs, adjust_prices
+
+logger = get_logger(__name__)
+
+
+def batch(members, start, cutoff, daily_cutoff, config):
+    codes = [m["ts_code"] for m in members]
+    minute = scan_inputs(codes, start, cutoff)
+    daily = scan_daily_inputs(codes, start, daily_cutoff)
+    mg = dict(tuple(minute.groupby("ts_code"))) if not minute.empty else {}
+    dg = dict(tuple(daily.groupby("ts_code"))) if not daily.empty else {}
+    results = []
+    for member in members:
+        result = observe(mg.get(member["ts_code"], pd.DataFrame()), dg.get(member["ts_code"], pd.DataFrame()), cutoff, daily_cutoff, config)
+        results.append({**member, **result})
+    return results
+
+
+def make_chart(row, snapshot, cutoff, daily_cutoff, folder):
+    code, config = row["ts_code"], snapshot["metadata"]["config"]
+    raw = scan_inputs([code], snapshot["metadata"]["start"], cutoff)
+    minute, issue = adjust_prices(raw)
+    daily = stock_chart(code, snapshot["metadata"]["start"], daily_cutoff, config, "1D")
+    if issue or daily.get("issue"):
+        raise ValueError("盘中图表所需真实行情或因子不完整")
+    previous_factor = float(raw.loc[pd.to_datetime(raw.bar_end) <= pd.Timestamp(daily_cutoff), "adj_factor"].iloc[-1])
+    current_factor = float(raw.adj_factor.iloc[-1])
+    scale = previous_factor / current_factor
+    for candle in daily["data"]:
+        for field in ("open", "high", "low", "close", "ma8", "ma13", "ma21"):
+            if candle.get(field) is not None:
+                candle[field] *= scale
+    native, di = adjust_prices(scan_daily_inputs([code], snapshot["metadata"]["start"], daily_cutoff))
+    if di:
+        raise ValueError(di)
+    native[["open", "high", "low", "close"]] *= scale
+    m = annotate_chart(minute_context(minute, MtfConfig(**config)), native)
+    m["eligible"] = False
+    detail = {"data": json.loads(m.to_json(orient="records", date_format="iso"))}
+    png = render_pair(daily, detail, stop=row["stop_price"])
+    (folder / "charts").mkdir(exist_ok=True)
+    target = folder / "charts" / (code + ".png")
+    temporary = target.with_suffix(".png.tmp")
+    temporary.write_bytes(png)
+    temporary.replace(target)
+
+
+def run(day, clock="11:30", wait=False):
+    cfg = get_config()
+    folder = Path(cfg.root_dir) / "output" / "market" / "intraday_watch" / f"{day}_{clock.replace(':', '')}"
+    if wait:
+        deadline = time.monotonic() + 1800
+        while not (folder / "audit.json").is_file():
+            if time.monotonic() >= deadline:
+                raise TimeoutError("等待盘中采集超过30分钟，请先检查采集进度")
+            time.sleep(10)
+    with file_lock(folder / "analysis.lock") as acquired:
+        if not acquired:
+            raise RuntimeError("已有同批盘中扫描在运行")
+        audit = read_json(folder / "audit.json", strict=True)
+        manifest = read_json(folder / "collection.json", strict=True)
+        if not audit or audit["complete"] < .95 * audit["total"]:
+            raise ValueError("今日60F采集覆盖不足95%，不发布看似完整的推荐")
+        snapshot = load_dashboard(manifest["snapshot_run_id"], False)
+        daily_cutoff = snapshot["metadata"].get("timeframes", {}).get("1D", {}).get("as_of", snapshot["as_of"])
+        cutoff = f"{day} {clock}:00"
+        if pd.Timestamp(daily_cutoff) >= pd.Timestamp(day):
+            raise ValueError("盘中母趋势只能沿用之前完整日K")
+        bad = {r["ts_code"] for r in audit["failed"]}
+        members = [m for m in manifest["universe"] if m["ts_code"] not in bad]
+        results = []
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            futures = [pool.submit(batch, members[i:i+50], snapshot["metadata"]["start"], cutoff, daily_cutoff, snapshot["metadata"]["config"]) for i in range(0, len(members), 50)]
+            for future in as_completed(futures):
+                results.extend(future.result())
+                write_json(folder / "analysis_progress.json", {"completed": len(results), "total": len(members)})
+                if len(results) % 250 == 0 or len(results) == len(members):
+                    logger.info("盘中扫描进度 %s/%s", len(results), len(members))
+        candidates = sorted([r for r in results if r["status"] == "candidate"], key=lambda r: (not r["new_today"], -r["score"], r["ts_code"]))
+        report = {"run_id": folder.name, "as_of": cutoff, "daily_as_of": daily_cutoff,
+            "created_at": datetime.now(ZoneInfo("Asia/Shanghai")).isoformat(), "source": "akshare-sina",
+            "source_snapshot_run_id": snapshot["run_id"], "config": snapshot["metadata"]["config"],
+            "strategy_version": snapshot.get("version"),
+            "score_scope": "盘中观察最高80分；未计完整日K确认20分，不等同盘后100分评分",
+            "universe": audit["total"], "collected": audit["complete"], "collection_failed": len(bad),
+            "statuses": dict(Counter(r["status"] for r in results)), "data": candidates,
+            "note": "仅使用今天10:30与11:30已收盘60F；日K背景截至上一完整日。eligible均为false，等待盘后复核。"}
+        write_json(folder / "report.json", report)
+        (folder / "candidates.csv").write_text(export_csv(candidates), encoding="utf-8-sig")
+        for i, row in enumerate(candidates, 1):
+            make_chart(row, snapshot, cutoff, daily_cutoff, folder)
+            if i % 10 == 0 or i == len(candidates):
+                logger.info("盘中候选图表 %s/%s", i, len(candidates))
+        links = ''.join(f'<tr><td>{escape(r["name"])}</td><td>{r["ts_code"]}</td><td>{r["score"]}</td><td>{escape(r.get("context_pattern") or r["pattern"])}</td><td>{r["risk_pct"]:.2f}%</td></tr>' for r in candidates)
+        charts = ''.join(f'<section><h2>{escape(r["name"])} · {r["score"]}分</h2><p>{escape(r["reason"])}</p><img src="charts/{r["ts_code"]}.png" style="width:100%;height:auto"></section>' for r in candidates)
+        html = f'<html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><body style="background:#11100f;color:#e6dac5;font-family:Microsoft YaHei,Arial;max-width:1100px;margin:30px auto;padding:20px"><h1>盘中60F观察 · {escape(cutoff)}</h1><p>{escape(report["note"])}</p><p>股票池{audit["total"]}，完整两根{audit["complete"]}，候选{len(candidates)}。{escape(report["score_scope"])}</p><table cellpadding="10">{links}</table>{charts}</body></html>'
+        (folder / "report.html").write_text(html, encoding="utf-8")
+        publish_report(report)
+        print(json.dumps({"run_id": report["run_id"], "collected": audit["complete"], "candidates": len(candidates), "new_today": sum(r["new_today"] for r in candidates), "statuses": report["statuses"]}))
+
+
+def main():
+    parser = argparse.ArgumentParser(description="已完成60F前缀的独立盘中观察，不覆盖盘后看板")
+    parser.add_argument("--day", default=str(datetime.now(ZoneInfo("Asia/Shanghai")).date()))
+    parser.add_argument("--cutoff", default="11:30", choices=["11:30"])
+    parser.add_argument("--wait", action="store_true")
+    args = parser.parse_args()
+    run(args.day, args.cutoff, args.wait)
+
+
+if __name__ == "__main__":
+    main()
