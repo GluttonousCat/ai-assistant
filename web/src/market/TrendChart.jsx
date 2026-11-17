@@ -16,6 +16,16 @@ const signalRange = (rows) => {
   return index < 0 ? latestRange(rows.length) : { from: Math.max(0, index - 60), to: Math.max(index + 12, Math.min(rows.length + 4, index + 60)) }
 }
 
+function applyRange(state, range, isCurrent) {
+  const request = ++state.rangeRequest
+  state.chart.timeScale().setVisibleLogicalRange(range)
+  // Autoscale can widen price labels and shrink the time axis by a few pixels.
+  // Reapply once after layout, without letting an old request move a new chart.
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (isCurrent() && state.rangeRequest === request) state.chart.timeScale().setVisibleLogicalRange(range)
+  }))
+}
+
 const TrendChart = memo(function TrendChart({ data, instrumentKey, stop, stopLabel = '参考止损', config, timeframe = '60F', resetView = 0, focusSignal = 0 }) {
   const host = useRef(null)
   const api = useRef(null)
@@ -34,7 +44,7 @@ const TrendChart = memo(function TrendChart({ data, instrumentKey, stop, stopLab
       handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
       handleScale: { mouseWheel: true, pinch: true, axisPressedMouseMove: true, axisDoubleClickReset: true },
       rightPriceScale: { borderColor: '#302b23' },
-      timeScale: { borderColor: '#302b23', rightOffset: 4, barSpacing: 8, minBarSpacing: 2 },
+      timeScale: { borderColor: '#302b23', rightOffset: 4, barSpacing: 8, minBarSpacing: .1, lockVisibleTimeRangeOnResize: true },
     })
     const candles = chart.addSeries(CandlestickSeries, { upColor: '#e87768', downColor: '#55ad92', wickUpColor: '#e87768', wickDownColor: '#55ad92', borderVisible: false })
     const fast = chart.addSeries(LineSeries, { color: '#dfb671', lineWidth: 2, priceLineVisible: false, lastValueVisible: false })
@@ -44,7 +54,7 @@ const TrendChart = memo(function TrendChart({ data, instrumentKey, stop, stopLab
     const markers = createSeriesMarkers(candles, [])
     chart.panes()[0].setStretchFactor(4)
     chart.panes()[1].setStretchFactor(1)
-    const state = { chart, candles, quick, fast, slow, volume, markers, rows: [], byTime: new Map(), views: boundedCache(20), key: '', priceLine: null, shown: null, pending: null, hoverTime: null }
+    const state = { chart, candles, quick, fast, slow, volume, markers, rows: [], byTime: new Map(), views: boundedCache(20), key: '', priceLine: null, shown: null, pending: null, hoverTime: null, rangeRequest: 0 }
     api.current = state
     const move = (param) => {
       state.hoverTime = state.byTime.has(param.time) ? param.time : null
@@ -71,6 +81,7 @@ const TrendChart = memo(function TrendChart({ data, instrumentKey, stop, stopLab
 
   useEffect(() => {
     const state = api.current
+    state.rangeRequest += 1
     const range = state.chart.timeScale().getVisibleLogicalRange()
     if (state.key && state.rows.length && range) state.views.set(state.key, captureView(state.rows, range))
     const changed = state.key !== instrumentKey
@@ -100,14 +111,14 @@ const TrendChart = memo(function TrendChart({ data, instrumentKey, stop, stopLab
     setHover({ key: instrumentKey, row: state.shown })
     if (rows.length) {
       const saved = restoreView(rows, state.views.get(instrumentKey))
-      state.chart.timeScale().setVisibleLogicalRange(saved || (config?.selection_mode === 'tracking' ? signalRange(rows) : latestRange(rows.length)))
+      applyRange(state, saved || (timeframe === '1D' ? { from: 0, to: rows.length + 4 } : config?.selection_mode === 'tracking' ? signalRange(rows) : latestRange(rows.length)), () => api.current === state)
     }
     if (changed) state.candles.priceScale().applyOptions({ autoScale: true })
-  }, [rows, instrumentKey, config?.selection_mode])
+  }, [rows, instrumentKey, config?.selection_mode, timeframe])
 
   useEffect(() => {
     api.current.chart.applyOptions({
-      timeScale: { timeVisible: timeframe === '60F', secondsVisible: false, tickMarkFormatter: (time) => timeLabel(time, timeframe) },
+      timeScale: { timeVisible: timeframe === '60F', secondsVisible: false, minBarSpacing: timeframe === '1D' ? .1 : 2, tickMarkFormatter: (time) => timeLabel(time, timeframe) },
       localization: { timeFormatter: (time) => timeLabel(time, timeframe) },
     })
   }, [timeframe])
@@ -126,21 +137,33 @@ const TrendChart = memo(function TrendChart({ data, instrumentKey, stop, stopLab
 
   useEffect(() => {
     const state = api.current
+    state.rangeRequest += 1
     if (state.rows.length) {
-      state.chart.timeScale().setVisibleLogicalRange(latestRange(state.rows.length))
+      applyRange(state, latestRange(state.rows.length), () => api.current === state)
       state.candles.priceScale().applyOptions({ autoScale: true })
     }
   }, [resetView])
 
   useEffect(() => {
     if (focusSignal && rows.length) {
-      api.current.chart.timeScale().setVisibleLogicalRange(signalRange(rows))
+      api.current.rangeRequest += 1
+      const state = api.current
+      applyRange(state, signalRange(rows), () => api.current === state)
       api.current.candles.priceScale().applyOptions({ autoScale: true })
     }
   }, [focusSignal, rows])
 
   const active = hover?.key === instrumentKey ? hover.row : rows.at(-1)
+  const showDays = (count) => {
+    const state = api.current
+    if (state.rows.length) {
+      const range = { from: Math.max(0, state.rows.length - count), to: state.rows.length + 4 }
+      state.candles.priceScale().applyOptions({ autoScale: true })
+      applyRange(state, range, () => api.current === state)
+    }
+  }
   return <>
+    {timeframe === '1D' && <div className="trend-history-range" role="group" aria-label="日K历史范围"><span>日K · 近5年可用历史</span><button onClick={() => showDays(63)}>近3月</button><button onClick={() => showDays(252)}>近1年</button><button onClick={() => showDays(rows.length)}>近5年</button></div>}
     <div className="trend-chart-legend">
       <span style={{ color: '#d89bc1' }}>M8{Number.isFinite(active?.ma8) ? ` · ${active.ma8.toFixed(2)}` : ''}</span><span className="trend-legend-fast">M13{Number.isFinite(active?.ma13) ? ` · ${active.ma13.toFixed(2)}` : ''}</span><span className="trend-legend-slow">M21{Number.isFinite(active?.ma21) ? ` · ${active.ma21.toFixed(2)}` : ''}</span>
       {config?.selection_mode === 'mtf' && active?.trend_state && <span>60F背景：{active.trend_state}</span>}

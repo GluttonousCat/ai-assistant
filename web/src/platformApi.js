@@ -88,6 +88,7 @@ export const platformApi = {
   marketDashboard: () => request('GET', '/api/v1/market/dashboard'),
   marketFreshness: () => request('GET', '/api/v1/market/freshness'),
   marketTracking: (date, options = {}) => request('GET', `/api/v1/market/tracking${date ? `?signal_date=${encodeURIComponent(date)}` : ''}`, undefined, options),
+  marketTrackingEpisodes: (view = 'active', options = {}) => request('GET', `/api/v1/market/tracking/episodes?${new URLSearchParams({ view })}`, undefined, options),
   marketTrackingChart: (code, runId, timeframe = '1D', options = {}) => request('GET', `/api/v1/market/tracking/${encodeURIComponent(code)}?${new URLSearchParams({ run_id: runId, timeframe })}`, undefined, options),
   marketStock: (code, runId, timeframe = '60F', options = {}) => request('GET', `/api/v1/market/dashboard/${encodeURIComponent(code)}?${new URLSearchParams({timeframe, ...(runId ? {run_id: runId} : {})})}`, undefined, options),
   login: (username, password) =>

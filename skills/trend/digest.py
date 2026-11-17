@@ -5,7 +5,7 @@ from html import escape
 from io import StringIO
 import math
 
-from skills.trend.service import stock_detail
+from skills.trend.chart_history import stock_chart as stock_detail
 from tools.market.chart_image import render_pair
 from tools.market.universe import risk_name
 

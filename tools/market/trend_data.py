@@ -32,6 +32,10 @@ def tracking_calendar(start, end):
     return repository.trading_days(start, end)
 
 
+def tracking_history(end):
+    return repository.tracking_history(end)
+
+
 def refresh_freshness(snapshot=None):
     from datetime import datetime
     from zoneinfo import ZoneInfo

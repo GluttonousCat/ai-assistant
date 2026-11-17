@@ -14,7 +14,7 @@ def client(auth=False):
     return TestClient(app)
 
 
-@pytest.mark.parametrize("path", ["/tracking", "/tracking/600000.SH?run_id=410395ca-57cc-4f10-bd62-4aeb023f223b"])
+@pytest.mark.parametrize("path", ["/tracking", "/tracking/episodes", "/tracking/600000.SH?run_id=410395ca-57cc-4f10-bd62-4aeb023f223b"])
 def test_tracking_is_authenticated(path):
     assert client(auth=True).get("/api/v1/market" + path).status_code == 401
 
@@ -44,3 +44,12 @@ def test_unavailable_history_returns_404_and_chart_is_pinned_to_run(monkeypatch)
     run = "410395ca-57cc-4f10-bd62-4aeb023f223b"
     assert client().get(f"/api/v1/market/tracking/600000.SH?run_id={run}&timeframe=60F").status_code == 200
     assert seen == [("600000.SH", run, "60F")]
+
+
+def test_static_episode_route_is_not_mistaken_for_a_stock_code(monkeypatch):
+    seen = []
+    monkeypatch.setattr("api.market_api.episode_tracking", lambda view: seen.append(view) or {"data": []})
+    c = client()
+    assert c.get("/api/v1/market/tracking/episodes?view=archive").status_code == 200
+    assert seen == ["archive"]
+    assert c.get("/api/v1/market/tracking/episodes?view=bad").status_code == 422

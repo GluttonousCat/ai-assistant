@@ -4,7 +4,7 @@ import math
 from zoneinfo import ZoneInfo
 
 from skills.trend.digest import select_stocks
-from skills.trend.service import stock_detail
+from skills.trend.chart_history import stock_chart as stock_detail
 from tools.market.trend_data import load_dashboard, scan_daily_inputs, tracking_calendar, tracking_days
 
 HORIZONS = (1, 3, 5, 10)

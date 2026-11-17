@@ -97,6 +97,15 @@ def missing_adjustments(start: str, end: str):
         )
 
 
+def missing_daily_adjustments(start: str, end: str):
+    with PgClient(read_only=True) as pg:
+        return pg.fetch_all(
+            """SELECT d.ts_code,array_agg(d.trade_date ORDER BY d.trade_date) AS dates
+            FROM stock.daily d LEFT JOIN stock.adj_factor f USING(ts_code,trade_date)
+            WHERE d.trade_date BETWEEN %s::date AND %s::date AND d.vol>0 AND f.adj_factor IS NULL
+            GROUP BY d.ts_code ORDER BY d.ts_code""", (start, end))
+
+
 def save_adjustments(frame):
     with PgClient() as pg:
         pg.upsert_df(frame, "stock", "adj_factor", ["ts_code", "trade_date"])
@@ -162,3 +171,26 @@ def trading_days(start: str, end: str):
             AND is_open=1 AND cal_date>=%s::date AND cal_date<=%s::date ORDER BY cal_date""",
             (start, end),
         )]
+
+
+def tracking_history(end: str, limit=120):
+    """Bounded historical candidates in two reads, including empty scan days."""
+    with PgClient(read_only=True) as pg:
+        if not pg.fetch_one("SELECT to_regclass('stock.trend_scan') AS name")["name"]:
+            return []
+        runs = pg.fetch_all(
+            """SELECT DISTINCT ON (as_of::date) run_id::text,as_of,created_at,version,metadata
+            FROM stock.trend_scan WHERE as_of<=%s::timestamp
+            ORDER BY as_of::date DESC,as_of DESC,created_at DESC,run_id DESC LIMIT %s""", (end, limit))
+        if not runs:
+            return []
+        rows = pg.fetch_all(
+            """SELECT run_id::text,payload FROM stock.trend_signal
+            WHERE run_id=ANY(%s::uuid[]) AND CASE
+                WHEN (payload->>'score') ~ '^[0-9]+([.][0-9]+)?$'
+                THEN (payload->>'score')::numeric>=60 ELSE false END
+            ORDER BY run_id,ts_code""", ([r["run_id"] for r in runs],))
+    grouped = {r["run_id"]: [] for r in runs}
+    for row in rows:
+        grouped[row["run_id"]].append(row["payload"])
+    return json.loads(json.dumps([{**r, "data": grouped[r["run_id"]]} for r in runs], default=str))

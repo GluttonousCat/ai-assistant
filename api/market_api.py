@@ -6,8 +6,10 @@ from uuid import UUID
 from typing import Literal
 from fastapi import APIRouter, HTTPException, Query
 from tools.market.queries import query_intraday
-from skills.trend.service import dashboard, stock_detail, freshness
+from skills.trend.service import dashboard, freshness
+from skills.trend.chart_history import stock_chart as stock_detail
 from skills.trend.tracking import follow_up, follow_up_chart
+from skills.trend.episodes import episode_tracking
 
 market_router = APIRouter(prefix="/api/v1/market", tags=["market"])
 
@@ -18,6 +20,11 @@ async def signal_tracking(signal_date: date | None = None):
         return await asyncio.to_thread(follow_up, signal_date)
     except LookupError as error:
         raise HTTPException(404, str(error)) from error
+
+
+@market_router.get("/tracking/episodes")
+async def signal_episodes(view: Literal["active", "archive"] = "active"):
+    return await asyncio.to_thread(episode_tracking, view)
 
 
 @market_router.get("/tracking/{code}")

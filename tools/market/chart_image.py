@@ -18,8 +18,8 @@ def render_pair(daily, minute, *, stop=None):
     canvas = FigureCanvasAgg(fig)
     grid = fig.add_gridspec(4, 1, height_ratios=[3.8, .85, 3.8, .85], hspace=.34,
                            left=.045, right=.89, top=.95, bottom=.065)
-    for slot, (detail, title, size) in enumerate([(daily, "日K · 日级执行", 107), (minute, "60F · 趋势与局部触发", 134)]):
-        rows = detail["data"][-size:]
+    for slot, (detail, title, size) in enumerate([(daily, "日K · 近5年历史", None), (minute, "60F · 趋势与局部触发", 134)]):
+        rows = detail["data"] if size is None else detail["data"][-size:]
         if not rows:
             raise ValueError("图表没有可用行情")
         ax = fig.add_subplot(grid[slot * 2])
@@ -78,7 +78,7 @@ def render_pair(daily, minute, *, stop=None):
         volume.text(.005, .80, "成交量 / 万股", transform=volume.transAxes, color="#8e867b", fontsize=9, fontproperties=font)
         ticks = np.unique(np.linspace(0, len(rows)-1, 6).astype(int))
         volume.set_xticks(ticks)
-        volume.set_xticklabels([str(rows[i]["bar_end"])[5:10] if slot == 0 else
+        volume.set_xticklabels([str(rows[i]["bar_end"])[:7] if slot == 0 else
                                 str(rows[i]["bar_end"])[5:16].replace("T", " ") for i in ticks])
     fig.text(.045, .012, "前复权 · M8 / M13 / M21    ▲ 日K入场标记    ● 60F观察标记（非入场）", color="#8f867a", fontproperties=font, fontsize=10)
     buffer = BytesIO()
