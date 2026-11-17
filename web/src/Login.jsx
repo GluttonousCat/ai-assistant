@@ -57,7 +57,6 @@ export default function Login({ onLogin }) {
         <div className="login-brand">
           <span className="logo-mark">◎</span>
           <h1>Alpha Finance Radar</h1>
-          <p className="tagline">上市公司财务与研报智能分析平台</p>
         </div>
 
         <div className="seg login-seg">
@@ -114,10 +113,6 @@ export default function Login({ onLogin }) {
             {busy ? '请稍候…' : mode === 'login' ? '登 录' : '注册并登录'}
           </button>
         </form>
-
-        <div className="login-foot">
-          Tushare 财务数据 × 知识星球研报 × Agent 分析
-        </div>
       </div>
     </div>
   )

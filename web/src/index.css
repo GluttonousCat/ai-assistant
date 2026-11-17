@@ -238,11 +238,10 @@ table.grid tbody td:last-child { border-right: 1px solid var(--border); border-r
 .login-brand { text-align: center; margin-bottom: 22px; }
 .login-brand .logo-mark { font-size: 30px; color: var(--accent); }
 .login-brand h1 {
-  margin: 8px 0 4px; font-size: 24px; letter-spacing: 1px;
+  margin: 8px 0 12px; font-size: 24px; letter-spacing: 1px;
   background: linear-gradient(90deg, #d99178, #ad5e48);
   -webkit-background-clip: text; background-clip: text; color: transparent;
 }
-.login-brand .tagline { color: var(--text-dim); font-size: 13px; margin: 0; }
 .login-seg { margin-bottom: 18px; }
 .login-seg button { flex: 1; }
 .login-form { display: flex; flex-direction: column; gap: 14px; }
@@ -257,7 +256,6 @@ table.grid tbody td:last-child { border-right: 1px solid var(--border); border-r
 .login-msg { font-size: 13px; padding: 9px 12px; border-radius: 9px; }
 .login-msg.error { background: rgba(244, 63, 94, 0.12); color: #fb7185; }
 .login-msg.ok { background: rgba(16, 185, 129, 0.12); color: #34d399; }
-.login-foot { text-align: center; color: var(--text-dim); font-size: 11px; margin-top: 20px; }
 
 /* ---------- 平台主框架 ---------- */
 .platform { display: flex; height: 100vh; height: 100dvh; overflow: hidden; }
