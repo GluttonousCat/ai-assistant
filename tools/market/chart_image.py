@@ -18,7 +18,7 @@ def render_pair(daily, minute, *, stop=None):
     canvas = FigureCanvasAgg(fig)
     grid = fig.add_gridspec(4, 1, height_ratios=[3.8, .85, 3.8, .85], hspace=.34,
                            left=.045, right=.89, top=.95, bottom=.065)
-    for slot, (detail, title, size) in enumerate([(daily, "日K · 日级执行", 80), (minute, "60F · 趋势与局部触发", 100)]):
+    for slot, (detail, title, size) in enumerate([(daily, "日K · 日级执行", 107), (minute, "60F · 趋势与局部触发", 134)]):
         rows = detail["data"][-size:]
         if not rows:
             raise ValueError("图表没有可用行情")

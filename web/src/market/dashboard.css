@@ -1,4 +1,8 @@
 .trend-board { max-width: 1720px; margin: 0 auto; padding: 30px 34px 48px; --trend-gold: #dfb671; }
+.market-section-tabs { display:flex; gap:8px; border-bottom:1px solid var(--border); margin:0 0 24px; padding-bottom:10px; }
+.market-section-tabs button { padding:10px 18px; border:0; background:transparent; color:#9b9386; border-radius:7px; cursor:pointer; font:inherit; font-size:13px; }
+.market-section-tabs button.active { background:#302619; color:#dfb671; }
+.market-section-tabs small { margin-left:8px; font-size:10px; opacity:.65; }
 .trend-header { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 25px; }
 .trend-eyebrow { font-size: 10px; color: #95816a; letter-spacing: 2.4px; margin-bottom: 10px; }
 .trend-header h1 { margin: 0; font-size: 29px; font-weight: 600; letter-spacing: 1px; }

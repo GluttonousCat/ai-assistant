@@ -11,8 +11,12 @@ const candle = ({ time, open, high, low, close }) => ({ time, open, high, low, c
 const average = (row, field) => Number.isFinite(row[field]) ? { time: row.time, value: row[field] } : { time: row.time }
 const turnover = (row) => Number.isFinite(row.volume) && row.volume >= 0 ? { time: row.time, value: row.volume, color: row.close >= row.open ? '#e8776866' : '#55ad9266' } : { time: row.time }
 const latestRange = (length) => ({ from: Math.max(0, length - 120), to: length + 4 })
+const signalRange = (rows) => {
+  const index = rows.findIndex((row) => row.tracking_signal)
+  return index < 0 ? latestRange(rows.length) : { from: Math.max(0, index - 60), to: Math.max(index + 12, Math.min(rows.length + 4, index + 60)) }
+}
 
-const TrendChart = memo(function TrendChart({ data, instrumentKey, stop, stopLabel = '参考止损', config, timeframe = '60F', resetView = 0 }) {
+const TrendChart = memo(function TrendChart({ data, instrumentKey, stop, stopLabel = '参考止损', config, timeframe = '60F', resetView = 0, focusSignal = 0 }) {
   const host = useRef(null)
   const api = useRef(null)
   const frames = useRef(null)
@@ -96,10 +100,10 @@ const TrendChart = memo(function TrendChart({ data, instrumentKey, stop, stopLab
     setHover({ key: instrumentKey, row: state.shown })
     if (rows.length) {
       const saved = restoreView(rows, state.views.get(instrumentKey))
-      state.chart.timeScale().setVisibleLogicalRange(saved || latestRange(rows.length))
+      state.chart.timeScale().setVisibleLogicalRange(saved || (config?.selection_mode === 'tracking' ? signalRange(rows) : latestRange(rows.length)))
     }
     if (changed) state.candles.priceScale().applyOptions({ autoScale: true })
-  }, [rows, instrumentKey])
+  }, [rows, instrumentKey, config?.selection_mode])
 
   useEffect(() => {
     api.current.chart.applyOptions({
@@ -110,14 +114,15 @@ const TrendChart = memo(function TrendChart({ data, instrumentKey, stop, stopLab
 
   useEffect(() => {
     const mtf = config?.selection_mode === 'mtf'
-    api.current.markers.setMarkers((mtf ? timeframe === '1D' || config?.fresh_reversal : ['early', 'dual'].includes(config?.selection_mode)) ? signalMarkers(rows, { dailyEntry: mtf }) : [])
+    const tracked = rows.filter((r) => r.tracking_signal).map((r) => ({ time: r.time, position: 'aboveBar', shape: 'arrowDown', color: '#dfb671', text: '入选日' }))
+    api.current.markers.setMarkers(config?.selection_mode === 'tracking' ? tracked : (mtf ? timeframe === '1D' || config?.fresh_reversal : ['early', 'dual'].includes(config?.selection_mode)) ? signalMarkers(rows, { dailyEntry: mtf }) : [])
   }, [rows, config?.selection_mode, config?.fresh_reversal, timeframe])
 
   useEffect(() => {
     const state = api.current
     if (state.priceLine) { state.candles.removePriceLine(state.priceLine); state.priceLine = null }
-    if (rows.length && stop > 0) state.priceLine = state.candles.createPriceLine({ price: stop, color: '#c68979', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: stopLabel })
-  }, [stop, stopLabel, rows.length])
+    if (rows.length && stop > 0) state.priceLine = state.candles.createPriceLine({ price: stop, color: config?.selection_mode === 'tracking' ? '#dfb671' : '#c68979', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: stopLabel })
+  }, [stop, stopLabel, rows.length, config?.selection_mode])
 
   useEffect(() => {
     const state = api.current
@@ -127,17 +132,24 @@ const TrendChart = memo(function TrendChart({ data, instrumentKey, stop, stopLab
     }
   }, [resetView])
 
+  useEffect(() => {
+    if (focusSignal && rows.length) {
+      api.current.chart.timeScale().setVisibleLogicalRange(signalRange(rows))
+      api.current.candles.priceScale().applyOptions({ autoScale: true })
+    }
+  }, [focusSignal, rows])
+
   const active = hover?.key === instrumentKey ? hover.row : rows.at(-1)
   return <>
     <div className="trend-chart-legend">
       <span style={{ color: '#d89bc1' }}>M8{Number.isFinite(active?.ma8) ? ` · ${active.ma8.toFixed(2)}` : ''}</span><span className="trend-legend-fast">M13{Number.isFinite(active?.ma13) ? ` · ${active.ma13.toFixed(2)}` : ''}</span><span className="trend-legend-slow">M21{Number.isFinite(active?.ma21) ? ` · ${active.ma21.toFixed(2)}` : ''}</span>
       {config?.selection_mode === 'mtf' && active?.trend_state && <span>60F背景：{active.trend_state}</span>}
-      {active && opportunityFor(active).key !== 'unknown' && <OpportunityBadge value={active} />}
-      {active?.parent_trend_label && <span>母趋势：{active.parent_trend_label}{active.parent_pullback_bars > 0 ? ` · 回调${active.parent_pullback_bars}根日K` : ''}{active.local_trigger_label ? ` · ${active.local_trigger_label}` : ''}</span>}
+      {config?.selection_mode !== 'tracking' && active && opportunityFor(active).key !== 'unknown' && <OpportunityBadge value={active} />}
+      {config?.selection_mode !== 'tracking' && active?.parent_trend_label && <span>母趋势：{active.parent_trend_label}{active.parent_pullback_bars > 0 ? ` · 回调${active.parent_pullback_bars}根日K` : ''}{active.local_trigger_label ? ` · ${active.local_trigger_label}` : ''}</span>}
       {active && <span className="trend-ohlc">{timeLabel(active.time, timeframe)}　开 {active.open.toFixed(2)}　高 {active.high.toFixed(2)}　低 {active.low.toFixed(2)}　收 {active.close.toFixed(2)}</span>}
       {active?.startup_count > 0 && ['early', 'dual'].includes(config?.selection_mode) && <span className="trend-legend-fast">{active.pattern_label || ''} · {active.setup_phase === 'pullback_resume' ? '回调再起，本轮' : '本段'}第 {active.startup_count} 阳 / {active.startup_age} 根K线</span>}
     </div>
-    <div className="trend-signal-legend" aria-label="信号类型图例"><OpportunityBadge value="trend_pullback" /><OpportunityBadge value="base_rebound" /><span>箭头 / 方块为确认 · 圆点为观察 · 灰色为起势背景</span></div>
+    {config?.selection_mode !== 'tracking' && <div className="trend-signal-legend" aria-label="信号类型图例"><OpportunityBadge value="trend_pullback" /><OpportunityBadge value="base_rebound" /><span>箭头 / 方块为确认 · 圆点为观察 · 灰色为起势背景</span></div>}
     <div ref={host} className="trend-chart" aria-label={`${timeframe === '1D' ? '日K' : '60分钟K线'}、均线及成交量，可拖动缩放`} />
   </>
 })

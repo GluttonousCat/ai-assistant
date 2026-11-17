@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { platformApi } from '../platformApi'
 import TrendChart from './TrendChart'
 import MarketFreshness from './MarketFreshness'
@@ -12,8 +12,10 @@ const number = (v, digits = 2) => v == null ? '—' : Number(v).toFixed(digits)
 const money = (v) => v == null ? '—' : v >= 1e8 ? `${(v / 1e8).toFixed(2)}亿` : `${(v / 1e4).toFixed(0)}万`
 const dateLabel = (v) => String(v || '—').replace('T', ' ').slice(0, 16)
 const EMPTY_BARS = []
+const SignalTracking = lazy(() => import('./SignalTracking'))
 
 export default function StockDashboard({ user }) {
+  const [section, setSection] = useState('screen')
   const [snapshot, setSnapshot] = useState(null)
   const [freshness, setFreshness] = useState(null)
   const mtfMode = snapshot?.metadata?.config?.selection_mode === 'mtf'
@@ -33,7 +35,7 @@ export default function StockDashboard({ user }) {
   const [code, setCode] = useState('')
   const [chartRevision, setChartRevision] = useState(0)
   const [resetChartView, setResetChartView] = useState(0)
-  const { detail, error: chartError, busy: chartBusy } = useStockChart(code, snapshot?.run_id, chartTimeframe, chartRevision)
+  const { detail, error: chartError, busy: chartBusy } = useStockChart(section === 'screen' ? code : '', snapshot?.run_id, chartTimeframe, chartRevision)
   const [rulesOpen, setRulesOpen] = useState(false)
   const starKey = `alpha:watchlist:${user?.username || user?.id || 'local'}`
   const [stars, setStars] = useState(() => {
@@ -107,6 +109,8 @@ export default function StockDashboard({ user }) {
       <div><div className="trend-eyebrow">ALPHA FINANCE RADAR / MARKET</div><h1>股票行情</h1><p>{meta?.parent_context_version ? '日K母趋势背景 · 60F反转 / 回调再起 · 盘后观察' : mtfMode ? riskMode ? '60F结构机会 · 低位反转 / 趋势回调 / 缺口守稳' : freshMode ? '60F低位早期反转 · 日K确认入场 · M8 / M13 / M21' : '60F确定趋势 · 日K确认入场 · M8 / M13 / M21' : dualMode ? '60F趋势筛选 · 趋势回调 · 阴跌与砸坑反弹' : '以主趋势筛选机会，让每一次关注都有依据。'}</p></div>
       <div className="trend-header-actions"><span className="trend-offline">● 盘后研究</span><button className="btn ghost" disabled={busy} onClick={load}>{busy ? '读取中…' : '刷新快照'}</button></div>
     </header>
+    <nav className="market-section-tabs" aria-label="股票行情功能"><button className={section === 'screen' ? 'active' : ''} aria-pressed={section === 'screen'} onClick={() => setSection('screen')}>趋势筛选</button><button className={section === 'tracking' ? 'active' : ''} aria-pressed={section === 'tracking'} onClick={() => setSection('tracking')}>信号跟踪 <small>入选之后</small></button></nav>
+    {section === 'tracking' ? <Suspense fallback={<div className="trend-placeholder">正在打开信号跟踪…</div>}><SignalTracking revision={`${snapshot?.run_id || ''}:${chartRevision}`} /></Suspense> : <>
     {error && <div className="trend-notice error" role="alert">{error}<button className="btn ghost" onClick={load}>重试</button></div>}
     {busy && !snapshot && <div className="trend-placeholder">正在读取行情与筛选结果…</div>}
     <MarketFreshness value={freshness} />
@@ -180,6 +184,7 @@ export default function StockDashboard({ user }) {
         <p>{mtfMode ? '只使用当天15:00已完成的完整60F背景与原生日K。' : '60F与原生日K分别计算，只使用已收盘数据；'}15F/30F精细择时尚未接入。参数是研究假设，仍需新样本验证；{freshMode ? '股票池为采集时的非ST上市名单，不能作为历史全市场或历史ST状态回放。' : '成分股为已保存的日期快照，不是完整历史成员序列。'}A股实际执行需考虑T+1、涨跌停、滑点及交易费用。</p>
         <p>当前参数：{mtfMode ? `M${meta.config.fast}/M${meta.config.mid}/M${meta.config.slow}简单均线，日K阳线实体≥${meta.config.daily_body_atr}ATR，初始止损至少${meta.config.stop_atr}ATR，同股冷却${meta.config.cooldown_days}个交易日` : `EMA ${meta.config.fast}/${meta.config.slow}，${earlyMode ? `首阳实体≥${meta.config.startup_body_atr}ATR、量比≥${meta.config.startup_volume_ratio}，本段效率≥${meta.config.startup_min_efficiency}` : `ER≥${meta.config.min_efficiency}，ADX≥${meta.config.min_adx}`}`}，偏离≤{meta.config.max_extension_atr}ATR，风险距离≤{meta.config.max_risk_pct}%。本周期已记录 {viewMeta.states['数据待补'] || 0} 只数据待补。</p>
       </div>}</section>
+    </>}
     </>}
   </div>
 }

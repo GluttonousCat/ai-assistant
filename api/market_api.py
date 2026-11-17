@@ -7,8 +7,31 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Query
 from tools.market.queries import query_intraday
 from skills.trend.service import dashboard, stock_detail, freshness
+from skills.trend.tracking import follow_up, follow_up_chart
 
 market_router = APIRouter(prefix="/api/v1/market", tags=["market"])
+
+
+@market_router.get("/tracking")
+async def signal_tracking(signal_date: date | None = None):
+    try:
+        return await asyncio.to_thread(follow_up, signal_date)
+    except LookupError as error:
+        raise HTTPException(404, str(error)) from error
+
+
+@market_router.get("/tracking/{code}")
+async def signal_tracking_chart(
+    code: str, run_id: UUID, timeframe: Literal["1D", "60F"] = "1D",
+):
+    import re
+
+    if not re.fullmatch(r"\d{6}\.(SH|SZ|BJ)", code):
+        raise HTTPException(422, "股票代码必须包含SH/SZ/BJ后缀")
+    try:
+        return await asyncio.to_thread(follow_up_chart, code, str(run_id), timeframe)
+    except LookupError as error:
+        raise HTTPException(404, str(error)) from error
 
 
 @market_router.get("/freshness")

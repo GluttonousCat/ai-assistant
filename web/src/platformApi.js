@@ -87,6 +87,8 @@ export const platformApi = {
   quantBacktest: (runId, offset = 0, limit = 30) => request('GET', `/api/v1/quant/backtests/${encodeURIComponent(runId)}?${new URLSearchParams({offset, limit})}`),
   marketDashboard: () => request('GET', '/api/v1/market/dashboard'),
   marketFreshness: () => request('GET', '/api/v1/market/freshness'),
+  marketTracking: (date, options = {}) => request('GET', `/api/v1/market/tracking${date ? `?signal_date=${encodeURIComponent(date)}` : ''}`, undefined, options),
+  marketTrackingChart: (code, runId, timeframe = '1D', options = {}) => request('GET', `/api/v1/market/tracking/${encodeURIComponent(code)}?${new URLSearchParams({ run_id: runId, timeframe })}`, undefined, options),
   marketStock: (code, runId, timeframe = '60F', options = {}) => request('GET', `/api/v1/market/dashboard/${encodeURIComponent(code)}?${new URLSearchParams({timeframe, ...(runId ? {run_id: runId} : {})})}`, undefined, options),
   login: (username, password) =>
     request('POST', '/api/auth/login', { username, password }),

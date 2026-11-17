@@ -139,3 +139,26 @@ def latest_snapshot(run_id: str | None = None, include_rows: bool = True):
     return json.loads(
         json.dumps({**run, "data": [r["payload"] for r in rows]}, default=str)
     )
+
+
+def history_days(end: str, limit: int = 120):
+    """One published snapshot per signal date, retaining its original version."""
+    with PgClient(read_only=True) as pg:
+        if not pg.fetch_one("SELECT to_regclass('stock.trend_scan') AS name")["name"]:
+            return []
+        rows = pg.fetch_all(
+            """SELECT DISTINCT ON (as_of::date) run_id::text,as_of,created_at,version
+            FROM stock.trend_scan WHERE as_of<=%s::timestamp
+            ORDER BY as_of::date DESC,as_of DESC,created_at DESC,run_id DESC LIMIT %s""",
+            (end, limit),
+        )
+    return json.loads(json.dumps(rows, default=str))
+
+
+def trading_days(start: str, end: str):
+    with PgClient(read_only=True) as pg:
+        return [str(r["cal_date"]) for r in pg.fetch_all(
+            """SELECT cal_date FROM stock.trade_calendar WHERE exchange='SSE'
+            AND is_open=1 AND cal_date>=%s::date AND cal_date<=%s::date ORDER BY cal_date""",
+            (start, end),
+        )]

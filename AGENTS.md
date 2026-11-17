@@ -2,7 +2,7 @@
 
 > 本文件是给 AI Agent（及新成员）的**项目第一入口**。读完本文件即可建立全局认知，
 > 再按需深入 `docs/` 对应模块文档。人类同事请从 [docs/README.md](docs/README.md) 进。
-> 更新：2026-11-16
+> 更新：2026-11-17
 
 ## 1. 项目是什么
 
@@ -27,7 +27,7 @@ core/        基础设施 (引擎与各层共用的地基, 不含业务):
              lifespan(调度器启停)/net/helpers·paths
 skills/      领域技能 (每技能一目录, 专业知识放 prompt):
              quant(v10 tranches/tranche_engine/tranche_prepare:442/532分批、逐批T+1/FIFO、完整周期胜率及部分已实现盈亏；v9结构持有/固定对照；v8参数研究/盘后触发次日执行; 见 docs/agents/quant_backtesting.md) /
-             trend(parent_context.py独立日K母趋势标注，局部60F反转可属上涨回调，保留原信号与入场条件；structure.py V9有序结构；swing.py V8底背离/回调；V7及更早快照兼容; M8/M13/M21; 见 docs/frontend/stock_dashboard.md) /
+             trend(tracking.py历史冻结名单前向跟踪/T+1·3·5·10/真实因子/交易日/缺失分离；parent_context.py独立日K母趋势标注，局部60F反转可属上涨回调，保留原信号与入场条件；structure.py V9有序结构；swing.py V8底背离/回调；V7及更早快照兼容; M8/M13/M21; 见 docs/frontend/stock_dashboard.md) /
              fin_query(Text-to-SQL) / report(研报) / scanned_report(OCR) /
              beta_alpha(产业链Beta+个股Alpha: chains种子链/analysis/tests) /
              content(内容资产管线: 画像/公众号文章/PPT/年报解读) /
@@ -56,7 +56,7 @@ storage/     pg.py(连接池) / sqlite(爬虫) / schema/(领域DDL) / repositori
 api/         路由+鉴权中间件(JWT) / agent_api(SSE) / chains_api / schema_api / market_api / reports / auth
              finance.py仅保留兼容路由聚合；events.py统一SSE编码
 web/src/     Login / Platform(侧边栏壳+角色门控) / AgentChat(智能对话,SSE) / ChainView(行业挖掘页)
-             market/(StockDashboard+TrendChart+dashboard.css,股票行情#market) /
+             market/(StockDashboard+TrendChart+SignalTracking,股票行情#market含趋势筛选/信号跟踪) /
              quant/(QuantDashboard+EquityChart+quant.css,策略与回测#quant) /
              Reports / UserAdmin / Monitor(实时监控SSE, adminOnly); Markdownish 共享渲染器；
              opportunities.js/OpportunityBadge.jsx统一趋势回调（蓝↑）与底部反转（紫■）展示，不修改历史信号

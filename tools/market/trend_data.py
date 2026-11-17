@@ -24,6 +24,14 @@ def load_dashboard(run_id=None, include_rows=True):
     return repository.latest_snapshot(run_id, include_rows)
 
 
+def tracking_days(end):
+    return repository.history_days(end)
+
+
+def tracking_calendar(start, end):
+    return repository.trading_days(start, end)
+
+
 def refresh_freshness(snapshot=None):
     from datetime import datetime
     from zoneinfo import ZoneInfo
