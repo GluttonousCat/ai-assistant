@@ -15,7 +15,7 @@ def client(auth=False):
 
 
 @pytest.mark.parametrize("path", ["/intraday", "/intraday/600000.SH?run_id=2026-11-17_1130"])
-def test_intraday_reports_and_images_require_auth(path):
+def test_intraday_reports_and_charts_require_auth(path):
     assert client(True).get("/api/v1/market" + path).status_code == 401
 
 
@@ -26,12 +26,15 @@ def test_no_report_does_not_fabricate_an_intraday_recommendation(monkeypatch):
     assert response.json()["data"] == []
 
 
-def test_image_parameters_and_report_identity_are_checked(monkeypatch):
+def test_chart_parameters_and_report_identity_are_checked(monkeypatch):
     seen = []
-    monkeypatch.setattr("api.market_api.intraday_chart", lambda *a: seen.append(a) or {"image": "safe"})
+    monkeypatch.setattr("api.market_api.intraday_chart", lambda *a: seen.append(a) or {"data": []})
     c = client()
     assert c.get("/api/v1/market/intraday/bad?run_id=2026-11-17_1130").status_code == 422
     assert c.get("/api/v1/market/intraday/600000.SH?run_id=../bad").status_code == 422
+    assert c.get("/api/v1/market/intraday/600000.SH?run_id=2026-11-17_1200").status_code == 422
+    assert c.get("/api/v1/market/intraday/600000.SH?run_id=2026-11-17_1130&timeframe=5F").status_code == 422
     assert not seen
     assert c.get("/api/v1/market/intraday/600000.SH?run_id=2026-11-17_1130").status_code == 200
-    assert seen == [("600000.SH", "2026-11-17_1130")]
+    assert c.get("/api/v1/market/intraday/600000.SH?run_id=2026-11-17_1500&timeframe=1D").status_code == 200
+    assert seen == [("600000.SH", "2026-11-17_1130", "60F"), ("600000.SH", "2026-11-17_1500", "1D")]

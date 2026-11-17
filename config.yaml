@@ -40,6 +40,10 @@ schedule:
   sync_minute: 0
   enabled: true               # false 则关闭调度器
 
+intraday_watch:
+  enabled: true               # Trading days: 10:32/11:32/14:02/15:02 Asia/Shanghai
+  workers: 4                 # Native 60F closes + 120 seconds for provider settlement
+
 # 知识星球反检测间隔参数 (FileDownloader / ZSXQCrawler 启动时读取, 修改后重启服务生效)
 zsxq:
   crawl_interval_min: 1.5        # 话题爬取最小间隔(秒)

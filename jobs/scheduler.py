@@ -287,3 +287,9 @@ def get_digest_scheduler():
     from jobs.market_digest_scheduler import get_digest_scheduler as get_digest
 
     return get_digest()
+
+
+def get_intraday_scheduler():
+    """Lifecycle composition entry for the independent closed-60F observer."""
+    from jobs.intraday_scheduler import get_intraday_scheduler as get_intraday
+    return get_intraday()

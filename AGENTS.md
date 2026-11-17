@@ -33,7 +33,8 @@ skills/      领域技能 (每技能一目录, 专业知识放 prompt):
              content(内容资产管线: 画像/公众号文章/PPT/年报解读) /
              research(研究生产线: 证据→十章草稿→成稿, 任务分派见 docs/research/tasks/)
 jobs/        market_digest_scheduler(后端每日18点/当日启动补漏/独立于17点行情/Codex任务已暂停) /
-             cache_intraday_prefix(当天已完成60F前缀/小窗口/断点续传/不推进完整日状态) / scan_intraday_watch(已发布60F规则复用/盘中80分观察/此前完整日K/独立原子结果与PNG，不覆盖正式快照) /
+             intraday_scheduler(交易日10:32/11:32/14:02/15:02，收盘120秒后采集/扫描；当天固定来源与池/串行OS锁/回执/启动只补最新到期轮次) /
+             cache_intraday_prefix(当天已完成60F前缀/小窗口/断点续传/不推进完整日状态) / scan_intraday_watch(已发布60F规则复用/盘中80分观察/此前完整日K/独立原子归档，PNG可选导出，不覆盖正式快照) /
              send_market_digest(后端定时或CLI调用;≥60分入场/观察分组;日K+60F同源前复权PNG/CSV;SMTP TLS/逐部分回执/延迟至20点;缺授权码不发) /
              annotate_trend_context(离线派生母趋势/局部触发快照，原始pattern/eligible/风控不改；盘中只用已完成日K；scan_trend后续自动标注) /
              research_online_60f(v21每月只训练已结束历史标签/指数相对排序/532入场风险2.5%，2026-01-01—11-12样本内+8.69%/回撤2.76%，双倍滑点+7.14%但压力单股尾损-11.68%；预热持币/当前名单偏差/不改默认；领域online_priority在skills/quant) /
@@ -57,7 +58,7 @@ storage/     pg.py(连接池) / sqlite(爬虫) / schema/(领域DDL) / repositori
 api/         路由+鉴权中间件(JWT) / agent_api(SSE) / chains_api / schema_api / market_api / reports / auth
              finance.py仅保留兼容路由聚合；events.py统一SSE编码
 web/src/     Login / Platform(侧边栏壳+角色门控) / AgentChat(智能对话,SSE) / ChainView(行业挖掘页)
-             market/(StockDashboard+TrendChart+SignalTracking+IntradayWatch,股票行情#market含趋势筛选/信号跟踪/独立盘中观察) /
+             market/(StockDashboard+TrendChart+SignalTracking+IntradayWatch,股票行情#market含趋势筛选/信号跟踪/独立盘中观察；四轮自动更新/可拖拽60F与5年日K，按轮次隔离截止) /
              quant/(QuantDashboard+EquityChart+quant.css,策略与回测#quant) /
              Reports / UserAdmin / Monitor(实时监控SSE, adminOnly); Markdownish 共享渲染器；
              opportunities.js/OpportunityBadge.jsx统一趋势回调（蓝↑）与底部反转（紫■）展示，不修改历史信号

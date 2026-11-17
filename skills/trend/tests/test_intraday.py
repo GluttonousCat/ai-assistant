@@ -60,7 +60,50 @@ def test_an_ordinary_bullish_bar_is_not_promoted_without_the_original_reversal(m
     assert result["status"] == "filtered"
 
 
-def test_chart_rejects_a_new_report_instead_of_mixing_snapshot_dates(monkeypatch):
-    monkeypatch.setattr(intraday, "intraday_report", lambda: {"run_id": "2026-11-18_1130", "data": []})
-    with pytest.raises(LookupError, match="快照已更新"):
+def test_chart_rejects_an_unavailable_archive_instead_of_using_latest(monkeypatch):
+    monkeypatch.setattr(intraday, "intraday_report", lambda run_id: None)
+    with pytest.raises(LookupError, match="不在已发布"):
         intraday.chart("600000.SH", "2026-11-17_1130")
+
+
+@pytest.mark.parametrize("timeframe", ["1D", "60F"])
+def test_interactive_chart_is_frozen_at_requested_slot_and_uses_true_factor_anchor(monkeypatch, timeframe):
+    minute, daily = inputs()
+    later = minute.iloc[[-1]].copy()
+    later["bar_end"] = pd.Timestamp("2026-11-17 15:00")
+    later["close"] = 99.
+    minute = pd.concat([minute, later], ignore_index=True)
+    daily_later = daily.iloc[[-1]].copy()
+    daily_later["bar_end"] = pd.Timestamp("2026-11-17 15:00")
+    daily_later["adj_factor"] = 2.
+    daily = pd.concat([daily, daily_later], ignore_index=True)
+    requested = []
+    report = {"run_id": "2026-11-17_1130", "as_of": "2026-11-17 11:30:00", "daily_as_of": "2026-11-16 15:00:00",
+              "data": [{"ts_code": "600000.SH", "trend60": {"origin": "2026-11-17T10:30:00"}}]}
+    monkeypatch.setattr(intraday, "intraday_report", lambda run: requested.append(run) or report)
+    monkeypatch.setattr(intraday, "scan_inputs", lambda *args: minute)
+    monkeypatch.setattr(intraday, "scan_daily_inputs", lambda *args: daily)
+    result = intraday.chart("600000.SH", report["run_id"], timeframe)
+    assert requested == [report["run_id"]]
+    assert result["run_id"] == report["run_id"] and result["timeframe"] == timeframe
+    assert all(not r["eligible"] for r in result["data"])
+    if timeframe == "1D":
+        assert result["data"][-1]["close"] == 10.
+        assert result["data"][-1]["ma13"] == 10.
+        assert result["data"][-1]["bar_end"] == "2026-11-16T15:00:00.000"
+        assert result["history_years"] == 5
+        assert not any(r["tracking_signal"] for r in result["data"])
+    else:
+        assert len(result["data"]) == 3 and result["data"][-1]["close"] == 10.5
+        assert result["data"][0]["close"] == 10.
+        assert sum(r["tracking_signal"] for r in result["data"]) == 1
+    assert daily.close.iloc[0] == 20. and minute.close.iloc[0] == 20.
+
+
+def test_chart_does_not_interpolate_missing_today_factor(monkeypatch):
+    minute, _ = inputs()
+    minute.loc[2, "adj_factor"] = None
+    monkeypatch.setattr(intraday, "intraday_report", lambda run: {"as_of": "2026-11-17 11:30", "daily_as_of": "2026-11-16 15:00", "data": [{"ts_code": "600000.SH"}]})
+    monkeypatch.setattr(intraday, "scan_inputs", lambda *args: minute)
+    result = intraday.chart("600000.SH", "2026-11-17_1130")
+    assert result["data"] == [] and "因子缺失" in result["issue"]

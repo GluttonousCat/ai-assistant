@@ -2,7 +2,12 @@ import { useEffect, useMemo, useState } from 'react'
 import { platformApi } from '../platformApi'
 import OpportunityBadge from '../OpportunityBadge'
 import { opportunityFor } from '../opportunities'
+import TrendChart from './TrendChart'
 import './intraday.css'
+
+const EMPTY = []
+const OBSERVATION = { selection_mode: 'tracking' }
+const SLOTS = ['10:30', '11:30', '14:00', '15:00']
 
 export default function IntradayWatch() {
   const [report, setReport] = useState(null)
@@ -13,16 +18,31 @@ export default function IntradayWatch() {
   const [query, setQuery] = useState('')
   const [kind, setKind] = useState('')
   const [stage, setStage] = useState('')
-  const [image, setImage] = useState(null)
-  const [imageError, setImageError] = useState('')
+  const [chart, setChart] = useState(null)
+  const [chartError, setChartError] = useState('')
+  const [timeframe, setTimeframe] = useState('60F')
+  const [reset, setReset] = useState(0)
+  const [focus, setFocus] = useState(0)
   useEffect(() => {
     const controller = new AbortController()
-    setBusy(true); setError('')
-    platformApi.marketIntraday({ signal: controller.signal }).then((r) => {
-      if (!controller.signal.aborted) setReport(r)
-    }).catch((e) => { if (!controller.signal.aborted) setError(e.message) })
-      .finally(() => { if (!controller.signal.aborted) setBusy(false) })
-    return () => controller.abort()
+    let pending = false
+    const load = (manual = false) => {
+      if (pending || (!manual && document.hidden)) return
+      pending = true
+      if (manual) setBusy(true)
+      platformApi.marketIntraday({ signal: controller.signal }).then((r) => {
+        if (!controller.signal.aborted) {
+          setReport((previous) => previous?.run_id === r.run_id && previous?.created_at === r.created_at && JSON.stringify(previous?.schedule) === JSON.stringify(r.schedule) ? previous : r)
+          setError('')
+        }
+      }).catch((e) => { if (!controller.signal.aborted) setError(e.message) })
+        .finally(() => { pending = false; if (!controller.signal.aborted) setBusy(false) })
+    }
+    load(true)
+    const timer = setInterval(() => load(), 60000)
+    const visible = () => { if (!document.hidden) load() }
+    document.addEventListener('visibilitychange', visible)
+    return () => { clearInterval(timer); document.removeEventListener('visibilitychange', visible); controller.abort() }
   }, [revision])
   const rows = useMemo(() => (report?.data || []).filter((r) =>
     (!query || `${r.ts_code}${r.name}`.toUpperCase().includes(query.trim().toUpperCase()))
@@ -30,26 +50,33 @@ export default function IntradayWatch() {
     && (!stage || (stage === 'new' ? r.new_today : !r.new_today))), [report, query, kind, stage])
   useEffect(() => { if (!rows.some((r) => r.ts_code === code)) setCode(rows[0]?.ts_code || '') }, [rows, code])
   const selected = rows.find((r) => r.ts_code === code)
-  const identity = selected && report?.run_id ? `${report.run_id}:${report.created_at}:${code}:${revision}` : ''
+  const identity = selected && report?.run_id ? `${report.run_id}:${report.created_at}:${code}:${timeframe}:${revision}` : ''
   useEffect(() => {
     if (!identity) return
     const controller = new AbortController()
-    setImageError('')
-    platformApi.marketIntradayChart(code, report.run_id, { signal: controller.signal }).then((r) => {
-      if (!controller.signal.aborted) setImage({ identity, value: r.image })
-    }).catch((e) => { if (!controller.signal.aborted) setImageError(e.message) })
+    setChartError('')
+    platformApi.marketIntradayChart(code, report.run_id, timeframe, { signal: controller.signal }).then((r) => {
+      if (!controller.signal.aborted) setChart({ identity, value: r })
+    }).catch((e) => { if (!controller.signal.aborted) setChartError(e.message) })
     return () => controller.abort()
-  }, [identity, code, report?.run_id])
-  const picture = image?.identity === identity ? image.value : null
+  }, [identity, code, report?.run_id, timeframe])
+  const detail = chart?.identity === identity ? chart.value : null
+  const slots = report?.slots || SLOTS.filter((slot) => slot <= String(report?.as_of).slice(11, 16))
+  const job = report?.schedule
+  const working = ['collecting', 'scanning'].includes(job?.status)
+  const progress = job?.progress
 
   return <section className="intraday-watch">
-    <header className="intraday-header"><div><h2>午间60F观察</h2><p>固定已完成的上午两根，先观察结构，再等待盘后复核。</p></div><button className="btn ghost" disabled={busy} onClick={() => setRevision((v) => v + 1)}>{busy ? '读取中…' : '刷新观察结果'}</button></header>
+    <header className="intraday-header"><div><h2>盘中60F观察</h2><p>交易日四次更新已收盘60F，观察结构演变，等待盘后复核。</p></div><button className="btn ghost" disabled={busy} onClick={() => setRevision((v) => v + 1)}>{busy ? '读取中…' : '刷新观察结果'}</button></header>
+    <div className="intraday-sessions" aria-label="60F自动更新时间">{SLOTS.map((slot) => <span key={slot} className={slots.includes(slot) ? 'complete' : ''}><b>{slot}</b><small>收盘</small></span>)}<p>收盘2分钟后开始更新 · 页面每分钟检查新结果</p></div>
+    {working && <div className="intraday-job" role="status">正在{job.status === 'collecting' ? '采集' : '计算'} {job.run_id.replace('_', ' · ')}{progress?.total ? `：${progress.completed} / ${progress.total}只` : '…'}。完成后自动显示新名单。</div>}
+    {job?.status === 'error' && <div className="trend-notice" role="status">本轮更新尚未完成，{job.attempts >= 3 ? '已达本轮重试上限，将等待下一时点' : '后台保留断点重试'}。下方仍为最近一次成功结果。</div>}
     {error && <div className="trend-notice error" role="alert">{error}</div>}
     {busy && !report ? <div className="trend-placeholder">正在读取已发布盘中观察…</div> : !report?.as_of ? <div className="trend-placeholder">{report?.note || '等待离线采集与扫描完成。'}</div> : <>
-      <div className="intraday-scope"><b>观察截止 {String(report.as_of).replace('T', ' ').slice(0, 16)}</b><span>仅10:30 / 11:30两根 · 日K背景截至 {String(report.daily_as_of).slice(0, 10)}</span><p>{report.score_scope}。所有记录均为观察，尚未满足完整日K入场确认。</p></div>
+      <div className="intraday-scope"><b>观察截止 {String(report.as_of).replace('T', ' ').slice(0, 16)}</b><span>今日已收盘{slots.length}根 · 日K背景截至 {String(report.daily_as_of).slice(0, 10)}</span><p>{report.score_scope}。所有记录均为观察，尚未满足完整日K入场确认。</p></div>
       <div className="tracking-stats intraday-stats">
         <div><span>采集范围</span><strong>{report.universe}<small>只</small></strong><p>当前已保存的非ST股票池</p></div>
-        <div><span>两根完整可得</span><strong>{report.collected}<small>只</small></strong><p>{report.collection_failed}只获取不完整，未据此推荐</p></div>
+        <div><span>已完成前缀可得</span><strong>{report.collected}<small>只</small></strong><p>{report.collection_failed}只获取不完整，未据此推荐</p></div>
         <div><span>盘中观察候选</span><strong>{report.data.length}<small>只</small></strong><p>复用现行60F结构 · 保留风险门槛</p></div>
         <div><span>今天出现新起点</span><strong>{report.data.filter((r) => r.new_today).length}<small>只</small></strong><p>其余为前一阶段结构继续观察</p></div>
       </div>
@@ -63,9 +90,14 @@ export default function IntradayWatch() {
           {selected ? <><header className="intraday-selected"><div><h3>{selected.name} <small>{selected.ts_code}</small></h3><p>{selected.parent_trend_label} · {selected.local_trigger_label}</p></div><OpportunityBadge value={selected} /></header>
             <div className="intraday-two-bars">{selected.today_bars.map((r) => <div key={r.bar_end}><span>{r.bar_end.slice(11, 16)} · 已收盘</span><strong className={r.close >= r.open ? 'up' : 'down'}>{r.close.toFixed(2)}</strong><small>开 {r.open.toFixed(2)} · 高 {r.high.toFixed(2)} · 低 {r.low.toFixed(2)}</small></div>)}<div><span>60F结构参考</span><strong>{selected.stop_price.toFixed(2)}</strong><small>风险距离 {selected.risk_pct.toFixed(2)}% · 非成交指令</small></div></div>
             <p className="intraday-reason">{selected.reason}</p>
-            <p className="intraday-chart-note">日K只展示此前完整背景；两图采用今天真实因子的同一前复权基准。</p>
-            {imageError ? <div className="trend-notice error">{imageError}</div> : picture ? <img className="intraday-chart-image" src={picture} alt={`${selected.name} 近5年日K背景与今天11:30截止的60F观察`} /> : <div className="trend-placeholder">正在读取本次K线快照…</div>}
-          </> : <div className="trend-placeholder">选择一只股票，核对上午两根K线与结构。</div>}
+            <div className="trend-chart-toolbar"><div className="trend-chart-period" role="group" aria-label="盘中图表周期"><button className={timeframe === '60F' ? 'on' : ''} onClick={() => setTimeframe('60F')}>60F</button><button className={timeframe === '1D' ? 'on' : ''} onClick={() => setTimeframe('1D')}>日K</button></div><button className="trend-chart-reset" onClick={() => setReset((v) => v + 1)}>查看最近</button><button className="trend-chart-reset" onClick={() => setFocus((v) => v + 1)}>定位结构起点</button><span>拖动平移 · 滚轮缩放 · 触屏双指缩放</span></div>
+            <p className="intraday-chart-note">{timeframe === '1D' ? '近5年完整日K背景' : `60F截至 ${String(report.as_of).slice(0, 16)}`} · 同一真实前复权基准 · 金色标记为60F结构起点，非入场确认。</p>
+            <div className="intraday-chart-canvas trend-chart-viewport">
+              <TrendChart data={detail?.data || EMPTY} instrumentKey={`${report.run_id}:${code}:${timeframe}`} timeframe={timeframe} config={OBSERVATION} stop={detail ? selected.stop_price : null} stopLabel="60F结构参考" referenceLabel="结构起点" resetView={reset} focusSignal={focus} />
+              {!detail && !chartError && <div className="trend-chart-overlay"><span className="trend-chart-spinner" />正在读取本次K线快照…</div>}
+              {(chartError || detail?.issue) && <div className="trend-chart-overlay" role="alert">{chartError || detail.issue}<button className="btn ghost" onClick={() => setRevision((v) => v + 1)}>重新读取</button></div>}
+            </div>
+          </> : <div className="trend-placeholder">选择一只股票，核对已收盘K线与结构。</div>}
         </div>
       </div>
       <p className="intraday-footnote">结果生成于 {String(report.created_at).replace('T', ' ').slice(0, 19)}。此页读取独立离线结果，未替换盘后正式名单；后续实时价格可能已变化，原17点更新与18点邮件仍按完整收盘数据运行。</p>

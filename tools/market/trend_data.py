@@ -36,14 +36,14 @@ def tracking_history(end):
     return repository.tracking_history(end)
 
 
-def intraday_report():
+def intraday_report(run_id=None):
     from storage.repositories.intraday_watch import read_report
-    return read_report()
+    return read_report(run_id)
 
 
-def intraday_chart(run_id, code):
-    from storage.repositories.intraday_watch import chart_bytes
-    return chart_bytes(run_id, code)
+def intraday_schedule():
+    from storage.repositories.intraday_watch import scheduler_state
+    return scheduler_state()
 
 
 def refresh_freshness(snapshot=None):

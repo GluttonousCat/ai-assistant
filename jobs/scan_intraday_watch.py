@@ -14,6 +14,7 @@ import pandas as pd
 from core.config import get_config
 from core.local_state import read_json, write_json, file_lock
 from core.logger import get_logger
+from jobs.cache_intraday_prefix import SLOTS
 from skills.trend.intraday import observe
 from skills.trend.chart_history import stock_chart
 from skills.trend.digest import export_csv
@@ -68,7 +69,9 @@ def make_chart(row, snapshot, cutoff, daily_cutoff, folder):
     temporary.replace(target)
 
 
-def run(day, clock="11:30", wait=False):
+def run(day, clock="11:30", wait=False, render_static=False):
+    if clock not in SLOTS:
+        raise ValueError("不支持的60F截止时点")
     cfg = get_config()
     folder = Path(cfg.root_dir) / "output" / "market" / "intraday_watch" / f"{day}_{clock.replace(':', '')}"
     if wait:
@@ -101,34 +104,38 @@ def run(day, clock="11:30", wait=False):
                     logger.info("盘中扫描进度 %s/%s", len(results), len(members))
         candidates = sorted([r for r in results if r["status"] == "candidate"], key=lambda r: (not r["new_today"], -r["score"], r["ts_code"]))
         report = {"run_id": folder.name, "as_of": cutoff, "daily_as_of": daily_cutoff,
+            "start": snapshot["metadata"]["start"],
             "created_at": datetime.now(ZoneInfo("Asia/Shanghai")).isoformat(), "source": "akshare-sina",
             "source_snapshot_run_id": snapshot["run_id"], "config": snapshot["metadata"]["config"],
             "strategy_version": snapshot.get("version"),
             "score_scope": "盘中观察最高80分；未计完整日K确认20分，不等同盘后100分评分",
             "universe": audit["total"], "collected": audit["complete"], "collection_failed": len(bad),
             "statuses": dict(Counter(r["status"] for r in results)), "data": candidates,
-            "note": "仅使用今天10:30与11:30已收盘60F；日K背景截至上一完整日。eligible均为false，等待盘后复核。"}
+            "slots": [slot for slot in SLOTS if slot <= clock],
+            "note": f"仅使用今天截至{clock}已收盘60F；日K背景截至上一完整日。eligible均为false，等待盘后复核。"}
         write_json(folder / "report.json", report)
         (folder / "candidates.csv").write_text(export_csv(candidates), encoding="utf-8-sig")
-        for i, row in enumerate(candidates, 1):
-            make_chart(row, snapshot, cutoff, daily_cutoff, folder)
-            if i % 10 == 0 or i == len(candidates):
-                logger.info("盘中候选图表 %s/%s", i, len(candidates))
+        if render_static:
+            for i, row in enumerate(candidates, 1):
+                make_chart(row, snapshot, cutoff, daily_cutoff, folder)
+                if i % 10 == 0 or i == len(candidates):
+                    logger.info("盘中候选图表 %s/%s", i, len(candidates))
         links = ''.join(f'<tr><td>{escape(r["name"])}</td><td>{r["ts_code"]}</td><td>{r["score"]}</td><td>{escape(r.get("context_pattern") or r["pattern"])}</td><td>{r["risk_pct"]:.2f}%</td></tr>' for r in candidates)
-        charts = ''.join(f'<section><h2>{escape(r["name"])} · {r["score"]}分</h2><p>{escape(r["reason"])}</p><img src="charts/{r["ts_code"]}.png" style="width:100%;height:auto"></section>' for r in candidates)
-        html = f'<html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><body style="background:#11100f;color:#e6dac5;font-family:Microsoft YaHei,Arial;max-width:1100px;margin:30px auto;padding:20px"><h1>盘中60F观察 · {escape(cutoff)}</h1><p>{escape(report["note"])}</p><p>股票池{audit["total"]}，完整两根{audit["complete"]}，候选{len(candidates)}。{escape(report["score_scope"])}</p><table cellpadding="10">{links}</table>{charts}</body></html>'
+        charts = ''.join(f'<section><h2>{escape(r["name"])} · {r["score"]}分</h2><p>{escape(r["reason"])}</p><img src="charts/{r["ts_code"]}.png" style="width:100%;height:auto"></section>' for r in candidates) if render_static else '<p>交互K线请打开项目「股票行情 → 盘中观察」。</p>'
+        html = f'<html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><body style="background:#11100f;color:#e6dac5;font-family:Microsoft YaHei,Arial;max-width:1100px;margin:30px auto;padding:20px"><h1>盘中60F观察 · {escape(cutoff)}</h1><p>{escape(report["note"])}</p><p>股票池{audit["total"]}，已完成前缀{audit["complete"]}，候选{len(candidates)}。{escape(report["score_scope"])}</p><table cellpadding="10">{links}</table>{charts}</body></html>'
         (folder / "report.html").write_text(html, encoding="utf-8")
         publish_report(report)
-        print(json.dumps({"run_id": report["run_id"], "collected": audit["complete"], "candidates": len(candidates), "new_today": sum(r["new_today"] for r in candidates), "statuses": report["statuses"]}))
+        return {"run_id": report["run_id"], "collected": audit["complete"], "candidates": len(candidates), "new_today": sum(r["new_today"] for r in candidates), "statuses": report["statuses"]}
 
 
 def main():
     parser = argparse.ArgumentParser(description="已完成60F前缀的独立盘中观察，不覆盖盘后看板")
     parser.add_argument("--day", default=str(datetime.now(ZoneInfo("Asia/Shanghai")).date()))
-    parser.add_argument("--cutoff", default="11:30", choices=["11:30"])
+    parser.add_argument("--cutoff", default="11:30", choices=SLOTS)
     parser.add_argument("--wait", action="store_true")
+    parser.add_argument("--render-static", action="store_true", help="额外导出静态PNG；前端使用可交互K线")
     args = parser.parse_args()
-    run(args.day, args.cutoff, args.wait)
+    print(json.dumps(run(args.day, args.cutoff, args.wait, args.render_static)))
 
 
 if __name__ == "__main__":

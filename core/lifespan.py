@@ -12,7 +12,7 @@ from fastapi import FastAPI
 
 from core.config import get_config
 from core.logger import get_logger
-from jobs.scheduler import get_scheduler, get_digest_scheduler
+from jobs.scheduler import get_scheduler, get_digest_scheduler, get_intraday_scheduler
 
 logger = get_logger(__name__)
 
@@ -45,6 +45,11 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"增量调度器启动失败 (非致命): {e}")
 
+    try:
+        get_intraday_scheduler().start()
+    except Exception as e:
+        logger.warning("盘中60F调度器启动失败: %s", type(e).__name__)
+
     # Independent of the 17:00 job, whose financial tail can run beyond 18:00.
     try:
         get_digest_scheduler().start()
@@ -68,6 +73,10 @@ async def lifespan(app: FastAPI):
     yield
 
     # Stop schedulers
+    try:
+        await get_intraday_scheduler().stop()
+    except Exception:
+        pass
     try:
         await get_digest_scheduler().stop()
     except Exception:

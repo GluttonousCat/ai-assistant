@@ -26,7 +26,7 @@ function applyRange(state, range, isCurrent) {
   }))
 }
 
-const TrendChart = memo(function TrendChart({ data, instrumentKey, stop, stopLabel = '参考止损', config, timeframe = '60F', resetView = 0, focusSignal = 0 }) {
+const TrendChart = memo(function TrendChart({ data, instrumentKey, stop, stopLabel = '参考止损', referenceLabel = '入选日', config, timeframe = '60F', resetView = 0, focusSignal = 0 }) {
   const host = useRef(null)
   const api = useRef(null)
   const frames = useRef(null)
@@ -125,9 +125,9 @@ const TrendChart = memo(function TrendChart({ data, instrumentKey, stop, stopLab
 
   useEffect(() => {
     const mtf = config?.selection_mode === 'mtf'
-    const tracked = rows.filter((r) => r.tracking_signal).map((r) => ({ time: r.time, position: 'aboveBar', shape: 'arrowDown', color: '#dfb671', text: '入选日' }))
+    const tracked = rows.filter((r) => r.tracking_signal).map((r) => ({ time: r.time, position: 'aboveBar', shape: 'arrowDown', color: '#dfb671', text: referenceLabel }))
     api.current.markers.setMarkers(config?.selection_mode === 'tracking' ? tracked : (mtf ? timeframe === '1D' || config?.fresh_reversal : ['early', 'dual'].includes(config?.selection_mode)) ? signalMarkers(rows, { dailyEntry: mtf }) : [])
-  }, [rows, config?.selection_mode, config?.fresh_reversal, timeframe])
+  }, [rows, config?.selection_mode, config?.fresh_reversal, timeframe, referenceLabel])
 
   useEffect(() => {
     const state = api.current

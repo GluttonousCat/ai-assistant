@@ -16,11 +16,41 @@ from storage.repositories.market import save_closed_prefix
 from storage.repositories.trend import save_adjustments
 from tools.market.adjustments import fetch_adjustments
 from tools.market.sina_transport import fetch_sina_history
-from tools.market.trend_data import scan_universe, load_dashboard
+from tools.market.trend_data import scan_universe, load_dashboard, tracking_days
 from tools.market.universe import risk_name
 
 logger = get_logger(__name__)
 SLOTS = ("10:30", "11:30", "14:00", "15:00")
+
+
+def session_manifest(root, day):
+    """Freeze one universe and pre-session strategy source across all four slots."""
+    path = root / day / "session.json"
+    with file_lock(path.with_suffix(".lock")) as acquired:
+        if not acquired:
+            raise RuntimeError("当天盘中任务正在初始化")
+        manifest = read_json(path, strict=True)
+        if manifest:
+            return manifest
+        # Preserve the source already used by a manually collected morning run.
+        for slot in SLOTS:
+            existing = read_json(root / f"{day}_{slot.replace(':', '')}" / "collection.json", strict=True)
+            if existing and not existing.get("limited"):
+                manifest = {k: existing[k] for k in ("day", "snapshot_run_id", "universe")}
+                break
+        if not manifest:
+            prior_end = str(pd.Timestamp(day) - pd.Timedelta(seconds=1))
+            history = tracking_days(prior_end)
+            if not history:
+                raise ValueError("没有此前完整交易日的策略快照")
+            manifest = {"day": day, "snapshot_run_id": history[0]["run_id"],
+                        "universe": [m for m in scan_universe(day, listed=True) if not risk_name(m.get("name"))]}
+        snapshot = load_dashboard(manifest["snapshot_run_id"], False)
+        daily_end = snapshot["metadata"].get("timeframes", {}).get("1D", {}).get("as_of", snapshot["as_of"])
+        if pd.Timestamp(daily_end) >= pd.Timestamp(day):
+            raise ValueError("盘中源快照必须早于当天日K")
+        write_json(path, manifest)
+        return manifest
 
 
 def closed_prefix(frame, day, cutoff, now):
@@ -48,15 +78,15 @@ def collect(day, cutoff="11:30", workers=4, limit=0):
     with file_lock(folder / "collection.lock") as acquired:
         if not acquired:
             raise RuntimeError("已有同批盘中采集在运行")
-        snapshot = load_dashboard(include_rows=False)
         manifest = read_json(folder / "collection.json", strict=True)
         if manifest:
             members = manifest["universe"]
         else:
-            members = [m for m in scan_universe(day, listed=True) if not risk_name(m.get("name"))]
+            session = session_manifest(folder.parent, day)
+            members = session["universe"]
             if limit:
                 members = members[:limit]
-            manifest = {"day": day, "cutoff": cutoff, "snapshot_run_id": snapshot["run_id"], "universe": members}
+            manifest = {**session, "cutoff": cutoff, "universe": members, "limited": bool(limit)}
             write_json(folder / "collection.json", manifest)
         factors = fetch_adjustments(day=day)
         if factors.empty:

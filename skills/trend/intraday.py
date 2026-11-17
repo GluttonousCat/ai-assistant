@@ -1,29 +1,65 @@
 """Closed 60F observations; daily-entry confirmation is never manufactured."""
 import math
-import base64
+import json
+from datetime import timedelta
 
 import pandas as pd
 
 from skills.trend.mtf import MtfConfig, minute_context
 from skills.trend.parent_context import annotate_summary
-from tools.market.trend_data import adjust_prices, intraday_report, intraday_chart
+from skills.trend.chart_history import five_year_start
+from tools.market.trend_data import adjust_prices, intraday_report, intraday_schedule, scan_inputs, scan_daily_inputs
 
 
 def dashboard():
-    return intraday_report()
-
-
-def chart(code, run_id=None):
     report = intraday_report()
-    if report and run_id and report["run_id"] != run_id:
-        raise LookupError("盘中观察快照已更新，请刷新名单")
+    if not report:
+        return None
+    return {**report, "schedule": intraday_schedule()}
+
+
+def chart(code, run_id=None, timeframe="60F"):
+    if timeframe not in ("1D", "60F"):
+        raise ValueError("仅支持日K与60F")
+    # Read the requested archive even while the next session is being published.
+    report = intraday_report(run_id)
     if not report or not any(r["ts_code"] == code for r in report["data"]):
         raise LookupError("该股票不在已发布盘中观察名单中")
-    png = intraday_chart(report["run_id"], code)
-    if not png:
-        raise LookupError("该股票盘中图表尚未生成")
-    return {"run_id": report["run_id"], "code": code, "as_of": report["as_of"],
-            "image": "data:image/png;base64," + base64.b64encode(png).decode()}
+    cutoff, daily_cutoff = pd.Timestamp(report["as_of"]), pd.Timestamp(report["daily_as_of"])
+    if daily_cutoff >= cutoff.normalize():
+        raise ValueError("盘中日K背景必须早于当天")
+    start = report.get("start", "2026-01-01")
+    raw = scan_inputs([code], start, str(cutoff))
+    raw = raw[pd.to_datetime(raw.bar_end) <= cutoff].copy() if not raw.empty else raw
+    minute, issue = adjust_prices(raw)
+    if issue or pd.Timestamp(minute.bar_end.max()) != cutoff:
+        return {"data": [], "issue": issue or "该时点60F不完整"}
+    frame = minute
+    if timeframe == "1D":
+        begin = five_year_start(str(daily_cutoff))
+        raw_daily = scan_daily_inputs([code], str(begin - timedelta(days=70)), str(daily_cutoff))
+        raw_daily = raw_daily[pd.to_datetime(raw_daily.bar_end) <= daily_cutoff].copy() if not raw_daily.empty else raw_daily
+        frame, issue = adjust_prices(raw_daily)
+        if issue or pd.Timestamp(frame.bar_end.max()) != daily_cutoff:
+            return {"data": [], "issue": issue or "此前完整日K背景不足"}
+        # Native daily and minute bars share today's genuine ex-rights anchor.
+        scale = float(frame.adj_factor.iloc[-1]) / float(minute.adj_factor.iloc[-1])
+        frame[["open", "high", "low", "close"]] *= scale
+    for window in (8, 13, 21):
+        frame[f"ma{window}"] = frame.close.rolling(window, min_periods=window).mean()
+    if timeframe == "1D":
+        frame = frame[pd.to_datetime(frame.bar_end).dt.date >= begin]
+    else:
+        frame = frame.tail(1000)
+    fields = ["bar_end", "open", "high", "low", "close", "volume", "amount", "ma8", "ma13", "ma21"]
+    bars = json.loads(frame[fields].to_json(orient="records", date_format="iso"))
+    origin = next(r for r in report["data"] if r["ts_code"] == code)["trend60"]["origin"]
+    for bar in bars:
+        bar["eligible"] = False
+        bar["tracking_signal"] = pd.Timestamp(bar["bar_end"]) == pd.Timestamp(origin) if timeframe == "60F" else str(bar["bar_end"])[:10] == str(origin)[:10]
+    return {"run_id": report["run_id"], "code": code, "as_of": str(cutoff),
+            "daily_as_of": str(daily_cutoff), "timeframe": timeframe, "data": bars,
+            "config": {"selection_mode": "tracking"}, "history_years": 5 if timeframe == "1D" else None}
 
 
 def observe(minute, daily, cutoff, daily_cutoff, config):

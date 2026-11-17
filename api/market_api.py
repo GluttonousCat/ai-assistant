@@ -22,13 +22,13 @@ async def market_intraday():
 
 
 @market_router.get("/intraday/{code}")
-async def market_intraday_chart(code: str, run_id: str = Query(pattern=r"^\d{4}-\d{2}-\d{2}_\d{4}$")):
+async def market_intraday_chart(code: str, run_id: str = Query(pattern=r"^\d{4}-\d{2}-\d{2}_(1030|1130|1400|1500)$"), timeframe: Literal["1D", "60F"] = "60F"):
     import re
 
     if not re.fullmatch(r"\d{6}\.(SH|SZ|BJ)", code):
         raise HTTPException(422, "股票代码必须包含SH/SZ/BJ后缀")
     try:
-        return await asyncio.to_thread(intraday_chart, code, run_id)
+        return await asyncio.to_thread(intraday_chart, code, run_id, timeframe)
     except LookupError as error:
         raise HTTPException(404, str(error)) from error
 

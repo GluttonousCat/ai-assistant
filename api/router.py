@@ -294,7 +294,7 @@ async def sync_today():
 @router.get("/admin/scheduler-status", tags=["admin"], dependencies=[Depends(require_admin)])
 async def scheduler_status():
     """Scheduler status"""
-    from jobs.scheduler import get_scheduler, get_digest_scheduler
+    from jobs.scheduler import get_scheduler, get_digest_scheduler, get_intraday_scheduler
     s = get_scheduler()
     return {
         "running": s._task is not None and not s._task.done(),
@@ -305,4 +305,5 @@ async def scheduler_status():
         "updating": s._run_lock.locked(),
         "retry_count": s._retry_count,
         "mail_digest": get_digest_scheduler().status(),
+        "intraday_watch": get_intraday_scheduler().status(),
     }
