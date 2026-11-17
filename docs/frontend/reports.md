@@ -114,6 +114,10 @@ POST /api/reports/{id}/analyze/stream   (SSE, 需 JWT)
 - 关思考模式对流式同样必须：`stream(..., extra_body={"enable_thinking": False})`；
 - 流式提取期间持有一条 PG 连接（约 1-2 分钟），与批量链路量级一致。
 
+2026-11-17代码重构：HTTP读取通过`tools/finance/report_catalog`访问`storage/repositories/reports`，
+数据库及文件检查移出事件循环；列表字段、日期格式、OCR/原文可见性、翻译优先、分页与下载保持。
+前端取消过时列表/详情请求，关闭弹窗及离页释放请求；首次搜索显式使用当前关键词。
+
 ## 二、历史问题与处理记录
 
 | 问题 | 根因 | 处理方案 | 状态 |
@@ -194,3 +198,8 @@ POST /api/reports/{id}/analyze/stream   (SSE, 需 JWT)
 
 > 注意：常驻服务（计划任务 `AIAssistantServer`）不会热加载，后端改动需重启后生效；
 > 前端 `web/dist` 已重新构建，重启后同批生效。
+
+2026-11-17历史问题与处理：异步路由同步查库阻塞其他HTTP → to_thread及仓储收敛；
+setQuery后读取旧状态、慢请求覆盖新页面 → 显式搜索参数、AbortSignal及结果归属检查。
+验证：51组旧/新查询内容与绑定参数一致，新增接口/资源异常路径测试通过，687项后端及25项前端回归通过；
+真实浏览器首次搜索正确，未触发LLM或额外邮件。

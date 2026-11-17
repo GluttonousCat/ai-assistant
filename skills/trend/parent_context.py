@@ -64,19 +64,23 @@ def daily_context(daily, cfg=ParentConfig()):
     ):
         raise ValueError("母趋势价格无效")
     floor = f.low.shift().rolling(cfg.anchor_window).min()
+    floor_values = floor.to_numpy()
+    slow_values = f.ma21.to_numpy()
+    closes = f.close.to_numpy()
+    ready_values = (
+        np.isfinite(f[["ma13", "ma21", "atr"]]).all(axis=1).to_numpy()
+        & np.isfinite(floor_values)
+        & f.atr.gt(0).to_numpy()
+    )
     leg, consecutive, broken = None, 0, 0
     output = []
     for i, r in enumerate(f.itertuples()):
         eps = 1e-8 * r.atr
-        ready = (
-            i >= 25
-            and np.isfinite([r.ma13, r.ma21, r.atr, floor.iloc[i]]).all()
-            and r.atr > 0
-        )
+        ready = i >= 25 and ready_values[i]
         up = (
             ready
             and r.ma13 > r.ma21 + eps
-            and r.ma21 > f.ma21.iloc[i - 5] + eps
+            and r.ma21 > slow_values[i - 5] + eps
             and r.close >= r.ma13 - eps
         )
         consecutive = consecutive + 1 if up else 0
@@ -92,14 +96,14 @@ def daily_context(daily, cfg=ParentConfig()):
             ):
                 leg = None
         if leg is None and consecutive >= cfg.min_up_bars:
-            impulse = r.high - floor.iloc[i]
+            impulse = r.high - floor_values[i]
             if (
                 impulse >= cfg.min_impulse_atr * r.atr
-                and impulse / floor.iloc[i] * 100 >= cfg.min_impulse_pct
+                and impulse / floor_values[i] * 100 >= cfg.min_impulse_pct
             ):
                 leg = dict(
                     origin=r.bar_end,
-                    floor=float(floor.iloc[i]),
+                    floor=float(floor_values[i]),
                     peak=float(r.high),
                     peak_at=i,
                     pull=None,
@@ -111,7 +115,7 @@ def daily_context(daily, cfg=ParentConfig()):
             elif (
                 leg["pull"] is None
                 and i > leg["peak_at"]
-                and r.close < f.close.iloc[i - 1] - eps
+                and r.close < closes[i - 1] - eps
                 and leg["peak"] - r.low >= 0.5 * r.atr
             ):
                 leg["pull"] = i
@@ -120,7 +124,7 @@ def daily_context(daily, cfg=ParentConfig()):
             state = "unknown"
         elif (
             r.ma13 < r.ma21 - eps
-            and r.ma21 < f.ma21.iloc[i - 5] - eps
+            and r.ma21 < slow_values[i - 5] - eps
             and r.close < r.ma21
         ):
             state = "declining"

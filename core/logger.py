@@ -17,10 +17,13 @@ Design (normalized 2026-09-10, replacing the old runaway one-file-per-module sch
 
 Usage unchanged: from core.logger import get_logger; logger = get_logger(__name__)
 """
+
 from __future__ import annotations
 
 import logging
 import sys
+import threading
+from functools import lru_cache
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 
@@ -37,11 +40,13 @@ def _project_root() -> Path:
     return p.parents[1]
 
 
+@lru_cache(maxsize=1)
 def _settings() -> dict:
     """Logging config (level/dir/backup_count); defaults on read failure so logging never breaks business"""
     cfg = {"level": "INFO", "dir": "logs", "backup_count": 30}
     try:
         import yaml
+
         with open(_project_root() / "config.yaml", encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
         lg = data.get("logging") or {}
@@ -66,38 +71,42 @@ class _LogManager:
     """Lazily create loggers per bucket (one file handler per bucket, idempotent in-process)"""
 
     _buckets: dict = {}
+    _lock = threading.Lock()
 
     @classmethod
     def setup(cls, name: str) -> logging.Logger:
         bucket = _bucket(name)
-        if bucket not in cls._buckets:
-            cfg = _settings()
-            logger = logging.getLogger(bucket)
-            logger.setLevel(
-                getattr(logging, str(cfg["level"]).upper(), logging.INFO))
-            formatter = logging.Formatter(_FORMAT, datefmt=_DATE_FORMAT)
+        with cls._lock:
+            if bucket not in cls._buckets:
+                cfg = _settings()
+                logger = logging.getLogger(bucket)
+                logger.setLevel(
+                    getattr(logging, str(cfg["level"]).upper(), logging.INFO)
+                )
+                formatter = logging.Formatter(_FORMAT, datefmt=_DATE_FORMAT)
 
-            console = logging.StreamHandler(sys.stdout)
-            console.setFormatter(formatter)
-            logger.addHandler(console)
+                console = logging.StreamHandler(sys.stdout)
+                console.setFormatter(formatter)
+                logger.addHandler(console)
 
-            log_dir = _project_root() / str(cfg["dir"])
-            log_dir.mkdir(parents=True, exist_ok=True)
-            fh = TimedRotatingFileHandler(
-                filename=str(log_dir / f"{bucket}.log"),
-                when="D", interval=1,
-                backupCount=int(cfg["backup_count"]),
-                encoding="utf-8")
-            fh.setFormatter(formatter)
-            logger.addHandler(fh)
-            logger.propagate = False       # bucket is the terminal sink: no bubbling to root (prevents uvicorn double logging)
-            cls._buckets[bucket] = logger
-
+                log_dir = _project_root() / str(cfg["dir"])
+                log_dir.mkdir(parents=True, exist_ok=True)
+                fh = TimedRotatingFileHandler(
+                    filename=str(log_dir / f"{bucket}.log"),
+                    when="D",
+                    interval=1,
+                    backupCount=int(cfg["backup_count"]),
+                    encoding="utf-8",
+                )
+                fh.setFormatter(formatter)
+                logger.addHandler(fh)
+                logger.propagate = False  # bucket is the terminal sink: no bubbling to root (prevents uvicorn double logging)
+                cls._buckets[bucket] = logger
         # Return a child logger named after the module full name: level inherits
         # from the bucket, %(name)s prints the full name
         child = logging.getLogger(name)
         if name != bucket:
-            child.propagate = True         # bubble up to the bucket logger for unified output
+            child.propagate = True  # bubble up to the bucket logger for unified output
         return child
 
 
@@ -105,5 +114,7 @@ def get_logger(name: str = "app") -> logging.Logger:
     """Entry point: get_logger(__name__). Direct __main__ runs are bucketed and displayed under the real package name."""
     if name == "__main__":
         pkg = getattr(sys.modules.get("__main__"), "__package__", "") or ""
-        name = pkg or "cli"          # %(name)s also prints the real package name, never __main__
+        name = (
+            pkg or "cli"
+        )  # %(name)s also prints the real package name, never __main__
     return _LogManager.setup(name)

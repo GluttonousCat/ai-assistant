@@ -5,6 +5,7 @@ Unified configuration management
 - .env:        secrets (OPENAI_API_KEY / TUSHARE_TOKEN / PG_* / ZSXQ_* ...)
 Priority: environment variables > config.yaml
 """
+
 from __future__ import annotations
 
 import os
@@ -57,16 +58,25 @@ class Config:
     def __init__(self) -> None:
         if getattr(self, "_initialized", False):
             return
-        self._initialized = True
-
-        self.root_dir = _find_project_root()
-        _load_dotenv(self.root_dir / ".env")
-
-        self._yaml: Dict[str, Any] = {}
-        config_file = self.root_dir / "config.yaml"
-        if config_file.exists():
-            with open(config_file, "r", encoding="utf-8") as f:
-                self._yaml = yaml.safe_load(f) or {}
+        # __new__ publishes the instance before Python calls __init__. Other
+        # threads must wait for complete initialization, and a failed load must
+        # remain retryable rather than leaving a poisoned singleton behind.
+        with self._lock:
+            if getattr(self, "_initialized", False):
+                return
+            root = _find_project_root()
+            _load_dotenv(root / ".env")
+            config_file = root / "config.yaml"
+            data = {}
+            if config_file.exists():
+                data = yaml.safe_load(config_file.read_text(encoding="utf-8"))
+                if data is None:
+                    data = {}
+            if not isinstance(data, dict):
+                raise ValueError("config.yaml must contain a mapping")
+            self.root_dir = root
+            self._yaml: Dict[str, Any] = data
+            self._initialized = True
 
     # ---------- generic getters ----------
     def get(self, key: str, default: Any = None) -> Any:

@@ -1,6 +1,7 @@
 import { Fragment, memo, useEffect, useRef, useState } from 'react'
 import { platformApi } from './platformApi'
-import ResultChart, { buildChartSpec, COL_LABELS, parseNum, fmtDateCol } from './ResultChart'
+import ResultChart from './ResultChart'
+import { buildChartSpec, COL_LABELS, parseNum, fmtDateCol } from './chat/resultData'
 import Markdownish from './Markdownish'
 import useChatWorkspace from './useChatWorkspace'
 import './chat.css'

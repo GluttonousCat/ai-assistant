@@ -1,11 +1,6 @@
 {
-  "api/monitor_api.py -> storage.pg": 1,
-  "api/reports_api.py -> storage.pg": 1,
   "api/router.py -> jobs.scheduler": 2,
   "api/router.py -> jobs.sync_zxsq_to_pg": 1,
-  "api/router.py -> storage.pg": 1,
-  "api/router.py -> storage.pg_schema": 1,
-  "api/router.py -> storage.sqlite.account": 1,
   "core/lifespan.py -> jobs.scheduler": 1,
   "core/lifespan.py -> jobs.zsxq_scheduler": 2,
   "core/security.py -> storage.repositories": 1,

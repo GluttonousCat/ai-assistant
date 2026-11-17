@@ -108,6 +108,9 @@ hash 路由（`window.location.hash`）：`#chat`（默认）→ 智能对话；
 | 导航需按角色分级（区间看板/用户管理 admin 专属） | 初版导航无权限概念 | NAV 项加 `adminOnly`：非 admin 置灰 🔒；新增 UserAdmin 页（角色切换）；hash 直达回落 | ✅ 本轮 |
 | 用户管理仅 Gluttonouscat 可见 | 所有 admin 均可管理用户过宽 | NAV 加 `superOnly`（非超管不渲染该项）+ API `_require_super`；区间看板维持 admin 可见 | ✅ 本轮 |
 
+2026-11-17历史问题与处理：静态导入所有业务导致入口包含未使用的图表；改为会话hook独立、
+页面lazy/Suspense与FeatureBoundary隔离，绘图与纯数据模块分开。JSON/SSE/下载共用http鉴权，旧API出口兼容。
+
 ## 五、构建与部署
 
 2026-11-13：三个研究入口及对应页面名称已统一；前端构建、lint（保留6项既有告警）、分层检查及边界测试通过。
@@ -121,3 +124,6 @@ cd web && npm run build     # 产物 → web/dist
 ```
 
 开发模式：`npm run dev`（Vite 代理 /api → 127.0.0.1:8208）。
+
+2026-11-17：入口JS由498.10KB降至200.53KB，图表库在需要时加载；25项前端测试、构建和lint零告警通过。
+浏览器覆盖四个主要入口、hash直达、会话恢复及390px无溢出；687项Python测试通过。

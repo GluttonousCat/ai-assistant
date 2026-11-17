@@ -185,7 +185,7 @@ def build_app(interval: float, fail_threshold: int, auto_restart: bool) -> FastA
         finally:
             clients.discard(ws)
 
-    @app.on_event("startup")   # noqa: deprecated-but-stable; no refactor just to silence the warning
+    @app.on_event("startup")   # Kept for compatibility with the existing sentinel lifecycle.
     async def _loop():
         async def run():
             while True:

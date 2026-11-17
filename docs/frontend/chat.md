@@ -161,6 +161,10 @@
   前端渲染，图表/滚动相关结论继续有效
 
 
+2026-11-17模块收敛：`chat/resultData.js`提供纯数据格式与图形判别，`ResultChart.jsx`只渲染，
+`chat/ResultLineChart.jsx`在真正需要日线走势图时加载绘图库；`lib/http.js`统一SSE与JSON/下载鉴权。
+保留表格、累计季度独立柱与行情连续线的原选择规则，新增纯数据及中文跨字节SSE测试。
+
 ## 五、验证记录
 
 2026-11-12：SSE 协议 3 项 Node 测试通过；前端生产构建通过，lint 无错误（现有混合导出 Fast Refresh 告警保留）。

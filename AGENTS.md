@@ -25,6 +25,7 @@ harness/     prompts(数据口径)/execution(工具沙盒)/loop(决策入口)；
 core/        基础设施 (引擎与各层共用的地基, 不含业务):
              config(.env+yaml)/logger(按顶层包分桶)/security(JWT+bcrypt)/
              lifespan(调度器启停)/net/helpers·paths
+             config并发初始化完整发布/失败可重试；logger并发只建一组handler
 skills/      领域技能 (每技能一目录, 专业知识放 prompt):
              quant(v10 tranches/tranche_engine/tranche_prepare:442/532分批、逐批T+1/FIFO、完整周期胜率及部分已实现盈亏；v9结构持有/固定对照；v8参数研究/盘后触发次日执行; 见 docs/agents/quant_backtesting.md) /
              trend(episodes.py连续入选合轮/升级不重开/20交易日归档；chart_history.py独立5年日K展示不改冻结信号；tracking.py历史名单前向跟踪/T+1·3·5·10/真实因子/交易日/缺失分离；parent_context.py独立日K母趋势标注，局部60F反转可属上涨回调，保留原信号与入场条件；structure.py V9有序结构；swing.py V8底背离/回调；V7及更早快照兼容; M8/M13/M21; 见 docs/frontend/stock_dashboard.md) /
@@ -58,6 +59,8 @@ storage/     pg.py(连接池) / sqlite(爬虫) / schema/(领域DDL) / repositori
 api/         路由+鉴权中间件(JWT) / agent_api(SSE) / chains_api / schema_api / market_api / reports / auth
              finance.py仅保留兼容路由聚合；events.py统一SSE编码
 web/src/     Login / Platform(侧边栏壳+角色门控) / AgentChat(智能对话,SSE) / ChainView(行业挖掘页)
+             lib/http(JSON/SSE/下载共用鉴权与错误)/hooks/useSession/components/FeatureBoundary；页面与走势图按需加载
+             chat/resultData(纯图形数据)/ResultLineChart(绘图)，旧platformApi出口兼容
              market/(StockDashboard+TrendChart+SignalTracking+IntradayWatch,股票行情#market含趋势筛选/信号跟踪/独立盘中观察；四轮自动更新/可拖拽60F与5年日K，按轮次隔离截止) /
              quant/(QuantDashboard+EquityChart+quant.css,策略与回测#quant) /
              Reports / UserAdmin / Monitor(实时监控SSE, adminOnly); Markdownish 共享渲染器；

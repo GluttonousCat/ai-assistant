@@ -87,15 +87,11 @@ def version_for(cfg):
 
 
 def features(bars, cfg=MtfConfig()):
-    f = (
-        bars.copy()
-        .sort_values("bar_end")
-        .drop_duplicates("bar_end")
-        .reset_index(drop=True)
-    )
+    f = bars.sort_values("bar_end").drop_duplicates("bar_end").reset_index(drop=True)
     f["bar_end"] = pd.to_datetime(f.bar_end)
     for key in ["open", "high", "low", "close", "volume", "amount"]:
-        f[key] = pd.to_numeric(f[key], errors="coerce")
+        if not pd.api.types.is_numeric_dtype(f[key]):
+            f[key] = pd.to_numeric(f[key], errors="coerce")
     for period in [cfg.fast, cfg.mid, cfg.slow]:
         f[f"ma{period}"] = f.close.rolling(period).mean()
     previous = f.close.shift()
@@ -153,7 +149,9 @@ def minute_context(minute, cfg=MtfConfig()):
 def evaluate(minute, daily, cfg=MtfConfig()):
     """Input prices must be adjusted; outputs never create a 60F entry order."""
     m, d = minute_context(minute, cfg), features(daily, cfg)
-    reversal_cols = [c for c in m if c.startswith("reversal_")] if cfg.fresh_reversal else []
+    reversal_cols = (
+        [c for c in m if c.startswith("reversal_")] if cfg.fresh_reversal else []
+    )
     # A stale previous-day context, or a day with a missing 60F bar, cannot trade.
     count = m.groupby(m.bar_end.dt.normalize()).bar_end.transform("size")
     complete = m.bar_end.dt.hour.eq(15) & m.bar_end.dt.minute.eq(0) & count.eq(4)

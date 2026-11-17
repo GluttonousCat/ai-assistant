@@ -1,12 +1,13 @@
-import { useEffect, useRef, useState } from 'react'
-import { platformApi, auth } from './platformApi'
-import AgentChat from './AgentChat'
-import Reports from './Reports'
-import ChainView from './ChainView'
-import UserAdmin from './UserAdmin' // user management (admin only)
-import Monitor from './Monitor' // real-time monitor (agent sessions/tools/LLM, admin only)
-import StockDashboard from './market/StockDashboard'
-import QuantDashboard from './quant/QuantDashboard'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
+
+import FeatureBoundary from './components/FeatureBoundary'
+const AgentChat = lazy(() => import('./AgentChat'))
+const Reports = lazy(() => import('./Reports'))
+const ChainView = lazy(() => import('./ChainView'))
+const UserAdmin = lazy(() => import('./UserAdmin'))
+const Monitor = lazy(() => import('./Monitor'))
+const StockDashboard = lazy(() => import('./market/StockDashboard'))
+const QuantDashboard = lazy(() => import('./quant/QuantDashboard'))
 
 // Navigation definition: items with adminOnly are greyed out and unclickable for non-admins
 
@@ -118,6 +119,7 @@ export default function Platform({ user, onLogout }) {
       </aside>
 
       <main className="main">
+        <FeatureBoundary key={nav}><Suspense fallback={<div className="loading"><div className="spinner" />正在加载页面…</div>}>
         {nav === 'chat' && <AgentChat />}
         {nav === 'market' && <StockDashboard key={user.username} user={user} />}
         {nav === 'quant' && <QuantDashboard />}
@@ -125,29 +127,8 @@ export default function Platform({ user, onLogout }) {
         {nav === 'reports' && <Reports />}
         {nav === 'monitor' && isAdmin && <Monitor />}
         {nav === 'users' && isSuper && <UserAdmin />}
+        </Suspense></FeatureBoundary>
       </main>
     </div>
   )
-}
-
-// Persistent login session check
-export function useSession() {
-  const [user, setUser] = useState(null)
-  const [checked, setChecked] = useState(false)
-
-  useEffect(() => {
-    const saved = auth.getUser()
-    const token = auth.getToken()
-    if (saved && token) {
-      platformApi
-        .me()
-        .then((me) => setUser({ ...saved, ...me }))
-        .catch(() => auth.clear())
-        .finally(() => setChecked(true))
-    } else {
-      setChecked(true)
-    }
-  }, [])
-
-  return { user, checked, setUser }
 }

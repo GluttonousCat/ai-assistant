@@ -25,34 +25,51 @@ export default function Reports() {
   // AI analysis streaming modal state: { id, title, stages:[{message,status}], text, data, error, done }
   const [ai, setAi] = useState(null)
   const aiAbortRef = useRef(null)
+  const listRequest = useRef(null)
+  const detailRequest = useRef(null)
   const streamBoxRef = useRef(null)
 
   const pageSize = 15
 
-  const load = async (p = page) => {
+  const load = async (p = page, searchQuery = query) => {
+    listRequest.current?.abort()
+    const controller = new AbortController()
+    listRequest.current = controller
     setLoading(true)
     setError(null)
     try {
       const params = {
-        keyword: query || undefined, analysis: analysis === 'all' ? undefined : analysis,
+        keyword: searchQuery || undefined, analysis: analysis === 'all' ? undefined : analysis,
         market: market === 'all' ? undefined : market,
         page: p, page_size: pageSize,
       }
-      const res = await platformApi.reports(params)
+      const res = await platformApi.reports(params, { signal: controller.signal })
+      if (controller.signal.aborted) return
       setItems(res.items || [])
       setTotal(res.total || 0)
       setPage(p)
     } catch (e) {
-      setError(e.message)
+      if (!controller.signal.aborted) setError(e.message)
     } finally {
-      setLoading(false)
+      if (!controller.signal.aborted) setLoading(false)
     }
   }
 
   useEffect(() => { load(1) }, [analysis, market]) // eslint-disable-line
-  useEffect(() => { window._reportsReload = () => load(page) }, [page]) // eslint-disable-line
+  useEffect(() => { window._reportsReload = () => load(page) }, [page, query, analysis, market]) // eslint-disable-line
+  useEffect(() => () => {
+    listRequest.current?.abort()
+    detailRequest.current?.abort()
+    aiAbortRef.current?.()
+    delete window._reportsReload
+  }, [])
 
   const pages = Math.max(1, Math.ceil(total / pageSize))
+
+  function search() {
+    setQuery(keyword)
+    load(1, keyword)
+  }
 
   function doJump() {
     const p = parseInt(jumpInput, 10)
@@ -60,13 +77,21 @@ export default function Reports() {
   }
 
   async function openDetail(id) {
+    detailRequest.current?.abort()
+    const controller = new AbortController()
+    detailRequest.current = controller
     setDetail({ loading: true })
     try {
-      const d = await platformApi.reportDetail(id)
-      setDetail(d)
+      const d = await platformApi.reportDetail(id, { signal: controller.signal })
+      if (!controller.signal.aborted) setDetail(d)
     } catch (e) {
-      setDetail({ error: e.message })
+      if (!controller.signal.aborted) setDetail({ error: e.message })
     }
+  }
+
+  function closeDetail() {
+    detailRequest.current?.abort()
+    setDetail(null)
   }
 
   // Download the original report PDF (locally downloaded file, saved via authorized fetch blob)
@@ -135,7 +160,7 @@ export default function Reports() {
               }}
               value={keyword}
               onChange={(e) => setKeyword(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && (setQuery(keyword), load(1))}
+              onKeyDown={(e) => e.key === 'Enter' && search()}
               placeholder="搜索标题 / 分析师 / 机构"
             />
           </div>
@@ -152,7 +177,7 @@ export default function Reports() {
               {Object.entries(MARKET_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
             </select>
           </div>
-          <button className="btn ghost" onClick={() => { setQuery(keyword); load(1) }}>搜索</button>
+          <button className="btn ghost" onClick={search}>搜索</button>
         </div>
       </div>
 
@@ -233,7 +258,7 @@ export default function Reports() {
       </div>
 
       {detail && (
-        <div className="modal-mask" onClick={() => setDetail(null)}>
+        <div className="modal-mask" onClick={closeDetail}>
           <div className="modal report-modal" onClick={(e) => e.stopPropagation()}>
             {detail.loading ? (
               <div className="loading"><div className="spinner" />加载研报…</div>
@@ -250,7 +275,7 @@ export default function Reports() {
                       ⬇ 下载原文
                     </button>
                   )}
-                  <button className="modal-close" onClick={() => setDetail(null)}>×</button>
+                  <button className="modal-close" onClick={closeDetail}>×</button>
                 </div>
                 <div className="report-meta">
                   <span>{detail.org_name || '未知机构'}</span>

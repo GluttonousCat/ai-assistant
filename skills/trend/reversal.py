@@ -56,7 +56,10 @@ def reversal_context(frame, max_age=12, cycle_reset=False):
         .to_numpy(dtype=bool)
     )
     records, origin = [], None
-    for i, r in enumerate(f.itertuples()):
+    # Avoid converting every extra indicator column to Python tuples for each
+    # candle. The state machine consumes only these six immutable inputs.
+    inputs = f[["bar_end", "open", "low", "close", "ma21", "atr"]]
+    for i, r in enumerate(inputs.itertuples(index=False)):
         volatility = float(atr_values[i])
         # A local MA cross or a pause never erases the original start. A fresh
         # lower low invalidates that structure and permits a genuinely new pit.

@@ -262,8 +262,11 @@ class PgClient:
 
     def fetch_one(self, sql: str, params: Optional[Sequence] = None,
                   as_dict: bool = True) -> Optional[Dict[str, Any]]:
-        rows = self.fetch_all(sql, params, as_dict)
-        return rows[0] if rows else None
+        self.cur.execute(sql, params)
+        row = self.cur.fetchone()
+        if row is None or not as_dict:
+            return row
+        return dict(zip((column[0] for column in self.cur.description), row))
 
     def fetch_df(self, sql: str, params: Optional[Sequence] = None) -> pd.DataFrame:
         """Query returning a DataFrame"""

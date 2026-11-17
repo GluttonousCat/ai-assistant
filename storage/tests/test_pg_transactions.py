@@ -103,3 +103,27 @@ def test_generated_sql_runs_in_read_only_transaction(client):
     with pg:
         pass
     connection.cursor.return_value.execute.assert_any_call("SET TRANSACTION READ ONLY")
+
+
+@pytest.mark.parametrize(
+    "row,as_dict,expected",
+    [
+        ((7, "value"), True, {"id": 7, "name": "value"}),
+        ((7, "value"), False, (7, "value")),
+        (None, True, None),
+    ],
+)
+def test_fetch_one_does_not_materialize_the_remaining_result(
+    client, row, as_dict, expected
+):
+    pg, connection, _ = client
+    cursor = connection.cursor.return_value
+    cursor.description = [("id",), ("name",)]
+    cursor.fetchone.return_value = row
+    cursor.fetchall.side_effect = AssertionError("single row query must not fetch all")
+    with pg:
+        assert (
+            pg.fetch_one("SELECT id,name FROM records WHERE id>%s", (3,), as_dict)
+            == expected
+        )
+    cursor.execute.assert_any_call("SELECT id,name FROM records WHERE id>%s", (3,))

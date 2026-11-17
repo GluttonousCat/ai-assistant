@@ -1,85 +1,6 @@
-import { createEventParser } from './sse'
+import { auth, authorizedFetch, request, sseStream } from './lib/http.js'
 
-// Platform API client (JWT-authenticated)
-const TOKEN_KEY = 'aiass_token'
-const USER_KEY = 'aiass_user'
-
-export const auth = {
-  getToken: () => localStorage.getItem(TOKEN_KEY) || '',
-  getUser: () => {
-    try { return JSON.parse(localStorage.getItem(USER_KEY) || 'null') } catch { return null }
-  },
-  save(token, user) {
-    localStorage.setItem(TOKEN_KEY, token)
-    localStorage.setItem(USER_KEY, JSON.stringify(user))
-  },
-  clear() {
-    localStorage.removeItem(TOKEN_KEY)
-    localStorage.removeItem(USER_KEY)
-  },
-}
-
-async function request(method, path, body, options = {}) {
-  const headers = { 'Content-Type': 'application/json' }
-  const token = auth.getToken()
-  if (token) headers['Authorization'] = `Bearer ${token}`
-  const res = await fetch(path, {
-    method,
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
-    signal: options.signal,
-  })
-  // 401: on the login endpoint a 401 means "wrong password"; on other endpoints it means "session expired"
-  if (res.status === 401 && !path.startsWith('/api/auth/login')) {
-    auth.clear()
-    window.dispatchEvent(new CustomEvent('auth:expired'))
-    throw new Error('登录已失效, 请重新登录')
-  }
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}))
-    throw new Error(data.detail || `HTTP ${res.status}`)
-  }
-  return res.json()
-}
-
-// Streaming SSE POST: invokes onEvent({type, ...}) per event.
-// Returns {promise, abort} immediately: promise resolves when the stream ends/fails; abort() can interrupt at any time.
-function sseStream(path, body, onEvent) {
-  const ac = new AbortController()
-  const promise = (async () => {
-    const res = await fetch(path, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${auth.getToken()}` },
-      body: JSON.stringify(body),
-      signal: ac.signal,
-    })
-    if (res.status === 401) {
-      auth.clear()
-      window.dispatchEvent(new CustomEvent('auth:expired'))
-      throw new Error('登录已失效, 请重新登录')
-    }
-    if (!res.ok) {
-      const errBody = await res.json().catch(() => ({}))
-      throw new Error(errBody.detail || `HTTP ${res.status}`)
-    }
-    if (!res.body) throw new Error('服务未返回可读取的响应')
-    const reader = res.body.getReader()
-    const decoder = new TextDecoder('utf-8')
-    const parse = createEventParser(onEvent)
-    try {
-      for (;;) {
-        const { done, value } = await reader.read()
-        if (done) { parse(decoder.decode(), true); break }
-        parse(decoder.decode(value, { stream: true }))
-      }
-    } catch (err) {
-      if (err.name !== 'AbortError') throw err
-    } finally {
-      reader.releaseLock?.()
-    }
-  })()
-  return { promise, abort: () => ac.abort() }
-}
+export { auth }
 
 export const platformApi = {
   quantStrategies: () => request('GET', '/api/v1/quant/strategies'),
@@ -122,29 +43,18 @@ export const platformApi = {
   saveChain: (yamlText) => request('POST', '/api/v1/chains/save', { yaml: yamlText }),
 
   // Reports center
-  reports: (params = {}) => {
+  reports: (params = {}, options = {}) => {
     const qs = new URLSearchParams(
       Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '')
     ).toString()
-    return request('GET', `/api/reports${qs ? `?${qs}` : ''}`)
+    return request('GET', `/api/reports${qs ? `?${qs}` : ''}`, undefined, options)
   },
   reportTags: () => request('GET', '/api/reports/tags'),
   reportStocks: () => request('GET', '/api/reports/stocks'),
-  reportDetail: (id) => request('GET', `/api/reports/${id}`),
+  reportDetail: (id, options = {}) => request('GET', `/api/reports/${id}`, undefined, options),
   // Download the original report (authorized fetch blob -> browser save; returns the saved filename)
   downloadReport: async (id) => {
-    const res = await fetch(`/api/reports/${id}/download`, {
-      headers: { Authorization: `Bearer ${auth.getToken()}` },
-    })
-    if (res.status === 401) {
-      auth.clear()
-      window.dispatchEvent(new CustomEvent('auth:expired'))
-      throw new Error('登录已失效, 请重新登录')
-    }
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}))
-      throw new Error(body.detail || `HTTP ${res.status}`)
-    }
+    const res = await authorizedFetch(`/api/reports/${id}/download`)
     const blob = await res.blob()
     // content-disposition: attachment; filename*=UTF-8''<urlencoded>
     const cd = res.headers.get('content-disposition') || ''
