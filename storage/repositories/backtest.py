@@ -26,6 +26,17 @@ def input_dates(start, end):
     )
 
 
+def workspace_availability():
+    with PgClient(read_only=True) as pg:
+        return pg.fetch_one("""SELECT
+            (SELECT max(trade_date) FROM stock.daily_price_limit) AS price_limits,
+            (SELECT max(trade_date) FROM stock.daily) AS daily,
+            (SELECT max(trade_date) FROM stock.adj_factor) AS factors,
+            (SELECT max(bar_end)::date FROM stock.intraday_bar
+              WHERE interval_minutes=60 AND source='akshare-sina' AND adjustment='none') AS minute"""
+        )
+
+
 def save_limits(frame):
     with PgClient() as pg:
         return pg.upsert_df(
@@ -59,7 +70,7 @@ def save_index(frame):
 def quotes(codes, start, end, timeframe):
     with PgClient(read_only=True) as pg:
         if timeframe == "60F":
-            return pg.fetch_df(
+            return pg.fetch_df_stream(
                 """SELECT b.ts_code,b.bar_end,b.open,b.high,b.low,b.close,b.volume,b.amount,
                 f.adj_factor,l.up_limit,l.down_limit
                 FROM stock.intraday_bar b LEFT JOIN stock.adj_factor f ON f.ts_code=b.ts_code AND f.trade_date=b.bar_end::date
@@ -68,7 +79,7 @@ def quotes(codes, start, end, timeframe):
                 AND b.bar_end::date BETWEEN %s AND %s ORDER BY b.ts_code,b.bar_end""",
                 (codes, start, end),
             )
-        return pg.fetch_df(
+        return pg.fetch_df_stream(
             """SELECT d.ts_code,d.trade_date::timestamp+interval '15 hours' AS bar_end,
             d.open,d.high,d.low,d.close,d.vol*100 AS volume,d.amount*1000 AS amount,
             f.adj_factor,l.up_limit,l.down_limit FROM stock.daily d

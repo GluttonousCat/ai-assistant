@@ -27,13 +27,14 @@ core/        基础设施 (引擎与各层共用的地基, 不含业务):
              net/helpers·paths/json_response(共用模型JSON解析)
              config并发初始化完整发布/失败可重试；logger并发只建一组handler
 skills/      领域技能 (每技能一目录, 专业知识放 prompt):
-             quant(v10 tranches/tranche_engine/tranche_prepare:442/532分批、逐批T+1/FIFO、完整周期胜率及部分已实现盈亏；v9结构持有/固定对照；v8参数研究/盘后触发次日执行; 见 docs/agents/quant_backtesting.md) /
+             quant(workspace配置/自然语言草稿/冻结任务与个人报告，workspace_runner复用v8信号；v10 tranches/tranche_engine/tranche_prepare:442/532分批、逐批T+1/FIFO、完整周期胜率及部分已实现盈亏；v9结构持有/固定对照；v8参数研究/盘后触发次日执行; 见 docs/agents/quant_backtesting.md) /
              trend(episodes.py连续入选合轮/升级不重开/20交易日归档；chart_history.py独立5年日K展示不改冻结信号；tracking.py历史名单前向跟踪/T+1·3·5·10/真实因子/交易日/缺失分离；parent_context.py独立日K母趋势标注，局部60F反转可属上涨回调，保留原信号与入场条件；structure.py V9有序结构；swing.py V8底背离/回调；V7及更早快照兼容; M8/M13/M21; 见 docs/frontend/stock_dashboard.md) /
              fin_query(Text-to-SQL) / report(skill编排/normalization纯规范化/ocr后台队列/collection兼容出口) / scanned_report(OCR) /
              beta_alpha(产业链Beta+个股Alpha: chains种子链/analysis/tests) /
              content(内容资产管线: 画像/公众号文章/PPT/年报解读) /
              research(研究生产线: 证据→十章草稿→成稿, 任务分派见 docs/research/tasks/)
-jobs/        lifecycle(应用启停组合根，原core.lifespan职责迁入)/operations(向API注入后台操作接口；API不导入jobs或读调度器私有状态) /
+jobs/        quant_worker(个人工作台持久队列/OS锁串行/独立任务进程/默认15分钟超时) /
+             lifecycle(应用启停组合根，原core.lifespan职责迁入)/operations(向API注入后台操作接口；API不导入jobs或读调度器私有状态) /
              market_digest_scheduler(后端每日18点/当日启动补漏/独立于17点行情/Codex任务已暂停) /
              intraday_scheduler(交易日10:32/11:32/14:02/15:02，收盘120秒后采集/扫描；当天固定来源与池/串行OS锁/回执/启动只补最新到期轮次) /
              cache_intraday_prefix(当天已完成60F前缀/小窗口/断点续传/不推进完整日状态) / scan_intraday_watch(已发布60F规则复用/盘中80分观察/此前完整日K/独立原子归档，PNG可选导出，不覆盖正式快照) /
@@ -65,7 +66,7 @@ web/src/     Login / Platform(侧边栏壳+角色门控) / AgentChat(智能对�
              lib/http(JSON/SSE/下载共用鉴权与错误)/hooks/useSession/components/FeatureBoundary；页面与走势图按需加载
              chat/resultData(纯图形数据)/ResultLineChart(绘图)，旧platformApi出口兼容
              market/(StockDashboard+TrendChart+SignalTracking+IntradayWatch,股票行情#market含趋势筛选/信号跟踪/独立盘中观察；四轮自动更新/可拖拽60F与5年日K，按轮次隔离截止) /
-             quant/(QuantDashboard+EquityChart+quant.css,策略与回测#quant) /
+             quant/(StrategyWorkspace规则工作台+QuantDashboard历史报告+EquityChart,策略与回测#quant) /
              Reports / UserAdmin / Monitor(实时监控SSE, adminOnly); Markdownish 共享渲染器；
              opportunities.js/OpportunityBadge.jsx统一趋势回调（蓝↑）与底部反转（紫■）展示，不修改历史信号
 ```

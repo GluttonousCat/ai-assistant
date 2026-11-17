@@ -7,6 +7,8 @@ from storage.repositories.backtest import (
     load_run,
     observed_dates,
     mark_suite_superseded,
+    input_dates,
+    workspace_availability,
 )
 
 __all__ = [
@@ -16,4 +18,6 @@ __all__ = [
     "load_run",
     "observed_dates",
     "mark_suite_superseded",
+    "input_dates",
+    "workspace_availability",
 ]

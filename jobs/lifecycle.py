@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import asyncio
 
 from fastapi import FastAPI
 
@@ -20,6 +21,10 @@ async def lifespan(app: FastAPI):
     """Application lifecycle: initialize and clean up resources"""
     config = get_config()
     app.state.operations = BackendOperations()
+    from jobs.quant_worker import run_worker
+
+    quant_stop = asyncio.Event()
+    quant_task = asyncio.create_task(run_worker(quant_stop))
 
     # Init auth (idempotently create auth.users + seed admin; failure does not block
     # startup — the error surfaces at login time)
@@ -72,6 +77,8 @@ async def lifespan(app: FastAPI):
     yield
 
     # Stop schedulers
+    quant_stop.set()
+    await quant_task
     try:
         await get_intraday_scheduler().stop()
     except Exception:

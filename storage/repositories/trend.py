@@ -45,7 +45,7 @@ def universe(as_of: str, listed=False) -> list[dict]:
                 ORDER BY u.ts_code""").to_dict(orient="records")
             if rows:
                 return rows
-        return pg.fetch_all(
+        return pg.fetch_df_stream(
             """WITH dates AS (
             SELECT index_code,max(as_of_date) AS as_of_date FROM stock.index_membership_snapshot
             WHERE as_of_date<=%s AND source='tushare' GROUP BY index_code)
@@ -56,7 +56,7 @@ def universe(as_of: str, listed=False) -> list[dict]:
             LEFT JOIN stock.stock_basic b USING(ts_code) WHERE m.source='tushare'
             GROUP BY m.ts_code,b.name,b.industry_l1,b.industry ORDER BY m.ts_code""",
             (as_of,),
-        )
+        ).to_dict(orient="records")
 
 
 def inputs(codes: list[str], start: str, end: str):

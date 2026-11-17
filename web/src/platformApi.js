@@ -3,6 +3,12 @@ import { auth, authorizedFetch, request, sseStream } from './lib/http.js'
 export { auth }
 
 export const platformApi = {
+  quantWorkspace: (options) => request('GET', '/api/v1/quant/workspace', undefined, options),
+  quantAvailability: (options) => request('GET', '/api/v1/quant/workspace/availability', undefined, options),
+  quantSaveDraft: (draft) => request('POST', '/api/v1/quant/workspace/drafts', draft),
+  quantGenerate: (body) => request('POST', '/api/v1/quant/workspace/generate', body),
+  quantSubmit: (body) => request('POST', '/api/v1/quant/workspace/tasks', body),
+  quantWorkspaceResult: (taskId, offset = 0, limit = 30) => request('GET', `/api/v1/quant/workspace/tasks/${encodeURIComponent(taskId)}/result?${new URLSearchParams({ offset, limit })}`),
   quantStrategies: () => request('GET', '/api/v1/quant/strategies'),
   quantBacktests: () => request('GET', '/api/v1/quant/backtests?limit=100'),
   quantBacktest: (runId, offset = 0, limit = 30) => request('GET', `/api/v1/quant/backtests/${encodeURIComponent(runId)}?${new URLSearchParams({offset, limit})}`),
