@@ -15,7 +15,12 @@ from skills.quant.metrics import summarize
 from skills.quant.registry import STRATEGIES
 from skills.quant.tranches import TrancheConfig, Inventory
 from skills.quant.market_context import MarketPolicy
-from skills.quant.stop_orders import stop_reference
+from skills.quant.stop_orders import (
+    IntradayProtection,
+    completed_bar_protection,
+    stop_reference,
+)
+from skills.quant.support_protection import SupportProtection, protected_stop
 
 VERSION = "tranche-campaign-next-open-v1"
 
@@ -27,8 +32,18 @@ def simulate(
     cfg=TrancheConfig(),
     market_policy=None,
     stop_bars=None,
+    support_protection=None,
+    intraday_protection=None,
 ):
     base = cfg.base
+    if intraday_protection is not None and (
+        not isinstance(intraday_protection, IntradayProtection) or stop_bars is None
+    ):
+        raise ValueError("盘中保护需要显式预挂策略和原生完成K线")
+    if support_protection is not None and (
+        not isinstance(support_protection, SupportProtection) or stop_bars is not None
+    ):
+        raise ValueError("支撑保护需要独立的盘后执行策略，不能混用预挂单")
     clock = pd.DatetimeIndex(timeline)
     if clock.empty or not clock.is_monotonic_increasing or clock.has_duplicates:
         raise ValueError("交易日历不合法")
@@ -47,6 +62,12 @@ def simulate(
     audit = Counter()
     family = STRATEGIES[strategy_id]["family"]
     for s in series:
+        if support_protection is not None and not {
+            "confirmed_higher_low",
+            "higher_low_origin",
+            "higher_low_known",
+        }.issubset(s.data):
+            raise ValueError("缺少已确认60F支撑与形成/确认时间")
         for k in ["open", "high", "low", "close"]:
             if not np.allclose(
                 s.data[k] * s.data["scale"],
@@ -210,6 +231,12 @@ def simulate(
                 reason=pending["reason"],
             )
         )
+        if support_protection is not None:
+            p["fills"][-1].update(
+                stop_adjusted=p["stop"],
+                inventory_risk=inv.risk_at(p["stop"]),
+                risk_limit=p["risk_limit"],
+            )
         audit["sell_fills"] += 1
         if resolution is not None:
             p["fills"][-1]["resolution"] = resolution
@@ -246,6 +273,8 @@ def simulate(
         risk = (fill - p["stop"]) / fill * 100
         if not 0 < risk <= base.max_entry_risk_pct:
             audit["gap_or_risk_rejected"] += 1
+            if support_protection is not None:
+                audit["add_risk_rejected" if stage else "probe_risk_rejected"] += 1
             return False
         if stage and fill <= p["highest_buy_price"] + 1e-10:
             audit["averaging_down_rejected"] += 1
@@ -306,6 +335,12 @@ def simulate(
                 reason="probe" if not stage else "confirmed_add",
             )
         )
+        if support_protection is not None:
+            p["fills"][-1].update(
+                stop_adjusted=p["stop"],
+                inventory_risk=inv.risk_at(p["stop"]),
+                risk_limit=p["risk_limit"],
+            )
         if stage == 0:
             p.update(
                 first_price=fill,
@@ -414,6 +449,13 @@ def simulate(
                         bar, p["stop"] / scale, p.get("resting_stop_activated", False)
                     )
                     if reference is None:
+                        if intraday_protection is not None:
+                            updated = completed_bar_protection(
+                                p, bar.close * scale, cost_floor(p), intraday_protection
+                            )
+                            if updated > p["stop"]:
+                                p["stop"] = updated
+                                audit["intraday_protection_raises"] += 1
                         continue
                     if not p.get("resting_stop_activated"):
                         audit["resting_stop_activations"] += 1
@@ -513,6 +555,21 @@ def simulate(
                 continue
             if p["pending_sell"] is not None:
                 continue
+            if support_protection is not None:
+                updated = protected_stop(
+                    p,
+                    close,
+                    d["atr"][i],
+                    d["confirmed_higher_low"][i],
+                    d["higher_low_origin"][i],
+                    d["higher_low_known"][i],
+                    end,
+                    bool(d["scale_in_ready"][i]),
+                    support_protection,
+                )
+                if updated > p["stop"]:
+                    p["stop"] = updated
+                    audit["support_stop_raises"] += 1
             anchor = (
                 p["profit_anchor"]
                 if p["exit_base"] is not None
@@ -606,8 +663,14 @@ def simulate(
             item["market_grace_used"] = positions[item["ts_code"]]["market_grace_used"]
     if stop_bars is not None:
         config["stop_execution"] = "preplaced_ohlc_volume_capped"
+    if support_protection is not None:
+        config["support_protection"] = asdict(support_protection)
+    if intraday_protection is not None:
+        config["intraday_protection"] = asdict(intraday_protection)
     return dict(
-        execution_version="tranche-native60f-stop-v3"
+        execution_version="tranche-support-after-close-v4"
+        if support_protection is not None
+        else "tranche-native60f-stop-v3"
         if stop_bars is not None
         else "tranche-market-aware-v2"
         if market_policy is not None

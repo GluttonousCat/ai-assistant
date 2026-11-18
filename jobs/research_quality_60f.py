@@ -24,6 +24,8 @@ from skills.quant.models import BacktestConfig
 from skills.quant.report import with_benchmarks, write_result
 from skills.quant.tranche_engine import simulate
 from skills.quant.tranches import TrancheConfig
+from skills.quant.support_protection import SupportProtection
+from skills.quant.stop_orders import IntradayProtection
 
 logger = get_logger(__name__)
 VERSION = "quality72-exits-v22"
@@ -80,7 +82,13 @@ def config_for(base, name, stress=False, cases=CASES):
     changes = {
         k: v
         for k, v in cases[name].items()
-        if k not in ("preplaced_stops", "market_mode")
+        if k
+        not in (
+            "preplaced_stops",
+            "market_mode",
+            "support_protection",
+            "intraday_protection",
+        )
     }
     base_keys = {f.name for f in fields(BacktestConfig)}
     base = replace(
@@ -121,12 +129,15 @@ def run(
     cases=CASES,
     version=VERSION,
     stop_bars=None,
+    transform=None,
 ):
     with (root / ORIGINAL).open("rb") as stream:
         originals = pickle.load(stream)["series"]
     with (root / RANKED).open("rb") as stream:
         payload = pickle.load(stream)
     stocks = attach_signal_quality(payload["series"], originals, MINIMUM_QUALITY)
+    if transform is not None:
+        stocks = transform(stocks)
     signals = [signal for stock in stocks for signal in stock.signals]
     model_causality = all(
         not m["trained"]
@@ -174,6 +185,12 @@ def run(
             cfg,
             market_policy=market_policy,
             stop_bars=stop_bars if cases[name].get("preplaced_stops") else None,
+            support_protection=SupportProtection(**cases[name]["support_protection"])
+            if "support_protection" in cases[name]
+            else None,
+            intraday_protection=IntradayProtection(**cases[name]["intraday_protection"])
+            if "intraday_protection" in cases[name]
+            else None,
         )
         result["metrics"]["worst_trade_return_pct"] = min(
             (t["return_pct"] for t in result["trades"]), default=None

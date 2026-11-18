@@ -42,12 +42,15 @@ CASES = {
 }
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--declare-only", action="store_true")
-    args = parser.parse_args()
-    root = Path(get_config().root_dir)
-    folder = root / "output/quant" / FOLDER
+def execute_study(
+    root,
+    folder,
+    version,
+    cases,
+    declare_only=False,
+    extra_sources=(),
+    extra_warnings=(),
+):
     folder.mkdir(parents=True, exist_ok=True)
     baseline_path, baseline = read_report(root / BASELINE)
     stress_path, stress = read_report(root / STRESS)
@@ -71,12 +74,14 @@ def main():
         "skills/quant/metrics.py",
         "jobs/backtest_mtf.py",
         "jobs/research_mainboard_60f.py",
+        "skills/quant/support_protection.py",
+        *extra_sources,
     ]
     declared = freeze(
         folder / "declaration.json",
         dict(
-            version=VERSION,
-            cases=CASES,
+            version=version,
+            cases=cases,
             windows=WINDOWS,
             minimum_native_quality=MINIMUM_QUALITY,
             input_sha256={
@@ -95,11 +100,12 @@ def main():
                 "Quality72 uses frozen v8 native0-120 score, separate from model priority and frontend V7 score.",
                 "Individual triggers remain60F; daily execution prices and monthly model are unchanged. 532 entry,2.5% planned entry distance,.35% account risk,10% stock cap.",
                 "OPT-IN PREPLACED STOP SCENARIO. A working user would need broker-side conditional orders; this project does not submit orders. After-close default remains unchanged.",
-                "Stops use prior-session protection. Verified60F bars must match daily raw OHLC within one cent. Mismatched/missing dates use explicitly labeled1D OHLC fallback, not repaired minute prices. Intrabar touch is an approximation, not a tick/order-book fill guarantee.",
+                "Baseline stops use prior-session protection; intraday updates require explicit policy and only affect subsequent bars. Verified60F bars must match daily raw OHLC within one cent. Mismatched/missing dates use labeled1D OHLC fallback. Intrabar touch is an approximation, not a tick/order-book fill guarantee.",
                 "Gaps fill at native open, not the stop; price limits, per-bar1% participation, 100-share lots and per-lot T+1 constrain sales. First-day breaches can only sell settled lots.",
                 "Intraday stop proceeds are unavailable for that session's opening purchases. Unfilled activated stops stay queued, even if price subsequently rebounds.",
                 "No daily-high-based same-day stop tightening. Slippage doubles by replaying the complete portfolio path, not by subtracting fees from old trades.",
                 "No leverage or increased account/position risk. Factor-share approximation, no cash corporate-action ledger. No hard bound on gaps or realized losses.",
+                *extra_warnings,
             ],
         ),
     )
@@ -108,8 +114,8 @@ def main():
         if not target.exists():
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes((root / rel).read_bytes())
-    if args.declare_only:
-        print("Declared6 preplaced-stop cases plus frozen after-close control.")
+    if declare_only:
+        print(f"Declared {len(cases)} fixed execution cases.")
         return
     stop_bars, fallback = {}, {}
     for n, stock in enumerate(stocks, 1):
@@ -142,9 +148,19 @@ def main():
         declared,
         baseline,
         stress,
-        cases=CASES,
-        version=VERSION,
+        cases=cases,
+        version=version,
         stop_bars=stop_bars,
+    )
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--declare-only", action="store_true")
+    args = parser.parse_args()
+    root = Path(get_config().root_dir)
+    execute_study(
+        root, root / "output/quant" / FOLDER, VERSION, CASES, args.declare_only
     )
 
 
