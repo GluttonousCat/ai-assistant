@@ -26,7 +26,7 @@
 | `web/src/Login.jsx` | 登录/注册双模式表单，前端校验 |
 | `web/src/Root.jsx` | 根路由：有 token → 平台；无 → 登录页；启动时 `/me` 校验 token 有效性 |
 | `web/src/platformApi.js` | 统一请求层：自动附带 Bearer token；401 时清除登录态并广播 `auth:expired` 事件跳回登录页 |
-| `core/security.py` | bcrypt 哈希（cost 12）、JWT 签发/解析（AUTH_SECRET，默认 12h 过期）、用户表读写 |
+| `core/security.py` | bcrypt 哈希（cost 12）、JWT 签发/解析（AUTH_SECRET，默认 12h 过期）；不依赖存储层 |
 | `api/auth_api.py` | /login /register /me /change-password 接口 |
 | `api/middleware.py` | 全局鉴权中间件（白名单：登录/注册/健康检查/静态资源） |
 | PG `auth.users` | 用户表（username 唯一、password_hash、role admin/user、is_active、last_login_at） |
@@ -54,7 +54,7 @@
 2. **后端**（`api/auth_api.py RegisterRequest`）：
    - Pydantic `Field(min_length=6/8)` → 长度不足返回 422
    - `re.fullmatch(r"[A-Za-z0-9_]{6,64}")` → 字符类型不合法返回 400（前端可被绕过，后端强制）
-   - `core/security.create_user` 兜底「密码至少 8 位」
+   - `tools/auth/users.create_user` 兜底「密码至少 8 位」
 
 ## 二.5 角色与权限体系（2026-08-31）
 
@@ -113,3 +113,7 @@ API 层 `_require_super` 同样拦截，用户名匹配 .env `SUPER_ADMIN`，默
 | me 返回 token 旧角色、前端超级管理员名硬编码 | me 查 DB；登录与 me 返回配置决定的 is_super_admin | 构建及 API 回归通过 |
 
 角色变更后刷新页面同步导航；服务端管理入口始终使用实时角色校验。
+
+2026-11-18：账户查询、认证和空表种子初始化统一到 `tools/auth/users.py`；密码/JWT仍在core，API实时角色鉴权保持。
+修复未配置AUTH_SECRET时每次调用产生不同密钥的问题，临时密钥现在每进程只创建一次，并发签验一致。
+注册、账户创建、修改密码统一最低8位；原先修改密码允许6位，与注册约束不一致。并发签验、配置密钥优先、非空用户表不补种管理员、禁用账户和密码长度测试通过。

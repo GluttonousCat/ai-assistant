@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { platformApi } from '../platformApi'
+import { startPolling } from '../lib/polling'
 
 const STATUS = { running: '运行中', queued: '排队中', completed: '已完成', complete: '已完成', error: '失败', failed: '失败', partial: '部分完成', interrupted: '已中断', skipped: '已跳过', unknown: '待确认', sent: '已发送', uncertain: '发送待确认', prepared: '已准备', sending: '发送中', retry: '等待重试', collecting: '采集中', scanning: '扫描中' }
 const time = (value) => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '—'
@@ -35,22 +36,11 @@ function LogViewer({ live }) {
   const [reload, setReload] = useState(0)
   const terminal = useRef(null)
   useEffect(() => {
-    let disposed = false
-    let timer
-    const controller = new AbortController()
     setData(null)
-    const poll = async () => {
-      try {
-        const next = await platformApi.monitorLogs({ source, level, search, limit: 500 }, controller.signal)
-        if (!disposed) { setData(next); setError('') }
-      } catch (e) {
-        if (!disposed && e.name !== 'AbortError') setError(e.message)
-      } finally {
-        if (!disposed && live) timer = setTimeout(poll, 2000)
-      }
-    }
-    timer = setTimeout(poll, 300)
-    return () => { disposed = true; clearTimeout(timer); controller.abort() }
+    return startPolling(async (signal) => {
+      const next = await platformApi.monitorLogs({ source, level, search, limit: 500 }, signal)
+      if (!signal.aborted) { setData(next); setError('') }
+    }, { interval: live ? 2000 : 0, initialDelay: 300, onError: (error) => setError(error.message) })
   }, [source, level, search, live, reload])
   useEffect(() => {
     if (follow && terminal.current) terminal.current.scrollTop = terminal.current.scrollHeight

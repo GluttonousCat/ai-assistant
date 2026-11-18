@@ -103,3 +103,5 @@ skills/beta_alpha/                                     自治模块（对外只�
 2. 深度提取全文分段（突破 1.2 万字窗口）。
 3. 产业链树前端可视化（`data.nodes` 已含 edges 结构，组件化在 Reports 弹窗成熟后复用）。
 4. alpha 挂周报调度自动产出"预期差清单"。
+
+2026-11-18结构收敛：`chain_analysis`保留主营占比/分层、研报热度、环节收益与缓存，所有SQL迁入`storage/repositories/industry_data.py`，经`tools/finance/industry_data.py`读取。行情/基准/估值/财务仍一次合并批取，不变成逐股查询。9条真实查询捕获回放，同一环节新旧结果一致；关键词参数绑定与空关键词回归通过。共用JSON解析器替代两份重复围栏处理。

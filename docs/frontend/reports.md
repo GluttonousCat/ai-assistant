@@ -5,6 +5,11 @@
 
 ## 一、系统设计
 
+2026-11-18：Skill只编排模型与领域规则；`normalization.prepare_extraction`生成规范化字段，
+`tools.finance.report_analysis`提供数据入口，`storage.repositories.report_analysis`负责查询及短事务。
+加载正文后释放连接，LLM流式/批量期间不持有PG会话；元数据和预测一起提交后才启动翻译/产业链提取。
+
+
 ### 1.1 数据流水线
 
 ```
@@ -211,3 +216,13 @@ POST /api/reports/{id}/analyze/stream   (SSE, 需 JWT)
 setQuery后读取旧状态、慢请求覆盖新页面 → 显式搜索参数、AbortSignal及结果归属检查。
 验证：51组旧/新查询内容与绑定参数一致，新增接口/资源异常路径测试通过，687项后端及25项前端回归通过；
 真实浏览器首次搜索正确，未触发LLM或额外邮件。
+
+2026-11-18历史问题与处理记录：
+
+| 根因 | 处理方案 | 验证 |
+|---|---|---|
+| 整个模型分析包在数据库事务中，续接线程可能先于提交读取 | 读/模型/写三段分离，续接在保存事务退出后启动 | 流式逐chunk断言无连接占用，后续任务断言已提交 |
+| 空预测结果没有清除旧记录 | 每次分析原子替换整组预测，包括空集合；插入失败整体回滚 | 空预测删除、异常回滚和删除后不再插入用例 |
+| OCR排队/JSON失败被算作成功 | 分别返回processed、failed、queued_ocr、discarded；调用方按结果计数 | 混合批次、非法JSON与数组输出测试 |
+
+验证：15组旧/新元数据与摘要一致；真实单篇元数据验证事务回滚，不改生产字段。旧`jobs/selfcheck_report_stream.py`的场景转入`skills/report/tests/test_extraction_pipeline.py`，包含连接与续接时机检查。

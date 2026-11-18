@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { platformApi } from '../platformApi'
+import { startPolling } from '../lib/polling'
 import OpportunityBadge from '../OpportunityBadge'
 import { opportunityFor } from '../opportunities'
 import TrendChart from './TrendChart'
@@ -24,25 +25,16 @@ export default function IntradayWatch() {
   const [reset, setReset] = useState(0)
   const [focus, setFocus] = useState(0)
   useEffect(() => {
-    const controller = new AbortController()
-    let pending = false
-    const load = (manual = false) => {
-      if (pending || (!manual && document.hidden)) return
-      pending = true
-      if (manual) setBusy(true)
-      platformApi.marketIntraday({ signal: controller.signal }).then((r) => {
-        if (!controller.signal.aborted) {
-          setReport((previous) => previous?.run_id === r.run_id && previous?.created_at === r.created_at && JSON.stringify(previous?.schedule) === JSON.stringify(r.schedule) ? previous : r)
+    setBusy(true)
+    return startPolling(async (signal) => {
+      try {
+        const next = await platformApi.marketIntraday({ signal })
+        if (!signal.aborted) {
+          setReport((previous) => previous?.run_id === next.run_id && previous?.created_at === next.created_at && JSON.stringify(previous?.schedule) === JSON.stringify(next.schedule) ? previous : next)
           setError('')
         }
-      }).catch((e) => { if (!controller.signal.aborted) setError(e.message) })
-        .finally(() => { pending = false; if (!controller.signal.aborted) setBusy(false) })
-    }
-    load(true)
-    const timer = setInterval(() => load(), 60000)
-    const visible = () => { if (!document.hidden) load() }
-    document.addEventListener('visibilitychange', visible)
-    return () => { clearInterval(timer); document.removeEventListener('visibilitychange', visible); controller.abort() }
+      } finally { if (!signal.aborted) setBusy(false) }
+    }, { pauseWhenHidden: true, onError: (error) => setError(error.message) })
   }, [revision])
   const rows = useMemo(() => (report?.data || []).filter((r) =>
     (!query || `${r.ts_code}${r.name}`.toUpperCase().includes(query.trim().toUpperCase()))

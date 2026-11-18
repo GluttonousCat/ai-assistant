@@ -187,7 +187,7 @@ def test_disabled_scheduler_does_not_start(monkeypatch):
 
 def test_lifespan_starts_and_stops_mail_even_when_quotes_are_disabled(monkeypatch):
     import jobs.lifecycle as lifespan_module
-    from core import security
+    from tools.auth import users as accounts
     from jobs import zsxq_scheduler
 
     calls = []
@@ -207,7 +207,7 @@ def test_lifespan_starts_and_stops_mail_even_when_quotes_are_disabled(monkeypatc
             else default
         ),
     )
-    monkeypatch.setattr(security, "ensure_auth_schema", lambda: None)
+    monkeypatch.setattr(accounts, "ensure_auth_schema", lambda: None)
     monkeypatch.setattr(
         lifespan_module,
         "get_digest_scheduler",

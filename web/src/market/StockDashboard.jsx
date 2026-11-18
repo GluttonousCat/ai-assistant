@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { platformApi } from '../platformApi'
+import { startPolling } from '../lib/polling'
 import TrendChart from './TrendChart'
 import MarketFreshness from './MarketFreshness'
 import useStockChart from './useStockChart'
@@ -50,26 +51,16 @@ export default function StockDashboard({ user }) {
   }
   useEffect(() => { let active = true; platformApi.marketDashboard().then((r) => { if (active) setSnapshot(r) }).catch((e) => { if (active) setError(e.message) }).finally(() => { if (active) setBusy(false) }); return () => { active = false } }, [])
   useEffect(() => {
-    let active = true
-    let pending = false
     setFreshness(snapshot?.freshness || null)
-    const poll = async () => {
-      if (pending || document.visibilityState === 'hidden') return
-      pending = true
-      try {
-        const next = await platformApi.marketFreshness()
-        if (!active) return
-        setFreshness(next)
-        if (next.snapshot_run_id && next.snapshot_run_id !== snapshot?.run_id) {
-          const updated = await platformApi.marketDashboard()
-          if (active) setSnapshot(updated)
-        }
-      } catch { /* Keep the last readable snapshot during transient outages. */ }
-      finally { pending = false }
-    }
-    const timer = setInterval(poll, 60000)
-    document.addEventListener('visibilitychange', poll)
-    return () => { active = false; clearInterval(timer); document.removeEventListener('visibilitychange', poll) }
+    return startPolling(async (signal) => {
+      const next = await platformApi.marketFreshness({ signal })
+      if (signal.aborted) return
+      setFreshness(next)
+      if (next.snapshot_run_id && next.snapshot_run_id !== snapshot?.run_id) {
+        const updated = await platformApi.marketDashboard({ signal })
+        if (!signal.aborted) setSnapshot(updated)
+      }
+    }, { pauseWhenHidden: true, initialDelay: 60000 })
   }, [snapshot?.run_id, snapshot?.freshness])
   const rows = useMemo(() => {
     const search = query.trim().toUpperCase()

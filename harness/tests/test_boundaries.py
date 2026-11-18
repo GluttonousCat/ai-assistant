@@ -20,3 +20,19 @@ def test_mcp_adapters_no_longer_embed_query_implementations():
         for node in ast.walk(tree):
             if isinstance(node, ast.Constant) and isinstance(node.value, str):
                 assert not forbidden.match(node.value), (path.name, node.lineno)
+
+
+def test_report_and_industry_domains_do_not_regain_embedded_sql():
+    root = Path(__file__).resolve().parents[2]
+    forbidden = re.compile(
+        r"^\s*(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP)\s", re.I
+    )
+    for name in (
+        "skills/report/skill.py",
+        "skills/beta_alpha/analysis/chain_analysis.py",
+        "core/security.py",
+    ):
+        tree = ast.parse((root / name).read_text(encoding="utf-8-sig"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                assert not forbidden.match(node.value), (name, node.lineno)

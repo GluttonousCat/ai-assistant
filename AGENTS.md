@@ -25,11 +25,11 @@ harness/     prompts(数据口径)/execution(工具沙盒)/loop(决策入口)；
 core/        基础设施 (引擎与各层共用的地基, 不含业务):
              config(.env+yaml)/logger(按顶层包分桶)/security(JWT+bcrypt)/
              net/helpers·paths/json_response(共用模型JSON解析)
-             config并发初始化完整发布/失败可重试；logger并发只建一组handler
+             config并发初始化完整发布/失败可重试；logger并发只建一组handler；security仅密码/JWT，临时密钥每进程固定
 skills/      领域技能 (每技能一目录, 专业知识放 prompt):
              quant(workspace自由组合规则/自然语言条件树/模板兼容/冻结任务；rule_models·rule_indicators·rule_prepare负责有界规则/多周期因果计算，RuleExecutionConfig实际买价止损/显式离场；workspace_runner分派规则或v8模板；v10 tranches/tranche_engine/tranche_prepare:442/532分批、逐批T+1/FIFO、完整周期胜率及部分已实现盈亏；v9结构持有/固定对照；v8参数研究/盘后触发次日执行; 见 docs/agents/quant_backtesting.md) /
              trend(episodes.py连续入选合轮/升级不重开/20交易日归档；chart_history.py独立5年日K展示不改冻结信号；tracking.py历史名单前向跟踪/T+1·3·5·10/真实因子/交易日/缺失分离；parent_context.py独立日K母趋势标注，局部60F反转可属上涨回调，保留原信号与入场条件；structure.py V9有序结构；swing.py V8底背离/回调；V7及更早快照兼容; M8/M13/M21; 见 docs/frontend/stock_dashboard.md) /
-             fin_query(Text-to-SQL) / report(skill编排/normalization纯规范化/ocr后台队列/collection兼容出口) / scanned_report(OCR) /
+             fin_query(Text-to-SQL) / report(skill无SQL编排/normalization纯规范化/ocr后台队列/analysis短事务及提交后续接/collection兼容出口) / scanned_report(OCR) /
              beta_alpha(产业链Beta+个股Alpha: chains种子链/analysis/tests) /
              content(内容资产管线: 画像/公众号文章/PPT/年报解读) /
              research(研究生产线: 证据→十章草稿→成稿, 任务分派见 docs/research/tasks/)
@@ -56,14 +56,14 @@ jobs/        quant_worker(个人工作台持久队列/OS锁串行/独立任务�
              wecom_bot(企微智能机器人 wss 长连接桥接→本地Agent, 见 docs/agents/wecom_bot.md)
 tools/       pdf(通用PDF工具: 文本/渲染/OCR/表格) / zsxq爬虫 / market行情同步 /
              cninfo巨潮定期报告(获取+解析, 自包含) / langgraph(LangGraph原子封装: 建图/记忆) / finance(SQL guard, KB, 研报文件提取器)
-             finance/data·report_text·vector_collections(具体数据能力出口，不暴露PG连接给MCP/领域层)
+             auth/users(账户服务与空表种子)；finance/data·report_text·report_analysis·industry_data·vector_collections(具体数据能力出口，不暴露PG连接给MCP/领域层)
 storage/     pg.py(连接池) / sqlite(爬虫) / schema/(领域DDL) / repositories/(仓储SQL)
              vector_chunks(共用向量集合生命周期/并发首次创建合并)；报告/年报字段与产业链DDL归schema
              pg_schema.py保留旧导入兼容；新增DDL按域归档，独立连接部署
 api/         路由+鉴权中间件(JWT) / agent_api(SSE) / chains_api / schema_api / market_api / reports / auth
              finance.py仅保留兼容路由聚合；events.py统一SSE编码
 web/src/     Login / Platform(侧边栏壳+角色门控) / AgentChat(智能对话,SSE) / ChainView(行业挖掘页)
-             lib/http(JSON/SSE/下载共用鉴权与错误)/hooks/useSession/components/FeatureBoundary；页面与走势图按需加载
+             lib/http(JSON/SSE/下载共用鉴权与错误)·polling(串行刷新/取消/可见性)/hooks/useSession/components/FeatureBoundary；页面与走势图按需加载
              chat/resultData(纯图形数据)/ResultLineChart(绘图)，旧platformApi出口兼容
              market/(StockDashboard+TrendChart+SignalTracking+IntradayWatch,股票行情#market含趋势筛选/信号跟踪/独立盘中观察；四轮自动更新/可拖拽60F与5年日K，按轮次隔离截止) /
              quant/(StrategyWorkspace规则工作台+QuantDashboard历史报告+EquityChart,策略与回测#quant) /
@@ -159,7 +159,7 @@ vision=qwen3.8-flash（deepseek 不收图片）。**思考开关由 `llm.enable_
    面向用户的输出在 prompt 里显式要求中文
 4. **加前端页**：`web/src/` 下新组件 + `Platform.jsx` NAV 注册（注意 adminOnly/superOnly）；
    改完必须 `npm run build`（后端托管 dist，不构建不生效）
-5. **验证**：改研报链路后跑 `python -m tools.finance.report_meta_analysis` 单篇验证；
+5. **验证**：默认 `python -m pytest` 为离线回归；真实DB用例显式 `python -m pytest -m integration`，禁止通过按函数名排除隐藏依赖。改研报链路后跑 `python -m tools.finance.report_meta_analysis` 单篇验证；
    改 beta_alpha 跑 `pytest skills/beta_alpha/tests`
    （改链模板另跑 `python -m skills.beta_alpha.analysis.chain_analysis <chain_id>`）；
    改完 git commit（消息带日期与模块）

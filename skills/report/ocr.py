@@ -66,9 +66,10 @@ def queue_ocr(row: Dict[str, Any]) -> bool:
                     params={"mode": "extract", "report_id": rid, "limit": 1},
                 )
             )
-            if ctx.error:
-                task_progress(warning=ctx.error)
-                logger.warning(f"OCR 后自动提取失败 #{rid}: {ctx.error}")
+            if ctx.error or (ctx.result or {}).get("failed"):
+                error = ctx.error or "未生成可用提取结果"
+                task_progress(warning=error)
+                logger.warning(f"OCR 后自动提取失败 #{rid}: {error}")
             else:
                 logger.info(f"OCR 后自动提取完成 #{rid}")
         except Exception as e:

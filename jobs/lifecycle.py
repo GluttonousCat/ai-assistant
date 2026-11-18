@@ -18,83 +18,56 @@ logger = get_logger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifecycle: initialize and clean up resources"""
     config = get_config()
     app.state.operations = BackendOperations()
     from jobs.quant_worker import run_worker
+    from jobs.zsxq_scheduler import get_zsxq_scheduler
+    from tools.auth.users import ensure_auth_schema
 
     quant_stop = asyncio.Event()
     quant_task = asyncio.create_task(run_worker(quant_stop))
-
-    # Init auth (idempotently create auth.users + seed admin; failure does not block
-    # startup — the error surfaces at login time)
+    started = []
     try:
-        from core import security
-
-        security.ensure_auth_schema()
-        logger.info("认证模块已初始化 (auth.users)")
-    except Exception as e:
-        logger.warning(f"认证初始化失败 (登录功能不可用): {e}")
-
-    # Start the daily incremental sync scheduler (auto backfills trading days at
-    # schedule.sync_hour; can be disabled via schedule.enabled)
-    if config.get("schedule.enabled", True):
         try:
-            scheduler = get_scheduler()
-            scheduler.start()
-            logger.info(
-                f"每日增量同步调度器已启动 (交易日 "
-                f"{config.get('schedule.sync_hour', 17)}:{config.get('schedule.sync_minute', 0):02d} Asia/Shanghai)"
-            )
-        except Exception as e:
-            logger.warning(f"增量调度器启动失败 (非致命): {e}")
+            ensure_auth_schema()
+            logger.info("认证模块已初始化 (auth.users)")
+        except Exception as error:
+            logger.warning("认证初始化失败 (登录功能不可用): %s", error)
 
-    try:
-        get_intraday_scheduler().start()
-    except Exception as e:
-        logger.warning("盘中60F调度器启动失败: %s", type(e).__name__)
+        schedulers = (
+            (get_scheduler, "日线增量同步", config.get("schedule.enabled", True)),
+            (get_intraday_scheduler, "盘中60F", True),
+            (get_digest_scheduler, "趋势邮件", True),
+            (
+                get_zsxq_scheduler,
+                "知识星球研报",
+                config.get("zsxq_schedule.enabled", True),
+            ),
+        )
+        for factory, label, enabled in schedulers:
+            if not enabled:
+                continue
+            try:
+                scheduler = factory()
+                scheduler.start()
+                started.append((scheduler, label))
+            except Exception as error:
+                logger.warning("%s调度器启动失败: %s", label, type(error).__name__)
 
-    # Independent of the 17:00 job, whose financial tail can run beyond 18:00.
-    try:
-        get_digest_scheduler().start()
-    except Exception as e:
-        logger.warning("趋势邮件调度器启动失败: %s", type(e).__name__)
-
-    # Start the zsxq report crawler scheduler (daily configured-time fetch + sync +
-    # LLM extraction, with a startup catch-up pass as a safety net)
-    if config.get("zsxq_schedule.enabled", True):
+        logger.info(
+            "应用启动: %s v%s",
+            config.get("app.name", "ai-assistant"),
+            config.get("app.version", "2.0.0"),
+        )
+        yield
+    finally:
+        quant_stop.set()
         try:
-            from jobs.zsxq_scheduler import get_zsxq_scheduler
-
-            get_zsxq_scheduler().start()
-            logger.info("知识星球研报抓取调度器已启动")
-        except Exception as e:
-            logger.warning(f"知识星球调度器启动失败 (非致命): {e}")
-
-    logger.info(
-        f"应用启动: {config.get('app.name', 'ai-assistant')} v{config.get('app.version', '2.0.0')}"
-    )
-    yield
-
-    # Stop schedulers
-    quant_stop.set()
-    await quant_task
-    try:
-        await get_intraday_scheduler().stop()
-    except Exception:
-        pass
-    try:
-        await get_digest_scheduler().stop()
-    except Exception:
-        pass
-    try:
-        await get_scheduler().stop()
-    except Exception:
-        pass
-    try:
-        from jobs.zsxq_scheduler import get_zsxq_scheduler
-
-        await get_zsxq_scheduler().stop()
-    except Exception:
-        pass
-    logger.info("应用关闭")
+            await quant_task
+        finally:
+            for scheduler, label in reversed(started):
+                try:
+                    await scheduler.stop()
+                except Exception as error:
+                    logger.warning("%s调度器停止失败: %s", label, type(error).__name__)
+            logger.info("应用关闭")

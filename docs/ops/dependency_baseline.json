@@ -1,7 +1,3 @@
 {
-  "core/security.py -> storage.schema.auth": 1,
-  "core/security.py -> storage.repositories": 1,
-  "tools/cninfo/repair.py -> harness.llm": 1,
-  "skills/report/skill.py -> storage.pg": 1,
-  "skills/beta_alpha/analysis/chain_analysis.py -> storage.pg": 1
+  "tools/cninfo/repair.py -> harness.llm": 1
 }

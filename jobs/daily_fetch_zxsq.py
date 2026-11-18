@@ -14,6 +14,7 @@ Usage:
 
 Windows scheduled task (schtasks) / Linux cron examples: see the comments at the end of this file.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -25,6 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.logger import get_logger
 from core.observability import observed, task_progress
+
 logger = get_logger(__name__)
 
 from core.config import get_config
@@ -48,8 +50,11 @@ def _process_one_report(group_id: str) -> str:
     try:
         task_progress("同步下载文件至研报库")
         from jobs.sync_zxsq_to_pg import ZSXQ2PGSync
+
         sync = ZSXQ2PGSync(str(group_id))
-        new_ids = sync.run() or []  # Incremental watermark: only newly downloaded files are processed, seconds-fast
+        new_ids = (
+            sync.run() or []
+        )  # Incremental watermark: only newly downloaded files are processed, seconds-fast
     except Exception as e:
         return f"error: pg_sync {e}"
 
@@ -61,35 +66,59 @@ def _process_one_report(group_id: str) -> str:
             # topic text entries (txt) are merged by merge() into the same topic's PDF
             # and do not consume LLM calls separately
             from storage.pg import PgClient
+
             with PgClient() as pg:
                 rows = pg.fetch_all(
                     "SELECT report_id, file_name FROM fin.report_meta "
-                    "WHERE report_id = ANY(%s)", (list(new_ids),))
-            docs = [r for r in rows if (r.get("file_name") or "").lower()
-                    .endswith((".pdf", ".docx", ".doc"))]
+                    "WHERE report_id = ANY(%s)",
+                    (list(new_ids),),
+                )
+            docs = [
+                r
+                for r in rows
+                if (r.get("file_name") or "")
+                .lower()
+                .endswith((".pdf", ".docx", ".doc"))
+            ]
             if docs:
                 from skills.base import SkillContext
                 from skills.report.skill import ReportSkill
                 from tools.finance.report_meta_analysis import analyze_report_meta
+
                 for r in docs:
                     rid = r["report_id"]
                     try:
                         task_progress(f"研报 #{rid} 元信息分析")
-                        analyze_report_meta(rid)  # Metadata takes seconds (filename only)
+                        analyze_report_meta(
+                            rid
+                        )  # Metadata takes seconds (filename only)
                         task_progress(f"研报 #{rid} 提取观点、评级与盈利预测")
-                        ctx = ReportSkill()(SkillContext(user_input="", params={
-                            "mode": "extract", "report_id": rid, "limit": 1}))
+                        ctx = ReportSkill()(
+                            SkillContext(
+                                user_input="",
+                                params={
+                                    "mode": "extract",
+                                    "report_id": rid,
+                                    "limit": 1,
+                                },
+                            )
+                        )
                         if ctx.error:
-                            task_progress(warning=f"研报 #{rid} 深度提取失败: {ctx.error}")
+                            task_progress(
+                                warning=f"研报 #{rid} 深度提取失败: {ctx.error}"
+                            )
                             logger.warning(f"研报 #{rid} 深度提取失败: {ctx.error}")
-                        else:
+                        elif rid in (ctx.result or {}).get("processed", []):
                             extracted += 1
+                        elif (ctx.result or {}).get("failed"):
+                            task_progress(warning=f"研报 #{rid} 未生成可用提取结果")
                     except Exception as e:
                         task_progress(warning=f"研报 #{rid} 单篇分析失败: {e}")
                         logger.warning(f"研报 #{rid} 单篇分析失败: {e}")
         else:
             # No new files: opportunistically clear pending metadata (oldest first)
             from tools.finance.report_meta_analysis import analyze_pending
+
             analyze_pending(limit=5)
     except Exception as e:
         return f"error: analysis ({e})"
@@ -97,6 +126,7 @@ def _process_one_report(group_id: str) -> str:
     try:
         task_progress("合并重复报告")
         from jobs.merge_report_duplicates import merge
+
         merge()
     except Exception as e:
         return f"error: merge {e}"
@@ -106,8 +136,13 @@ def _process_one_report(group_id: str) -> str:
 
 
 @observed("reports_fetch", "研报抓取与逐篇入库")
-def run_once(group_id: str, max_fetch: int = 10, max_pages: int = 10,
-             download_only_files: bool = False, crawl_topics: bool = True) -> dict:
+def run_once(
+    group_id: str,
+    max_fetch: int = 10,
+    max_pages: int = 10,
+    download_only_files: bool = False,
+    crawl_topics: bool = True,
+) -> dict:
     """Run one fetch round; returns statistics."""
     cookie = get_config().zsxq_cookie
     if not cookie:
@@ -121,6 +156,7 @@ def run_once(group_id: str, max_fetch: int = 10, max_pages: int = 10,
     if crawl_topics:
         task_progress("抓取最新话题")
         from tools.zsxq.crawler import ZSXQCrawler
+
         try:
             crawler = ZSXQCrawler(cookie, str(group_id))
             # Topic crawl intervals come from config (zsxq.crawl_interval_min/max),
@@ -128,7 +164,8 @@ def run_once(group_id: str, max_fetch: int = 10, max_pages: int = 10,
             _cfg = get_config()
             crawler.set_custom_intervals(
                 crawl_interval_min=float(_cfg.get("zsxq.crawl_interval_min", 1.5)),
-                crawl_interval_max=float(_cfg.get("zsxq.crawl_interval_max", 2.5)))
+                crawl_interval_max=float(_cfg.get("zsxq.crawl_interval_max", 2.5)),
+            )
             result["topics"] = crawler.crawl_latest(count=20)
             crawler.close()
         except Exception as e:
@@ -156,7 +193,11 @@ def run_once(group_id: str, max_fetch: int = 10, max_pages: int = 10,
         # no hardcoded overrides here anymore
         n_done = 0
         while n_done < max_fetch:
-            task_progress("下载研报（含反检测等待间隔）", completed=n_done, total=min(max_fetch, pending_before))
+            task_progress(
+                "下载研报（含反检测等待间隔）",
+                completed=n_done,
+                total=min(max_fetch, pending_before),
+            )
             # First retry previously failed tasks (at most 3 per round, fail_count<=5),
             # then download new files
             retried = 0
@@ -165,7 +206,7 @@ def run_once(group_id: str, max_fetch: int = 10, max_pages: int = 10,
                     if dl.is_stopped():
                         break
                     file_id, name, size, download_count, create_time = row
-                    dl.db.update_status(file_id, 'pending')
+                    dl.db.update_status(file_id, "pending")
                     retried += 1
                 if retried:
                     logger.info(f"🔁 重置 {retried} 个失败任务重试")
@@ -180,7 +221,11 @@ def run_once(group_id: str, max_fetch: int = 10, max_pages: int = 10,
                 break
             n_done += 1
             # Immediately process the just-downloaded file
-            task_progress("逐篇入库、分析与去重", completed=n_done, total=min(max_fetch, pending_before))
+            task_progress(
+                "逐篇入库、分析与去重",
+                completed=n_done,
+                total=min(max_fetch, pending_before),
+            )
             status = _process_one_report(group_id)
             if status.startswith("error"):
                 task_progress(warning=status)
@@ -198,6 +243,7 @@ def run_once(group_id: str, max_fetch: int = 10, max_pages: int = 10,
     try:
         task_progress("收尾：补齐研报入库")
         from jobs.sync_zxsq_to_pg import ZSXQ2PGSync
+
         sync = ZSXQ2PGSync(str(group_id))
         sync.run()
         result["pg_sync"] = "ok"
@@ -210,11 +256,14 @@ def run_once(group_id: str, max_fetch: int = 10, max_pages: int = 10,
 
 def main():
     parser = argparse.ArgumentParser(description="每日定时抓取知识星球文件")
-    parser.add_argument("--group", default=None, help="群组ID (默认 .env ZSXQ_GROUP_ID)")
+    parser.add_argument(
+        "--group", default=None, help="群组ID (默认 .env ZSXQ_GROUP_ID)"
+    )
     parser.add_argument("--max-fetch", type=int, default=10, help="每次下载文件数上限")
     parser.add_argument("--pages", type=int, default=10, help="收集文件列表页数")
-    parser.add_argument("--check", action="store_true",
-                        help="仅检查当天新增文件, 不下载")
+    parser.add_argument(
+        "--check", action="store_true", help="仅检查当天新增文件, 不下载"
+    )
     args = parser.parse_args()
 
     group_id = args.group or get_config().zsxq_group_id
@@ -246,11 +295,13 @@ def _check_today(group_id: str):
         return
 
     from storage.sqlite.files import FilesDatabase
+
     db = FilesDatabase(db_path)
     today = datetime.now().strftime("%Y-%m-%d")
     db.cursor.execute(
         "SELECT file_id, name, size, create_time FROM files WHERE substr(create_time,1,10)=? ORDER BY create_time DESC",
-        (today,))
+        (today,),
+    )
     rows = db.cursor.fetchall()
     print(f"\n今天 ({today}) 新增 {len(rows)} 个文件:")
     for r in rows[:30]:

@@ -48,11 +48,11 @@ Usage:
     python -m tools.cninfo.parse 300308 [--year 2025] [--audit]
     python -m tools.cninfo.parse --index 000300.SH --year 2025   # index-constituent batch
 """
+
 from __future__ import annotations
 
 import argparse
 import json
-import logging
 import re
 import sys
 import time
@@ -61,50 +61,17 @@ from datetime import datetime
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from core.logger import get_logger
+from tools.pdf.text import extract_text as _extract_text
 
 from .downloader import DOWNLOAD_ROOT
 from .filters import normalize_ts_code
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 MD_ROOT = Path("output/cninfo/md")
 
 # ---------------- PDF → MD ----------------
-
-
-def _extract_text(path: str) -> str:
-    """Full-text extraction from the PDF text layer. Fallback chain:
-    fitz → pdfplumber → pypdf; empty string if all fail. (Image-only/scanned
-    PDFs have an empty text layer and need visual OCR — out of scope here.)"""
-    try:
-        import fitz
-        with fitz.open(path) as doc:
-            return "\n".join(p.get_text() for p in doc)
-    except ImportError:
-        pass
-    except Exception as e:  # noqa: BLE001 fallback-chain catch-all for damaged files
-        logger.warning(f"fitz 提取失败, 降级 pdfplumber: {e}")
-
-    try:
-        import pdfplumber
-        with pdfplumber.open(path) as pdf:
-            return "\n".join((p.extract_text() or "") for p in pdf.pages)
-    except ImportError:
-        pass
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"pdfplumber 提取失败, 降级 pypdf: {e}")
-
-    try:
-        from pypdf import PdfReader
-        with open(path, "rb") as f:
-            reader = PdfReader(f)
-            return "\n".join((p.extract_text() or "") for p in reader.pages)
-    except ImportError:
-        logger.warning("PDF 提取库均不可用 (需 pymupdf/pdfplumber/pypdf 之一)")
-        return ""
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"PDF 文本提取全部失败 {path}: {e}")
-        return ""
 
 
 def to_markdown(path: str) -> str:
@@ -113,8 +80,10 @@ def to_markdown(path: str) -> str:
     markers (keeps chapters locatable)."""
     try:
         import pymupdf4llm
-        md = pymupdf4llm.to_markdown(doc=path, margins=(45, 45, 0, 0),
-                                     write_images=False)
+
+        md = pymupdf4llm.to_markdown(
+            doc=path, margins=(45, 45, 0, 0), write_images=False
+        )
         if isinstance(md, str) and len(md.strip()) > 100:
             return md
         logger.warning(f"MD 转换结果过短, 走文本降级: {path}")
@@ -156,7 +125,7 @@ def marker_rank(line: str) -> Optional[float]:
     一、=2.5; N.M=3.0; N.M.K=3.0+0.1·extra segments (Industrial Bank's
     '4.1.6'/'4.1.6.1' once shared a rank with '4.1' and miscut the boundary);
     （一）=3.5. Strip ** bold first (Industrial Bank '##### **4.1.6**' case)."""
-    line = _CHECKBOX.sub("", line.rstrip()).rstrip()   # strip trailing checkbox suffix
+    line = _CHECKBOX.sub("", line.rstrip()).rstrip()  # strip trailing checkbox suffix
     body = re.sub(r"^#{1,6}\s*", "", line).replace("*", "")
     if _L1_NUM.match(body):
         return 2.5
@@ -226,7 +195,7 @@ def _alias_hit(line: str, aliases: List[str]) -> Optional[str]:
         if al not in line:
             continue
         if _TOC_LINE.search(line):
-            continue                     # TOC entry (dot leaders / trailing page number)
+            continue  # TOC entry (dot leaders / trailing page number)
         bare = _BARE_STRIP.sub("", line)
         al_bare = re.sub(r"[和及与]", "", al)
         if len(bare) < 0.6 * len(al_bare):
@@ -298,8 +267,9 @@ def _subsection_anchors(text: str) -> List[Tuple[int, int, float]]:
     return out
 
 
-def _render_body(section_text: str,
-                 anchors: List[Tuple[int, int, float]], i: int) -> str:
+def _render_body(
+    section_text: str, anchors: List[Tuple[int, int, float]], i: int
+) -> str:
     """The L1 body of anchors[i] = its direct text + the deeper sub-blocks
     that follow; sub-block titles are kept as [title] lines (cleaning
     directly would strip marker-line titles — Montage case: the (一)(二)
@@ -356,8 +326,9 @@ def parse_md_tables(text: str) -> List[Dict]:
         # for header-less tables; China Merchants Bank case
         # '|**合计**<br>179|392|'): start with an empty header and take the
         # whole block as data rows instead of losing it entirely
-        has_sep = any(row and all(set(c) <= set("-: ") and c for c in row)
-                      for row in cells)
+        has_sep = any(
+            row and all(set(c) <= set("-: ") and c for c in row) for row in cells
+        )
         current: Optional[Dict] = None if has_sep else {"header": [], "rows": []}
         for j, row in enumerate(cells):
             is_sep = row and all(set(c) <= set("-: ") and c for c in row)
@@ -388,10 +359,14 @@ def _clean_title(line: str) -> str:
 def _header_lines(md: str) -> set:
     """Document-level header set: short name-like lines appearing >=10 times
     (company name/report name/column name repeated on every page)."""
-    cnt = Counter(l.strip() for l in md.splitlines()
-                  if l.strip() and len(l.strip()) <= 30)
-    return {l for l, n in cnt.items()
-            if n >= 10 and not l[-1] in "。；，：！？" and not l.startswith("|")}
+    cnt = Counter(
+        l.strip() for l in md.splitlines() if l.strip() and len(l.strip()) <= 30
+    )
+    return {
+        l
+        for l, n in cnt.items()
+        if n >= 10 and not l[-1] in "。；，：！？" and not l.startswith("|")
+    }
 
 
 _BARE_PAGE = re.compile(r"^\d{1,4}$")
@@ -405,12 +380,16 @@ def _clean_text(block: str, headers: set = frozenset()) -> str:
     '澜起科技股份有限公司')."""
     lines_ = []
     for line in block.splitlines():
-        line = re.sub(r"<[^>]+>|[*_]+", "", line.rstrip())   # strip decorations first
-        line = _CHECKBOX.sub("", line)              # checkbox line/suffix (a now-empty line gets filtered)
+        line = re.sub(r"<[^>]+>|[*_]+", "", line.rstrip())  # strip decorations first
+        line = _CHECKBOX.sub(
+            "", line
+        )  # checkbox line/suffix (a now-empty line gets filtered)
         s = line.strip()
         if _ROW_RE.match(line) or _PAGE_NO.match(s) or _BARE_PAGE.match(s):
             continue
-        if marker_rank(line) is not None:      # title marker lines are structure, not content
+        if (
+            marker_rank(line) is not None
+        ):  # title marker lines are structure, not content
             continue
         if s and s not in headers:
             lines_.append(s)
@@ -418,8 +397,8 @@ def _clean_text(block: str, headers: set = frozenset()) -> str:
     # punctuation) appearing >=2 times is a header (case: '澜起科技股份有限公司')
     freq = Counter(lines_)
     return "\n".join(
-        l for l in lines_
-        if freq[l] < 2 or len(l) > 30 or l[-1] in "。；，：！？")
+        l for l in lines_ if freq[l] < 2 or len(l) > 30 or l[-1] in "。；，：！？"
+    )
 
 
 def _clean_tables(tables: List[Dict], title: str) -> List[Dict]:
@@ -441,9 +420,8 @@ def _subsection_dict(title: str, body: str, headers: set) -> Dict:
     tables = _clean_tables(parse_md_tables(body), title)
     um = re.search(r"^\s*单位[:：]\s*([^\s|]+)", body, re.M)
     if um and tables and not tables[0].get("unit"):
-        tables[0]["unit"] = um.group(1)   # standalone unit line before the table
-    return {"title": title, "text": _clean_text(body, headers),
-            "tables": tables}
+        tables[0]["unit"] = um.group(1)  # standalone unit line before the table
+    return {"title": title, "text": _clean_text(body, headers), "tables": tables}
 
 
 # ---------------- disclosure-item vocab & section rules ----------------
@@ -453,35 +431,61 @@ def _subsection_dict(title: str, body: str, headers: set) -> Dict:
 # 3-7 no longer go through vocab — the sections structure takes subsections
 # in full for more complete coverage.
 ITEM_ALIASES: Dict[str, List[str]] = {
-    "kpi3y": ["主要会计数据和财务指标", "主要财务数据及指标", "近三年主要会计数据",
-              "近三年主要财务数据", "会计数据和财务指标摘要", "主要会计数据及财务指标",
-              "财务概要", "财务摘要"],
+    "kpi3y": [
+        "主要会计数据和财务指标",
+        "主要财务数据及指标",
+        "近三年主要会计数据",
+        "近三年主要财务数据",
+        "会计数据和财务指标摘要",
+        "主要会计数据及财务指标",
+        "财务概要",
+        "财务摘要",
+    ],
     # Note: the short alias 「主要财务指标」 is deliberately not listed — it
     # would anchor kpi3y to the chapter-2 section heading (Montage case:
     # '## 第二节 公司简介和主要财务指标'); that wording is covered by the
     # similarity fallback
-    "nonrecurring": ["非经常性损益项目和金额", "非经常性损益项目及涉及金额",
-                     "非经常性损益项目", "非经常性损益明细表", "非经常性损益表"],
+    "nonrecurring": [
+        "非经常性损益项目和金额",
+        "非经常性损益项目及涉及金额",
+        "非经常性损益项目",
+        "非经常性损益明细表",
+        "非经常性损益表",
+    ],
 }
 
 # Chapters 3-7 rules (§3, user decision)
 SECTION_RULES: Dict[str, Dict] = {
-    "mdna":         {"mode": "all"},          # take everything (user's words: "it is all important")
-    "governance":   {"mode": "keyword",
-                     "keywords": ["董监高", "董事和高级管理人员", "员工",
-                                  "股权激励", "审计委员会"]},
-    "matters":      {"mode": "keyword",
-                     "keywords": ["募集资金", "募投", "承诺", "关联交易",
-                                  "担保", "诉讼", "退市", "非标"]},
-    "shareholders": {"mode": "all", "include_head": True},   # head preamble = total-shareholders field
-    "bonds":        {"mode": "all", "skip_short": 500},      # "not applicable" for most companies
+    "mdna": {"mode": "all"},  # take everything (user's words: "it is all important")
+    "governance": {
+        "mode": "keyword",
+        "keywords": ["董监高", "董事和高级管理人员", "员工", "股权激励", "审计委员会"],
+    },
+    "matters": {
+        "mode": "keyword",
+        "keywords": [
+            "募集资金",
+            "募投",
+            "承诺",
+            "关联交易",
+            "担保",
+            "诉讼",
+            "退市",
+            "非标",
+        ],
+    },
+    "shareholders": {
+        "mode": "all",
+        "include_head": True,
+    },  # head preamble = total-shareholders field
+    "bonds": {"mode": "all", "skip_short": 500},  # "not applicable" for most companies
 }
 
 
 # ---------------- orchestration ----------------
 
-def _locate_report_pdfs(ts_code: str,
-                        year: Optional[int] = None) -> list:
+
+def _locate_report_pdfs(ts_code: str, year: Optional[int] = None) -> list:
     """AR+H1 candidates (report period new→old, same-period AR preferred).
     The semi-annual report is isomorphic with the annual one (management
     discussion & analysis / risk chapters); when the AR is an image-only PDF
@@ -495,16 +499,22 @@ def _locate_report_pdfs(ts_code: str,
     if not root.is_dir():
         return []
     cands = list(root.glob("*_ndbg.pdf")) + list(root.glob("*_bndbg.pdf"))
-    out = [{"report_year": int(p.stem.split("_")[0]),
-            "category": p.stem.split("_", 1)[1], "file_path": str(p)}
-           for p in cands]
+    out = [
+        {
+            "report_year": int(p.stem.split("_")[0]),
+            "category": p.stem.split("_", 1)[1],
+            "file_path": str(p),
+        }
+        for p in cands
+    ]
     out = [c for c in out if year is None or c["report_year"] == year]
     out.sort(key=lambda c: (c["report_year"], c["category"]), reverse=True)
     return out
 
 
-def build_items(stock: str, year: Optional[int] = None,
-                want_audit: bool = False) -> Dict:
+def build_items(
+    stock: str, year: Optional[int] = None, want_audit: bool = False
+) -> Dict:
     """Single stock: locate the report PDF (annual→semi-annual fallback
     chain) → MD → items+sections → JSON written to disk.
 
@@ -512,13 +522,18 @@ def build_items(stock: str, year: Optional[int] = None,
     job)."""
     ts_code = normalize_ts_code(stock.strip())
     if not ts_code:
-        return {"ok": False, "error": f"未识别证券代码: {stock} "
-                f"(只认 6 位代码或 ts_code, 名称解析归调用方)"}
+        return {
+            "ok": False,
+            "error": f"未识别证券代码: {stock} "
+            f"(只认 6 位代码或 ts_code, 名称解析归调用方)",
+        }
 
     cands = _locate_report_pdfs(ts_code, year)
     if not cands:
-        return {"ok": False, "error":
-                f"{ts_code} 无已下载年报/半年报 PDF (先跑 tools.cninfo.downloader)"}
+        return {
+            "ok": False,
+            "error": f"{ts_code} 无已下载年报/半年报 PDF (先跑 tools.cninfo.downloader)",
+        }
 
     loc, md = None, ""
     for row in cands:
@@ -534,24 +549,43 @@ def build_items(stock: str, year: Optional[int] = None,
     out_dir = MD_ROOT / ts_code
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / f"{loc['report_year']}_{loc['category']}.md").write_text(
-        md, encoding="utf-8")
+        md, encoding="utf-8"
+    )
 
     audit: Dict = {}
     # L0 generic processing (single dialect) — exceptional violations fall
     # to the repair Agent
     from .generic import extract as _generic_extract
+
     items, sections = _generic_extract(md, audit=audit if want_audit else None)
     json_path = out_dir / f"{loc['report_year']}_{loc['category']}_items.json"
     json_path.write_text(
-        json.dumps({"ts_code": ts_code, "report_year": loc["report_year"],
-                    "category": loc["category"], "items": items,
-                    "sections": sections},
-                   ensure_ascii=False, indent=1), encoding="utf-8")
+        json.dumps(
+            {
+                "ts_code": ts_code,
+                "report_year": loc["report_year"],
+                "category": loc["category"],
+                "items": items,
+                "sections": sections,
+            },
+            ensure_ascii=False,
+            indent=1,
+        ),
+        encoding="utf-8",
+    )
     sec_stat = {k: len(v["subsections"]) for k, v in sections.items()}
-    logger.info(f"披露项提取: {ts_code} {loc['report_year']} "
-                f"items {list(items)} + sections {sec_stat} → {json_path}")
-    r = {"ok": True, "ts_code": ts_code, "report_year": loc["report_year"],
-         "items": list(items), "sections": sec_stat, "json": str(json_path)}
+    logger.info(
+        f"披露项提取: {ts_code} {loc['report_year']} "
+        f"items {list(items)} + sections {sec_stat} → {json_path}"
+    )
+    r = {
+        "ok": True,
+        "ts_code": ts_code,
+        "report_year": loc["report_year"],
+        "items": list(items),
+        "sections": sec_stat,
+        "json": str(json_path),
+    }
     if want_audit:
         r["audit"] = audit
     return r
@@ -561,6 +595,7 @@ def build_for_index(index_code: str, year: Optional[int] = None) -> Dict[str, in
     """Index-constituent batch → items.json per stock (latest tushare
     constituents, re-extracted stock by stock)."""
     from .downloader import _load_index_universe
+
     codes = [s["ts_code"] for s in _load_index_universe(index_code)]
     logger.info(f"披露项批量: {index_code} {len(codes)} 只")
     stats = {"ok": 0, "err": 0}
@@ -570,14 +605,16 @@ def build_for_index(index_code: str, year: Optional[int] = None) -> Dict[str, in
         if not r["ok"]:
             logger.warning(f"[{i}/{len(codes)}] {code} 失败: {r['error']}")
         else:
-            logger.info(f"[{i}/{len(codes)}] {code} {len(r['items'])}项 "
-                        f"{r.get('sections', {})}")
+            logger.info(
+                f"[{i}/{len(codes)}] {code} {len(r['items'])}项 {r.get('sections', {})}"
+            )
         time.sleep(1)
     return stats
 
 
-def annual_corpus(ts_code: str, year: Optional[int] = None,
-                  max_chars: int = 2500) -> Optional[str]:
+def annual_corpus(
+    ts_code: str, year: Optional[int] = None, max_chars: int = 2500
+) -> Optional[str]:
     """items+sections → annual-report highlights corpus (deterministic, zero
     LLM).
 
@@ -601,20 +638,32 @@ def annual_corpus(ts_code: str, year: Optional[int] = None,
     d = json.loads(paths[0].read_text(encoding="utf-8"))
     items = d.get("items", {})
     sections = d.get("sections", {})
-    label = (f"{d['report_year']} 年度报告" if d.get("category") == "ndbg"
-             else f"{d['report_year']} 半年度报告")
+    label = (
+        f"{d['report_year']} 年度报告"
+        if d.get("category") == "ndbg"
+        else f"{d['report_year']} 半年度报告"
+    )
     parts = []
     kpi = items.get("kpi3y")
     if kpi and kpi.get("text"):
         parts.append(f"### 主要会计数据与指标说明\n{kpi['text'][:max_chars]}")
     mdna_subs = sections.get("mdna", {}).get("subsections", [])
-    picks = (("经营情况讨论(管理层口径)",
-              ("经营情况讨论", "主要经营情况", "经营情况分析", "业务情况分析")),
-             ("公司自认风险", ("风险",)))
+    picks = (
+        (
+            "经营情况讨论(管理层口径)",
+            ("经营情况讨论", "主要经营情况", "经营情况分析", "业务情况分析"),
+        ),
+        ("公司自认风险", ("风险",)),
+    )
     for head, kws in picks:
-        block = next((s["text"] for s in mdna_subs
-                      if s.get("text") and any(kw in s["title"] for kw in kws)),
-                     None)
+        block = next(
+            (
+                s["text"]
+                for s in mdna_subs
+                if s.get("text") and any(kw in s["title"] for kw in kws)
+            ),
+            None,
+        )
         if block is None and head.startswith("经营"):
             # wording-drift fallback for banks etc.: take the first non-empty
             # mdna subsection (Industrial Bank case: '十四五成就回顾')
@@ -623,8 +672,10 @@ def annual_corpus(ts_code: str, year: Optional[int] = None,
             parts.append(f"### {head}\n{block[:max_chars]}")
     if not parts:
         # legacy items.json compatibility (business_review/risks vocab keys)
-        for key, head in (("business_review", "经营情况讨论(管理层口径)"),
-                          ("risks", "公司自认风险")):
+        for key, head in (
+            ("business_review", "经营情况讨论(管理层口径)"),
+            ("risks", "公司自认风险"),
+        ):
             it = items.get(key)
             if it and it.get("text"):
                 parts.append(f"### {head}\n{it['text'][:max_chars]}")
@@ -743,8 +794,9 @@ def build_subsection_body(sub: Dict[str, Any]) -> str:
     return "\n".join(parts)
 
 
-def extract_subsection(llm, year: int, sec_key: str, title: str,
-                       body: str) -> List[Dict[str, Any]]:
+def extract_subsection(
+    llm, year: int, sec_key: str, title: str, body: str
+) -> List[Dict[str, Any]]:
     """One LLM call per subsection → raw atomic array (uncleaned); raises
     ValueError on parse failure.
 
@@ -753,13 +805,15 @@ def extract_subsection(llm, year: int, sec_key: str, title: str,
     """
     user = (
         f"小节定位: {year}年年度报告 · {SECTION_CN.get(sec_key, sec_key)} ({sec_key}) · 小节「{title}」\n"
-        f"period 取值: 报告期流量用 \"{year}A\"; 期末时点用 \"{year}-12-31\"。\n\n"
+        f'period 取值: 报告期流量用 "{year}A"; 期末时点用 "{year}-12-31"。\n\n'
         f"【原文】\n{body}"
     )
-    resp = llm.invoke([
-        {"role": "system", "content": _SYSTEM_PROMPT},
-        {"role": "user", "content": user},
-    ])
+    resp = llm.invoke(
+        [
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "user", "content": user},
+        ]
+    )
     facts = _parse_llm_facts(resp)
     if facts is None:
         raise ValueError(f"LLM 输出无法解析为 JSON: {resp[:200]!r}")
@@ -769,10 +823,13 @@ def extract_subsection(llm, year: int, sec_key: str, title: str,
 def _extract_outer_json(t: str) -> Any:
     """Peel the outermost JSON container out of mixed text: start at the
     first [ or {, take through the last matching closing bracket."""
-    order = sorted((p, o, c) for p, o, c in
-                   ((t.find("["), "[", "]"), (t.find("{"), "{", "}")) if p >= 0)
+    order = sorted(
+        (p, o, c)
+        for p, o, c in ((t.find("["), "[", "]"), (t.find("{"), "{", "}"))
+        if p >= 0
+    )
     for start, _, close in order:
-        frag = t[start:t.rfind(close) + 1]
+        frag = t[start : t.rfind(close) + 1]
         if frag:
             try:
                 return json.loads(frag)
@@ -840,7 +897,9 @@ def _norm_period(p: Any, year: int) -> str:
     return s if _valid_period(s) else f"{year}A"
 
 
-def sanitize_fact(raw: Dict[str, Any], year: int) -> Tuple[Optional[Dict[str, Any]], str]:
+def sanitize_fact(
+    raw: Dict[str, Any], year: int
+) -> Tuple[Optional[Dict[str, Any]], str]:
     """LLM raw entry → clean entry; returns (entry, drop reason) — an entry
     of None means dropped."""
     category = str(raw.get("category") or "").strip()
@@ -852,7 +911,9 @@ def sanitize_fact(raw: Dict[str, Any], year: int) -> Tuple[Optional[Dict[str, An
     value = _to_float(raw.get("value"))
     unit = str(raw.get("unit") or "").strip()
     if value is None and not unit and _HAS_DIGIT.search(content):
-        m = _UNIT_ADJACENT_RE.search(content)      # contract fallback: rescue the unit after the digit
+        m = _UNIT_ADJACENT_RE.search(
+            content
+        )  # contract fallback: rescue the unit after the digit
         if not m:
             return None, "numeric_without_value_unit"
         unit = m.group(1)
@@ -876,10 +937,12 @@ def main() -> int:
     p = argparse.ArgumentParser(description="定期报告披露项提取 (JSON 文件产物)")
     p.add_argument("stock", nargs="?", default="", help="证券代码 (6位或 ts_code)")
     p.add_argument("--year", type=int, default=0, help="报告年度 (缺省最新)")
-    p.add_argument("--audit", action="store_true",
-                   help="输出审计 (命中方式/相似度/跳过原因)")
-    p.add_argument("--index", default="",
-                   help="指数成分批量 (如 000300.SH, 需 TUSHARE_TOKEN)")
+    p.add_argument(
+        "--audit", action="store_true", help="输出审计 (命中方式/相似度/跳过原因)"
+    )
+    p.add_argument(
+        "--index", default="", help="指数成分批量 (如 000300.SH, 需 TUSHARE_TOKEN)"
+    )
     args = p.parse_args()
 
     if args.index:
@@ -893,8 +956,7 @@ def main() -> int:
     if not r["ok"]:
         print(f"[ERR] {r['error']}")
         return 1
-    print(json.dumps(r, ensure_ascii=False, indent=1,
-                     default=str)[:4000])
+    print(json.dumps(r, ensure_ascii=False, indent=1, default=str)[:4000])
     return 0
 
 

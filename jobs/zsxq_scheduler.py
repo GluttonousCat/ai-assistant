@@ -17,6 +17,7 @@ Schedule rules:
   not run run one round
   immediately at startup so the platform has the latest reports in the morning
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -69,7 +70,8 @@ class ZSXQScheduleScheduler:
             if now < target:
                 return target
         return (now + timedelta(days=1)).replace(
-            hour=self.run_hours[0], minute=0, second=0, microsecond=0)
+            hour=self.run_hours[0], minute=0, second=0, microsecond=0
+        )
 
     def _seconds_until(self, target: datetime) -> float:
         return max(0.0, (target - datetime.now()).total_seconds())
@@ -85,27 +87,35 @@ class ZSXQScheduleScheduler:
         cookie = cfg.zsxq_cookie
         if not cookie:
             from storage.sqlite.account import AccountDatabase
+
             account = AccountDatabase().get_default_account(mask_cookie=False)
             cookie = account["cookie"] if account else ""
         if not cookie:
             return {"error": "未配置 ZSXQ_COOKIE"}
 
-        result = {"time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                  "group": group_id, "hour": hour}
+        result = {
+            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "group": group_id,
+            "hour": hour,
+        }
 
         # 1+2: crawl topics + collect/download files (reuses
         # daily_fetch_zxsq.run_once)
         try:
             task_progress("抓取研报、下载并逐篇分析")
             from jobs.daily_fetch_zxsq import run_once
+
             fetch = run_once(
                 str(group_id),
                 max_fetch=MAX_FETCH_FILES,
                 max_pages=10,
                 crawl_topics=True,
             )
-            result["fetch"] = {k: v for k, v in fetch.items()
-                               if k in ("topics", "collect", "download", "pg_sync")}
+            result["fetch"] = {
+                k: v
+                for k, v in fetch.items()
+                if k in ("topics", "collect", "download", "pg_sync")
+            }
             if fetch.get("error") or str(fetch.get("pg_sync", "")).startswith("error"):
                 task_progress(warning="研报抓取或入库未完全成功，请查看子任务与日志")
         except Exception as e:
@@ -118,6 +128,7 @@ class ZSXQScheduleScheduler:
         try:
             task_progress("补齐研报元信息")
             from tools.finance.report_meta_analysis import analyze_pending
+
             if get_config().openai_api_key:
                 n = analyze_pending(limit=META_ANALYSIS_LIMIT)
                 result["meta_analysis"] = {"processed": n}
@@ -133,13 +144,19 @@ class ZSXQScheduleScheduler:
             task_progress("深度提取待分析研报")
             from skills.base import SkillContext
             from skills.report.skill import ReportSkill
+
             limit = EXTRACT_LIMITS.get(hour, 8)
             if get_config().openai_api_key:
-                ctx = ReportSkill()(SkillContext(
-                    user_input="", params={"mode": "extract", "limit": limit}))
+                ctx = ReportSkill()(
+                    SkillContext(
+                        user_input="", params={"mode": "extract", "limit": limit}
+                    )
+                )
                 result["extract"] = ctx.result or {"error": ctx.error}
                 if ctx.error:
                     task_progress(warning=ctx.error)
+                elif (ctx.result or {}).get("failed"):
+                    task_progress(warning="部分研报提取失败，请查看分析结果与日志")
             else:
                 result["extract"] = {"skipped": "未配置 OPENAI_API_KEY"}
         except Exception as e:
@@ -154,6 +171,7 @@ class ZSXQScheduleScheduler:
             try:
                 task_progress("生成每日研报摘要")
                 from jobs.daily_digest import generate
+
                 result["digest"] = str(generate())
             except Exception as e:
                 logger.error(f"每日研报晨报生成失败: {e}")
@@ -193,13 +211,17 @@ class ZSXQScheduleScheduler:
         try:
             result = await self._run_round_async(missed_hour)
             self._done[f"{today}:{missed_hour}"] = datetime.now()
-            logger.info(f"[知识星球] 补跑完成: { {k: v for k, v in result.items() if k != 'fetch'} }")
+            logger.info(
+                f"[知识星球] 补跑完成: { {k: v for k, v in result.items() if k != 'fetch'} }"
+            )
         except Exception as e:
             logger.error(f"[知识星球] 补跑失败: {e}")
 
     # ---------- Scheduling loop ----------
     async def _loop(self):
-        logger.info(f"[知识星球] 研报抓取调度器已启动 (每日 {'/'.join(f'{h:02d}:00' for h in self.run_hours)})")
+        logger.info(
+            f"[知识星球] 研报抓取调度器已启动 (每日 {'/'.join(f'{h:02d}:00' for h in self.run_hours)})"
+        )
         try:
             await self._catchup_if_missed()
         except Exception as e:
@@ -226,8 +248,12 @@ class ZSXQScheduleScheduler:
                     self._done[f"{next_run.date()}:{hour}"] = datetime.now()
                     # Clean up state older than 7 days
                     cutoff = (datetime.now() - timedelta(days=7)).date()
-                    self._done = {k: v for k, v in self._done.items()
-                                  if datetime.strptime(k.split(":")[0], "%Y-%m-%d").date() >= cutoff}
+                    self._done = {
+                        k: v
+                        for k, v in self._done.items()
+                        if datetime.strptime(k.split(":")[0], "%Y-%m-%d").date()
+                        >= cutoff
+                    }
                     logger.info(f"[知识星球] {hour}:00 轮次完成")
                 except Exception as e:
                     logger.error(f"[知识星球] {hour}:00 轮次失败: {e}")

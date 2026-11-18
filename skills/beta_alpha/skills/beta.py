@@ -9,6 +9,7 @@ this layer only orchestrates and phrases.
 CLI verification:
     python -m agent.beta_alpha.skills.beta AI算力产业链
 """
+
 from __future__ import annotations
 
 from core.json_response import parse_json_response
@@ -28,24 +29,17 @@ from skills.beta_alpha.prompts import (
 logger = get_logger(__name__)
 
 
-def _extract_json(text: str) -> Optional[Dict]:
-    if not text:
-        return None
-    value = text.strip()
-    if value.startswith("```"):
-        value = value.strip("`")
-        if value.startswith("json"):
-            value = value[4:]
-        value = value.strip()
-    return parse_json_response(value, fences="raw")
+_extract_json = parse_json_response
 
 
 class BetaSkill(BaseSkill):
     """Industry-chain Beta mining: trend -> segment -> constituent mapping + segment market validation"""
 
     name = "beta"
-    description = ("产业链Beta挖掘: 解析用户趋势话术到种子链模板, 三源映射"
-                   "(主营构成/申万行业/研报)环节->标的, 计算环节指数超额收益")
+    description = (
+        "产业链Beta挖掘: 解析用户趋势话术到种子链模板, 三源映射"
+        "(主营构成/申万行业/研报)环节->标的, 计算环节指数超额收益"
+    )
     intent_keywords = ["产业链", "链条", "环节", "beta"]
 
     def __init__(self, llm: Optional[Any] = None):
@@ -67,7 +61,8 @@ class BetaSkill(BaseSkill):
         )
         try:
             resp = self.llm.invoke(
-                BETA_CHAIN_PICK_PROMPT.format(chains=chains_desc, text=text))
+                BETA_CHAIN_PICK_PROMPT.format(chains=chains_desc, text=text)
+            )
             parsed = _extract_json(resp) or {}
             chain_id = parsed.get("chain_id")
             node_id = parsed.get("node_id")
@@ -78,8 +73,10 @@ class BetaSkill(BaseSkill):
         chain = ca.get_chain(chain_id) if chain_id else None
         if not chain:
             names = "、".join(c.get("name", c["chain_id"]) for c in ca.load_chains())
-            return {"error": f"未找到匹配的产业链模板。当前支持: {names}。"
-                             "可在 beta_alpha/chains/ 下新增 YAML 模板扩展。"}
+            return {
+                "error": f"未找到匹配的产业链模板。当前支持: {names}。"
+                "可在 beta_alpha/chains/ 下新增 YAML 模板扩展。"
+            }
         node = next((n for n in chain.get("nodes", []) if n["id"] == node_id), None)
         return {"chain": chain, "node": node}
 
@@ -96,12 +93,21 @@ class BetaSkill(BaseSkill):
             node = next(n for n in result["nodes"])
             m = node.get("metrics") or {}
             members = [
-                {k: mm[k] for k in ("name", "tier", "mainbz_share",
-                                    "mainbz_items", "report_hits")}
+                {
+                    k: mm[k]
+                    for k in (
+                        "name",
+                        "tier",
+                        "mainbz_share",
+                        "mainbz_items",
+                        "report_hits",
+                    )
+                }
                 for mm in node.get("members", [])[:10]
             ]
             return BETA_NODE_PROMPT.format(
-                chain_name=chain["name"], node_name=node["name"],
+                chain_name=chain["name"],
+                node_name=node["name"],
                 keywords="、".join(node["keywords"]),
                 metrics=json.dumps(m, ensure_ascii=False),
                 members=json.dumps(members, ensure_ascii=False),
@@ -113,12 +119,18 @@ class BetaSkill(BaseSkill):
         members = []
         for n in result["nodes"]:
             for mm in n["members"][:4]:
-                members.append({
-                    "环节": n["name"], "标的": mm["name"], "tier": mm["tier"],
-                    "mainbz_share": mm["mainbz_share"], "证据": mm["evidence"],
-                })
+                members.append(
+                    {
+                        "环节": n["name"],
+                        "标的": mm["name"],
+                        "tier": mm["tier"],
+                        "mainbz_share": mm["mainbz_share"],
+                        "证据": mm["evidence"],
+                    }
+                )
         return BETA_SUMMARY_PROMPT.format(
-            chain_name=chain["name"], chain_desc=chain.get("desc", ""),
+            chain_name=chain["name"],
+            chain_desc=chain.get("desc", ""),
             drivers="、".join(chain.get("drivers", [])),
             benchmark=result.get("benchmark", ""),
             node_table=node_table,
@@ -154,7 +166,8 @@ class BetaSkill(BaseSkill):
 
         try:
             context.result["summary"] = self.llm.invoke(
-                self.build_summary_prompt(result))
+                self.build_summary_prompt(result)
+            )
         except Exception as e:
             logger.warning(f"BetaSkill 综述生成失败: {e}")
             context.result["summary"] = "量化数据已生成, 但综述生成失败。"
@@ -163,6 +176,7 @@ class BetaSkill(BaseSkill):
 
 if __name__ == "__main__":
     import sys
+
     text = sys.argv[1] if len(sys.argv) > 1 else "AI算力产业链"
     ctx = BetaSkill()(SkillContext(user_input=text))
     if ctx.error:
@@ -170,5 +184,6 @@ if __name__ == "__main__":
     else:
         cols, rows = ctx.result["columns"], ctx.result["data"]
         import pandas as pd
+
         print(pd.DataFrame(rows, columns=cols).to_string(index=False))
         print("\n---- 综述 ----\n", ctx.result.get("summary", "")[:800])

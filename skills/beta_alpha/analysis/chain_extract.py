@@ -27,16 +27,7 @@ _inflight: set = set()
 _inflight_lock = threading.Lock()
 
 
-def _parse_json(text: str) -> Optional[Dict]:
-    if not text:
-        return None
-    value = text.strip()
-    if value.startswith("```"):
-        value = value.strip("`")
-        if value.startswith("json"):
-            value = value[4:]
-        value = value.strip()
-    return parse_json_response(value, fences="raw")
+_parse_json = parse_json_response
 
 
 def extract_chain(report_id: int, prompt: str) -> int:

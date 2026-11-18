@@ -69,6 +69,8 @@ include = ["api*", "core*", "harness*", "skills*", "tools*", "storage*", "jobs*"
 cache_dir = "output/.pytest_cache"
 testpaths = ["api/tests", "core/tests", "harness/tests", "jobs/tests", "skills", "tools", "storage/tests"]
 norecursedirs = [".git", ".venv", "node_modules", "output"]
+addopts = "-m 'not integration'"
+markers = ["integration: requires a configured database or external service"]
 
 [tool.ruff]
 cache-dir = "output/.ruff_cache"

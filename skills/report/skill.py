@@ -13,12 +13,10 @@ from typing import Any, Dict, Iterator, List, Optional
 
 from core.config import get_config
 from core.logger import get_logger
-from storage.pg import PgClient
-from tools.finance import report_text
+from tools.finance import report_analysis
 from skills.report import normalization as normalize
 from skills.report.ocr import queue_ocr
 
-from core.helpers import normalize_org_name
 from skills.base import BaseSkill, SkillContext
 from skills.report.prompts import (
     REPORT_EXTRACT_PROMPT,
@@ -27,8 +25,6 @@ from skills.report.prompts import (
 )
 
 logger = get_logger(__name__)
-MARKETS = normalize.MARKETS
-_RATING_WHITELIST = normalize._RATING_WHITELIST
 
 # Max characters of a single report sent to the LLM (controls token cost)
 _MAX_TEXT_CHARS = 12000
@@ -110,214 +106,154 @@ class ReportSkill(BaseSkill):
         return "analyze"
 
     def _run_extract(self, context: SkillContext, params: Dict[str, Any]) -> None:
-        report_id = params.get("report_id")
-        limit = int(params.get("limit", 1))
-
-        with PgClient() as pg:
-            self._ensure_columns(pg)
-            if report_id:
-                rows = pg.fetch_all(
-                    "SELECT report_id, title, content_text, content_chars, ts_code, "
-                    "report_type, author, org_name, publish_date, market, symbols, file_path, "
-                    "extraction_status FROM fin.report_meta WHERE report_id=%s",
-                    (int(report_id),),
-                )
+        rows = report_analysis.extraction_candidates(
+            params.get("report_id"), int(params.get("limit", 1))
+        )
+        if not rows:
+            context.result = {"summary": "没有待分析的研报 (需先爬取并同步到 PG)"}
+            return
+        processed, failed, queued, discarded = [], [], [], []
+        for row in rows:
+            rid = row["report_id"]
+            if not row.get("content_chars") and not self._vision_backfill(row):
+                if row.get("file_path"):
+                    queued.append(rid)
+                    context.log(f"研报 #{rid} 为图片型 PDF, 已转后台视觉 OCR")
+                else:
+                    report_analysis.mark_failed(rid)
+                    failed.append(rid)
+                    context.log(f"研报 #{rid} 无文本且无源文件, 跳过")
+                continue
+            summary = self._extract_one(row)
+            if summary:
+                processed.append(rid)
+                context.log(f"研报 #{rid} 提取完成")
             else:
-                # auto-pick unanalyzed reports (judged by body text; extraction_status
-                # may not be backfilled); image-type PDFs with a file but no text are
-                # included too (vision OCR backfill happens before extraction)
-                rows = pg.fetch_all(
-                    "SELECT report_id, title, content_text, content_chars, ts_code, "
-                    "report_type, author, org_name, publish_date, market, symbols, file_path, "
-                    "extraction_status FROM fin.report_meta "
-                    "WHERE (content_chars > 200 OR file_path IS NOT NULL) "
-                    "AND (analysis_status IS NULL OR analysis_status NOT IN ('done','failed')) "
-                    "ORDER BY ts_code NULLS LAST, report_id LIMIT %s",
-                    (limit,),
-                )
-            if not rows:
-                context.result = {"summary": "没有待分析的研报 (需先爬取并同步到 PG)"}
-                return
-
-            for row in rows:
-                if not row.get("content_chars"):
-                    # Image-type PDF: vision-model OCR goes to a background thread
-                    # (2-5 minutes), the next round picks it up automatically.
-                    # Only "no file to OCR" is marked failed; queued OCR keeps status
-                    # none, otherwise it would never be extracted again.
-                    if not self._vision_backfill(row):
-                        if row.get("file_path"):
-                            context.log(
-                                f"研报 #{row['report_id']} 为图片型 PDF, 已转后台视觉 OCR"
-                            )
-                        else:
-                            pg.execute(
-                                "UPDATE fin.report_meta SET analysis_status='failed' "
-                                "WHERE report_id=%s",
-                                (row["report_id"],),
-                            )
-                            context.log(
-                                f"研报 #{row['report_id']} 无文本且无源文件, 跳过"
-                            )
-                        continue
-                self._extract_one(pg, row)
-                context.log(f"研报 #{row['report_id']} 提取完成")
-
+                current = report_analysis.load_report(rid)
+                (failed if current else discarded).append(rid)
+                context.log(f"研报 #{rid} 未生成结果，已标记失败或被去重移除")
         context.result = {
-            "summary": f"已分析 {len(rows)} 篇研报, 结构化结果已入库 (fin.report_forecast)",
-            "processed": [r["report_id"] for r in rows],
+            "summary": f"已分析 {len(processed)} 篇研报；OCR排队 {len(queued)} 篇，失败 {len(failed)} 篇，去重移除 {len(discarded)} 篇",
+            "processed": processed,
+            "failed": failed,
+            "queued_ocr": queued,
+            "discarded": discarded,
         }
 
     def extract_stream(self, report_id: int) -> Iterator[Dict[str, Any]]:
-        """
-        Single-report AI analysis, yielding one event per Agent-flow stage
-        (for /api/reports/{id}/analyze/stream):
-          {type: stage, stage, message}   pipeline stage (load body / LLM extract / parse & normalize / persist)
-          {type: delta, text}             raw LLM output chunk by chunk (multiple, streamed into the dialog)
-          {type: data,  data}             structured result summary (same as what is persisted)
-          {type: error, message}          fatal stop (nothing yielded afterwards; the API layer sends done)
-          {type: done}                    normal end
-        Synchronous generator: the API layer runs it in a worker thread, events go
-        to SSE through a queue.
+        """Yield load/extract/parse/save stages, model deltas and the committed result.
+
+        The API bridges this synchronous generator to SSE in a worker thread.
         """
 
         def _ev(t: str, **kw: Any) -> Dict[str, Any]:
             return {"type": t, **kw}
 
-        with PgClient() as pg:
-            self._ensure_columns(pg)
-            yield _ev("stage", stage="load", message=f"读取研报 #{report_id}…")
-            row = pg.fetch_one(
-                "SELECT report_id, title, content_text, content_chars, ts_code, "
-                "report_type, author, org_name, publish_date, market, symbols, "
-                "file_path, extraction_status "
-                "FROM fin.report_meta WHERE report_id=%s",
-                (int(report_id),),
-            )
-            if not row:
-                yield _ev("error", message=f"研报 #{report_id} 不存在")
-                return
-            title = (
-                row.get("title") or row.get("file_name") or f"#{report_id}"
-            ).strip()
+        yield _ev("stage", stage="load", message=f"读取研报 #{report_id}…")
+        row = report_analysis.load_report(report_id)
+        if not row:
+            yield _ev("error", message=f"研报 #{report_id} 不存在")
+            return
+        title = (row.get("title") or row.get("file_name") or f"#{report_id}").strip()
 
-            if not row.get("content_chars"):
-                # Image-type PDF: same as the batch pipeline, hand off to background OCR
-                # instead of holding the SSE connection for long
-                if row.get("file_path"):
-                    self._vision_backfill(row)
-                    yield _ev(
-                        "stage",
-                        stage="ocr",
-                        message="图片型 PDF, 已提交后台视觉 OCR (每册 2-5 分钟)",
-                    )
-                    yield _ev(
-                        "error",
-                        message="正文尚未就绪 (视觉 OCR 进行中), "
-                        "完成后会自动回到列表, 可再次点击 AI 分析",
-                    )
-                else:
-                    pg.execute(
-                        "UPDATE fin.report_meta SET analysis_status='failed' "
-                        "WHERE report_id=%s",
-                        (row["report_id"],),
-                    )
-                    yield _ev("error", message="该研报无正文文本且无源文件, 无法分析")
-                return
-
-            yield _ev(
-                "stage",
-                stage="load",
-                message=f"正文就绪: {row['content_chars']} 字 · {title[:40]}",
-            )
-
-            text = (row.get("content_text") or "")[:_MAX_TEXT_CHARS]
-            yield _ev(
-                "stage",
-                stage="extract",
-                message="LLM 结构化提取中 (评级 / 标的 / 盈利预测 / tags)…",
-            )
-            chunks: List[str] = []
-            try:
-                # The thinking switch is injected uniformly by LLMClient per config
-                # (reasoning blocks are skipped automatically, only body text streams out)
-                for chunk in self._extract_llm().stream(
-                    REPORT_EXTRACT_PROMPT.format(report_text=text)
-                ):
-                    chunks.append(chunk)
-                    yield _ev("delta", text=chunk)
-            except Exception as e:
-                yield _ev("error", message=f"LLM 调用失败: {e}")
-                return
-            raw = "".join(chunks)
-
-            yield _ev(
-                "stage",
-                stage="parse",
-                message="解析 JSON 并规范化 (market/rating 词表约束, 代码校验)…",
-            )
-            data = self._parse_json(raw)
-            if data is None:
-                pg.execute(
-                    "UPDATE fin.report_meta SET analysis_status='failed' "
-                    "WHERE report_id=%s",
-                    (row["report_id"],),
-                )
+        if not row.get("content_chars"):
+            # Image-type PDF: same as the batch pipeline, hand off to background OCR
+            # instead of holding the SSE connection for long
+            if row.get("file_path"):
+                self._vision_backfill(row)
                 yield _ev(
-                    "error", message="LLM 输出无法解析为 JSON, 本篇标记失败 (可重试)"
+                    "stage",
+                    stage="ocr",
+                    message="图片型 PDF, 已提交后台视觉 OCR (每册 2-5 分钟)",
                 )
-                return
-
-            summary = self._apply_extract_result(pg, row, data)
-            if summary is None:
-                # the record was dedup-merged away during extraction
                 yield _ev(
                     "error",
-                    message="提取完成, 但该研报在处理期间被去重合并移除 "
-                    "(同话题保留了另一条记录), 本次结果已丢弃",
+                    message="正文尚未就绪 (视觉 OCR 进行中), "
+                    "完成后会自动回到列表, 可再次点击 AI 分析",
                 )
-                return
-            yield _ev(
-                "stage",
-                stage="save",
-                message=f"结果入库: fin.report_meta + fin.report_forecast "
-                f"(盈利预测 {summary['forecast_count']} 条)",
-            )
-            self._spawn_chain_extract(row["report_id"])
-            from skills.report.translate import spawn_translate
+            else:
+                report_analysis.mark_failed(row["report_id"])
+                yield _ev("error", message="该研报无正文文本且无源文件, 无法分析")
+            return
 
-            spawn_translate(row["report_id"])
-            yield _ev("data", data=summary)
+        yield _ev(
+            "stage",
+            stage="load",
+            message=f"正文就绪: {row['content_chars']} 字 · {title[:40]}",
+        )
+
+        text = (row.get("content_text") or "")[:_MAX_TEXT_CHARS]
+        yield _ev(
+            "stage",
+            stage="extract",
+            message="LLM 结构化提取中 (评级 / 标的 / 盈利预测 / tags)…",
+        )
+        chunks: List[str] = []
+        try:
+            # The thinking switch is injected uniformly by LLMClient per config
+            # (reasoning blocks are skipped automatically, only body text streams out)
+            for chunk in self._extract_llm().stream(
+                REPORT_EXTRACT_PROMPT.format(report_text=text)
+            ):
+                chunks.append(chunk)
+                yield _ev("delta", text=chunk)
+        except Exception as e:
+            yield _ev("error", message=f"LLM 调用失败: {e}")
+            return
+        raw = "".join(chunks)
+
+        yield _ev(
+            "stage",
+            stage="parse",
+            message="解析 JSON 并规范化 (market/rating 词表约束, 代码校验)…",
+        )
+        data = self._parse_json(raw)
+        if not isinstance(data, dict):
+            report_analysis.mark_failed(row["report_id"])
+            yield _ev("error", message="LLM 输出无法解析为 JSON, 本篇标记失败 (可重试)")
+            return
+
+        summary = self._apply_extract_result(row, data)
+        if summary is None:
+            # the record was dedup-merged away during extraction
+            yield _ev(
+                "error",
+                message="提取完成, 但该研报在处理期间被去重合并移除 "
+                "(同话题保留了另一条记录), 本次结果已丢弃",
+            )
+            return
+        yield _ev(
+            "stage",
+            stage="save",
+            message=f"结果入库: fin.report_meta + fin.report_forecast "
+            f"(盈利预测 {summary['forecast_count']} 条)",
+        )
+        self._after_extract(row["report_id"])
+        yield _ev("data", data=summary)
 
         yield _ev("done")
 
-    def _extract_one(self, pg: PgClient, row: Dict[str, Any]) -> None:
+    def _extract_one(self, row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         text = (row.get("content_text") or "")[:_MAX_TEXT_CHARS]
         if not text.strip():
-            pg.execute(
-                "UPDATE fin.report_meta SET analysis_status='failed' WHERE report_id=%s",
-                (row["report_id"],),
-            )
-            return
-
-        # The thinking switch and max_tokens are injected uniformly by LLMClient
-        # per config (currently the strongest thinking mode is globally on)
+            report_analysis.mark_failed(row["report_id"])
+            return None
         raw = self._extract_llm().invoke(REPORT_EXTRACT_PROMPT.format(report_text=text))
         data = self._parse_json(raw)
-        if data is None:
-            pg.execute(
-                "UPDATE fin.report_meta SET analysis_status='failed' WHERE report_id=%s",
-                (row["report_id"],),
-            )
-            return
+        if not isinstance(data, dict):
+            report_analysis.mark_failed(row["report_id"])
+            return None
+        summary = self._apply_extract_result(row, data)
+        if summary:
+            self._after_extract(row["report_id"])
+        return summary
 
-        self._apply_extract_result(pg, row, data)
-        self._spawn_chain_extract(row["report_id"])
-        # background translation of the English-original body -> content_text_cn
-        # (Chinese bodies are skipped idempotently; failure does not affect the main flow)
+    def _after_extract(self, report_id: int) -> None:
+        """Only start dependent work after metadata and forecasts commit."""
+        self._spawn_chain_extract(report_id)
         from skills.report.translate import spawn_translate
 
-        spawn_translate(row["report_id"])
+        spawn_translate(report_id)
 
     @staticmethod
     def _spawn_chain_extract(report_id: int) -> None:
@@ -331,167 +267,13 @@ class ReportSkill(BaseSkill):
             logger.warning(f"链抽取调度失败 report_id={report_id}: {e}")
 
     def _apply_extract_result(
-        self, pg: PgClient, row: Dict[str, Any], data: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """
-        LLM-extracted JSON -> normalize -> write back to report_meta + report_forecast.
-        (shared by both the extract / extract_stream paths; returns the structured
-        summary for the frontend)
-        """
-
-        # normalize
-        market = str(data.get("market") or "其他").strip()
-        if market not in MARKETS:
-            market = "其他"
-        ts_codes = self._normalize_codes(data.get("ts_codes") or [])
-        symbols = self._normalize_symbols(data.get("symbols") or [])
-        commodities = [str(c)[:32] for c in (data.get("commodities") or [])][:10]
-        # multi-dimensional classification tags (stored comma-separated in columns;
-        # the full structure is kept in analysis_json)
-        tags = data.get("tags") or {}
-        tag_industries = self._join_tags(tags.get("industries"))
-        tag_regions = self._join_tags(tags.get("regions"))
-        tag_commodities = self._join_tags(tags.get("commodities")) or (
-            ",".join(commodities) if commodities else ""
-        )
-        tag_themes = self._join_tags(tags.get("themes"))
-        tag_targets = self._join_tags(tags.get("targets")) or (
-            ",".join(str(n)[:32] for n in (data.get("company_names") or [])[:5])
-        )
-        rating = str(data.get("rating") or "无")
-        if rating not in _RATING_WHITELIST:
-            rating = "无"
-        forecasts = self._normalize_forecasts(
-            data.get("forecasts") or [], ts_codes, market
-        )
-
-        # backfill metadata (write only when the existing value is empty)
-        primary_symbol = ts_codes[0] if ts_codes else (symbols[0] if symbols else None)
-        sets = [
-            "analysis_json=%s",
-            "analysis_status='done'",
-            "market=%s",
-            "tags_industries=%s",
-            "tags_regions=%s",
-            "tags_commodities=%s",
-            "tags_themes=%s",
-            "tags_targets=%s",
-        ]
-        args: List[Any] = [
-            json.dumps(data, ensure_ascii=False),
-            market,
-            tag_industries,
-            tag_regions,
-            tag_commodities,
-            tag_themes,
-            tag_targets,
-        ]
-        if primary_symbol and not row.get("ts_code") and not row.get("symbols"):
-            if ts_codes:
-                sets.append("ts_code=%s")
-                args.append(ts_codes[0])
-        if symbols and not row.get("symbols"):
-            sets.append("symbols=%s")
-            args.append(",".join(symbols))
-        if data.get("report_type") and not row.get("report_type"):
-            sets.append("report_type=%s")
-            args.append(str(data["report_type"])[:16])
-        # publish_date fallback: prefer the zsxq announce time (written by sync);
-        # only when missing, backfill the date the LLM extracted from the report body
-        # — never use the crawl/ingest time
-        pd_raw = str(data.get("publish_date") or "").strip()[:10]
-        if (
-            pd_raw
-            and not row.get("publish_date")
-            and re.match(r"^\d{4}-\d{2}-\d{2}$", pd_raw)
-        ):
-            sets.append("publish_date=%s")
-            args.append(pd_raw)
-        if data.get("author") and not row.get("author"):
-            sets.append("author=%s")
-            args.append(str(data["author"])[:64])
-        if data.get("org_name") and not row.get("org_name"):
-            sets.append("org_name=%s")
-            args.append(normalize_org_name(str(data["org_name"]))[:64])
-        # display title: broker + original file name (keep the original name, no re-splitting)
-        # for the broker prefer the already-normalized Chinese org_name in the DB
-        # (LLM Analysis vocabulary), otherwise normalize the LLM-extracted value
-        # — otherwise English originals extract "J.P. Morgan" etc. into the title
-        # (this once polluted titles with English)
-        display = self._display_title(
-            (row.get("org_name") or "").strip()
-            or normalize_org_name(data.get("org_name")),
-            row.get("file_name") or row.get("title") or "",
-        )
-        if display and display != row.get("title"):
-            sets.append("title=%s")
-            args.append(display[:200])
-        args.append(row["report_id"])
-        n_updated = pg.execute(
-            f"UPDATE fin.report_meta SET {', '.join(sets)} WHERE report_id=%s",
-            tuple(args),
-        )
-        if n_updated == 0:
-            # the record was deleted as a merge duplicate while OCR/deep extraction
-            # was running — discard the result and never continue inserting
-            # forecasts (would violate the foreign key; once caused "OCR 后自动提取失败")
-            logger.info(f"#{row['report_id']} 提取完成但记录已被去重删除, 结果丢弃")
-            return None
-
-        # forecast data: delete old rows first, then insert (idempotent rerun)
-        # (this block was once dead code sitting after _display_title's return —
-        # forecasts never got persisted; it has been moved back)
-        if forecasts:
-            pg.execute(
-                "DELETE FROM fin.report_forecast WHERE report_id=%s",
-                (row["report_id"],),
-            )
-            try:
-                for f in forecasts:
-                    pg.execute(
-                        "INSERT INTO fin.report_forecast "
-                        "(report_id, ts_code, symbol, market, forecast_type, forecast_period, "
-                        " forecast_value, forecast_unit, confidence, raw_text) "
-                        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-                        (
-                            row["report_id"],
-                            f["ts_code"],
-                            f["symbol"],
-                            f["market"],
-                            f["metric"],
-                            f["period"],
-                            f["value"],
-                            f["unit"],
-                            f["confidence"],
-                            f["raw_text"],
-                        ),
-                    )
-            except Exception as e:
-                if "report_forecast_report_id_fkey" in str(e):
-                    logger.warning(
-                        f"#{row['report_id']} 记录在预测入库瞬间被删除, 丢弃"
-                    )
-                    return None
-                raise
-
-        return {
-            "report_id": row["report_id"],
-            "title": display or row.get("title"),
-            "market": market,
-            "rating": rating,
-            "report_type": str(data.get("report_type") or "")[:16],
-            "ts_code": ts_codes[0] if ts_codes else None,
-            "symbols": symbols,
-            "org_name": str(data.get("org_name") or row.get("org_name") or "")[:64],
-            "core_view": str(data.get("core_view") or "")[:200],
-            "key_points": [str(k)[:80] for k in (data.get("key_points") or [])[:6]],
-            "forecast_count": len(forecasts),
-            "forecasts": forecasts,
-        }
-
-    _join_tags = staticmethod(normalize.join_tags)
-
-    _display_title = staticmethod(normalize.display_title)
+        self, row: Dict[str, Any], data: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        fields, forecasts, summary = normalize.prepare_extraction(row, data)
+        if report_analysis.save_extraction(row["report_id"], fields, forecasts):
+            return summary
+        logger.info("#%s 提取完成但记录已被去重删除, 结果丢弃", row["report_id"])
+        return None
 
     def _run_analyze(self, context: SkillContext, params: Dict[str, Any]) -> None:
         # explicit params first; then infer from the input (A-share name/code/US
@@ -510,19 +292,7 @@ class ReportSkill(BaseSkill):
             }
             return
 
-        with PgClient() as pg:
-            self._ensure_columns(pg)
-            where_sql, args = self._match_reports(pg, target)
-            if where_sql is None:
-                context.result = {"summary": f"未找到与 '{target}' 相关的研报"}
-                return
-            reports = pg.fetch_all(
-                f"SELECT report_id, title, author, org_name, publish_date, "
-                f"report_type, market, analysis_json, content_text, ts_code, symbols "
-                f"FROM fin.report_meta WHERE {where_sql} AND content_chars > 0 "
-                f"ORDER BY publish_date DESC NULLS LAST LIMIT 10",
-                tuple(args),
-            )
+        reports = report_analysis.matched_reports(target)
 
         if not reports:
             context.result = {
@@ -534,33 +304,27 @@ class ReportSkill(BaseSkill):
         # prefer the already-extracted analysis_json; extract on the spot when missing
         llm = self._llm()
         reports_payload: List[Dict[str, Any]] = []
-        with PgClient() as pg:
-            for r in reports:
-                data = None
-                if r.get("analysis_json"):
-                    try:
-                        data = json.loads(r["analysis_json"])
-                    except json.JSONDecodeError:
-                        data = None
-                if data is None:
-                    self._extract_one(pg, r)
-                    r = self._reload_row(pg, r["report_id"]) or r
-                    data = (
-                        json.loads(r["analysis_json"]) if r.get("analysis_json") else {}
-                    )
-                reports_payload.append(
-                    {
-                        "title": r["title"],
-                        "market": r.get("market") or (data.get("market") or ""),
-                        "org": r.get("org_name") or (data.get("org_name") or ""),
-                        "rating": data.get("rating") or "无",
-                        "core_view": data.get("core_view") or "",
-                        "key_points": data.get("key_points") or [],
-                        "commodities": data.get("commodities") or [],
-                        "forecasts": data.get("forecasts") or [],
-                        "publish_date": str(r.get("publish_date") or ""),
-                    }
-                )
+        for r in reports:
+            data = self._parse_json(r.get("analysis_json") or "")
+            if not isinstance(data, dict):
+                self._extract_one(r)
+                r = report_analysis.load_report(r["report_id"]) or r
+                data = self._parse_json(r.get("analysis_json") or "")
+                if not isinstance(data, dict):
+                    data = {}
+            reports_payload.append(
+                {
+                    "title": r["title"],
+                    "market": r.get("market") or (data.get("market") or ""),
+                    "org": r.get("org_name") or (data.get("org_name") or ""),
+                    "rating": data.get("rating") or "无",
+                    "core_view": data.get("core_view") or "",
+                    "key_points": data.get("key_points") or [],
+                    "commodities": data.get("commodities") or [],
+                    "forecasts": data.get("forecasts") or [],
+                    "publish_date": str(r.get("publish_date") or ""),
+                }
+            )
 
         question = params.get("question") or ""
         summary = llm.invoke(
@@ -583,12 +347,7 @@ class ReportSkill(BaseSkill):
         if not report_id:
             context.result = {"summary": "请指明研报 (report_id), 或使用综合解读模式"}
             return
-        with PgClient() as pg:
-            row = pg.fetch_one(
-                "SELECT report_id, title, content_text FROM fin.report_meta "
-                "WHERE report_id=%s",
-                (int(report_id),),
-            )
+        row = report_analysis.load_report(report_id)
         if not row:
             context.result = {"summary": f"研报 #{report_id} 不存在"}
             return
@@ -602,44 +361,6 @@ class ReportSkill(BaseSkill):
             )
         )
         context.result = {"summary": answer, "report_id": row["report_id"]}
-
-    def _match_reports(self, pg: PgClient, target: str):
-        """Returns (where_sql, args); (None, None) when nothing matches"""
-        t = target.strip()
-
-        # A-share: 6-digit code or exact name match
-        ts_code = self._resolve_a_share(pg, t)
-        if ts_code:
-            return "ts_code = %s", [ts_code]
-
-        # US/HK ticker (e.g. NVDA.O / 0981.HK) or name: symbols LIKE match
-        if re.match(r"^[A-Za-z0-9.\-]+$", t) and ("." in t or len(t) <= 6):
-            if re.match(r"^[A-Za-z]{1,6}(\.[A-Z]{1,2})?$", t.upper()) or re.match(
-                r"^\d{4,5}\.HK$", t
-            ):
-                return "symbols ILIKE %s", [f"%{t}%"]
-
-        # commodity/theme keyword: match commodities/key_points in title or analysis_json
-        return ("(title ILIKE %s OR analysis_json ILIKE %s)", [f"%{t}%", f"%{t}%"])
-
-    def _resolve_a_share(self, pg: PgClient, target: str) -> Optional[str]:
-        """Stock name/code -> A-share ts_code (A-share universe only)"""
-        t = target.strip().upper()
-        if re.match(r"^\d{6}\.(SH|SZ|BJ)$", t):
-            return t
-        if re.match(r"^\d{6}$", t):
-            suffix = (
-                "SH"
-                if t.startswith(("6", "9"))
-                else "SZ"
-                if t.startswith(("0", "3"))
-                else "BJ"
-            )
-            return f"{t}.{suffix}"
-        row = pg.fetch_one(
-            "SELECT ts_code FROM stock.stock_basic WHERE name=%s", (target.strip(),)
-        )
-        return row["ts_code"] if row else None
 
     def _keyword_fallback(self, text: str) -> Optional[str]:
         """When dictionary/regex both miss: strip common command words and use the
@@ -689,24 +410,4 @@ class ReportSkill(BaseSkill):
                 return kw
         return None
 
-    @staticmethod
-    def _ensure_columns(pg: PgClient) -> None:
-        """Ensure extension columns like tags/market exist (DDL single source of truth: storage.pg_schema)"""
-        report_text.ensure_analysis_schema()
-
-    @staticmethod
-    def _reload_row(pg: PgClient, report_id: int) -> Optional[Dict[str, Any]]:
-        return pg.fetch_one(
-            "SELECT report_id, title, content_text, ts_code, report_type, author, "
-            "org_name, publish_date, analysis_json, market, symbols "
-            "FROM fin.report_meta WHERE report_id=%s",
-            (report_id,),
-        )
-
     _parse_json = staticmethod(parse_json_response)
-
-    _normalize_codes = staticmethod(normalize.normalize_codes)
-
-    _normalize_symbols = staticmethod(normalize.normalize_symbols)
-
-    _normalize_forecasts = staticmethod(normalize.normalize_forecasts)

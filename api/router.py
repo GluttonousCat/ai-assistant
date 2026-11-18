@@ -4,7 +4,6 @@ Unified API routes
 - /crawl/*       ZSXQ (knowledge planet) crawler
 - /files/*       File download
 - /accounts/*    Account management
-- /agent/chat    Agent chat (wired in phase 2)
 - /health        Health check
 """
 
@@ -12,7 +11,6 @@ from __future__ import annotations
 
 from contextlib import closing
 from datetime import datetime
-from typing import Dict, Any
 
 from fastapi import HTTPException, BackgroundTasks, APIRouter, Depends
 
@@ -30,13 +28,12 @@ from tools.zsxq.crawler import ZSXQCrawler
 from tools.zsxq.downloader import FileDownloader
 from tools.zsxq import accounts
 from tools.finance import report_catalog
+from tools.monitoring import background_snapshot
+from core.observability import observed
 
 logger = get_logger(__name__)
 
 router = APIRouter(tags=["router"])
-
-# Runtime task state (simple in-memory store)
-tasks: Dict[str, Dict[str, Any]] = {}
 
 
 def get_crawler(group_id: str) -> ZSXQCrawler:
@@ -66,15 +63,22 @@ async def health():
 
 # ---------- ZSXQ crawler ----------
 @router.get("/crawl/status", tags=["zsxq"], dependencies=[Depends(require_admin)])
-async def crawl_status():
-    """Background task status (simple in-memory state)"""
-    return {"tasks": tasks, "count": len(tasks)}
+def crawl_status():
+    """Crawler state shares the durable observation used by the monitor."""
+    state = background_snapshot()
+    rows = [
+        row
+        for row in state["active"] + state["history"]
+        if row.get("kind", "").startswith("reports_")
+    ]
+    return {"tasks": {row["id"]: row for row in rows}, "count": len(rows)}
 
 
 @router.post("/crawl/latest", tags=["zsxq"], dependencies=[Depends(require_admin)])
 async def crawl_latest(request: CrawlRequest, background_tasks: BackgroundTasks):
     """Crawl the latest topics"""
 
+    @observed("reports_crawl", "手动抓取最新研报话题")
     def task():
         with closing(get_crawler(request.group_id)) as crawler:
             return crawler.crawl_latest(request.per_page)
@@ -87,6 +91,7 @@ async def crawl_latest(request: CrawlRequest, background_tasks: BackgroundTasks)
 async def crawl_historical(request: CrawlRequest, background_tasks: BackgroundTasks):
     """Crawl historical data"""
 
+    @observed("reports_crawl", "手动抓取历史研报话题")
     def task():
         with closing(get_crawler(request.group_id)) as crawler:
             return crawler.crawl_historical(request.pages, request.per_page)
@@ -99,6 +104,7 @@ async def crawl_historical(request: CrawlRequest, background_tasks: BackgroundTa
 async def crawl_incremental(request: CrawlRequest, background_tasks: BackgroundTasks):
     """Incremental crawl"""
 
+    @observed("reports_crawl", "手动增量抓取研报话题")
     def task():
         with closing(get_crawler(request.group_id)) as crawler:
             return crawler.crawl_incremental(request.pages, request.per_page)
@@ -240,20 +246,6 @@ def create_account(request: AccountCreateRequest):
 def list_accounts():
     """List accounts"""
     return {"accounts": accounts.list_accounts()}
-
-
-# ---------- Agent chat (wired in phase 2) ----------
-@router.post("/agent/chat", tags=["agent"], dependencies=[Depends(require_admin)])
-async def agent_chat(request: dict):
-    """
-    Agent chat entry (phase 2)
-    Currently a placeholder; will be wired to the LangGraph main graph
-    """
-    return {
-        "status": "todo",
-        "message": "Agent 对话将在阶段二接入",
-        "received": request.get("text", ""),
-    }
 
 
 # ---------- Data sync scheduling ----------

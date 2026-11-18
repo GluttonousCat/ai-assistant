@@ -49,7 +49,9 @@ def test_ocr_write_and_resume_preserve_orphan_and_failure_guards(
         return SimpleNamespace(start=lambda: worker.append(target))
 
     monkeypatch.setattr(ocr.threading, "Thread", thread)
-    analyze = MagicMock(return_value=SimpleNamespace(error=None))
+    analyze = MagicMock(
+        return_value=SimpleNamespace(error=None, result={"processed": [7]})
+    )
     monkeypatch.setattr(skill, "ReportSkill", lambda: analyze)
     assert (
         ocr.queue_ocr({"report_id": 7, "file_path": "report.pdf", "content_chars": 0})
