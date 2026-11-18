@@ -2,6 +2,15 @@
 
 import re
 from storage.repositories.market import read_bars, latest_daily_date as latest_daily_date
+from storage.repositories.market import stock_industries as _stock_industries
+
+
+def stock_industries():
+    return {
+        "data": {row["ts_code"]: row["industry_l2"] for row in _stock_industries()},
+        "classification": "申万二级行业",
+        "scope": "current",
+    }
 
 
 def query_intraday(

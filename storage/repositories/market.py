@@ -7,6 +7,15 @@ from psycopg2.extras import execute_values
 from storage.pg import PgClient, _normalize_row
 
 
+def stock_industries():
+    """Current SW level-2 labels for display, independent of frozen signals."""
+    with PgClient(read_only=True) as pg:
+        return pg.fetch_all(
+            "SELECT ts_code, NULLIF(trim(industry_l2), '') AS industry_l2 "
+            "FROM stock.stock_basic ORDER BY ts_code"
+        )
+
+
 def latest_daily_date():
     with PgClient(read_only=True) as pg:
         row = pg.fetch_one("SELECT max(trade_date) AS latest FROM stock.daily")

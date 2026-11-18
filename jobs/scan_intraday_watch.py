@@ -16,7 +16,7 @@ from core.local_state import read_json, write_json, file_lock
 from core.logger import get_logger
 from core.observability import observed, task_progress
 from jobs.cache_intraday_prefix import SLOTS
-from skills.trend.intraday import observe
+from skills.trend.intraday import observe, rank_candidates
 from skills.trend.chart_history import stock_chart
 from skills.trend.digest import export_csv
 from skills.trend.mtf import MtfConfig, minute_context
@@ -106,7 +106,7 @@ def run(day, clock="11:30", wait=False, render_static=False):
                 task_progress(completed=len(results), total=len(members))
                 if len(results) % 250 == 0 or len(results) == len(members):
                     logger.info("盘中扫描进度 %s/%s", len(results), len(members))
-        candidates = sorted([r for r in results if r["status"] == "candidate"], key=lambda r: (not r["new_today"], -r["score"], r["ts_code"]))
+        candidates = rank_candidates([r for r in results if r["status"] == "candidate"])
         report = {"run_id": folder.name, "as_of": cutoff, "daily_as_of": daily_cutoff,
             "start": snapshot["metadata"]["start"],
             "created_at": datetime.now(ZoneInfo("Asia/Shanghai")).isoformat(), "source": "akshare-sina",

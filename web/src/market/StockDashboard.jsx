@@ -5,6 +5,8 @@ import TrendChart from './TrendChart'
 import MarketFreshness from './MarketFreshness'
 import useStockChart from './useStockChart'
 import OpportunityBadge from '../OpportunityBadge'
+import IndustryLabel from './IndustryLabel'
+import { stockSearchText } from './stockList'
 import { opportunityFor } from '../opportunities'
 import './dashboard.css'
 
@@ -20,6 +22,14 @@ export default function StockDashboard({ user }) {
   const [section, setSection] = useState('screen')
   const [snapshot, setSnapshot] = useState(null)
   const [freshness, setFreshness] = useState(null)
+  const [industries, setIndustries] = useState({})
+  useEffect(() => {
+    const controller = new AbortController()
+    platformApi.marketIndustries({ signal: controller.signal }).then((result) => {
+      if (!controller.signal.aborted) setIndustries(result.data || {})
+    }).catch(() => { /* The stock lists remain usable when industry metadata is unavailable. */ })
+    return () => controller.abort()
+  }, [])
   const mtfMode = snapshot?.metadata?.config?.selection_mode === 'mtf'
   const riskMode = !!snapshot?.metadata?.config?.risk_setups
   const freshMode = !!snapshot?.metadata?.config?.fresh_reversal
@@ -64,13 +74,13 @@ export default function StockDashboard({ user }) {
   }, [snapshot?.run_id, snapshot?.freshness])
   const rows = useMemo(() => {
     const search = query.trim().toUpperCase()
-    return (snapshot?.data || []).filter((r) => (!search || `${r.name}${r.ts_code}`.toUpperCase().includes(search))
+    return (snapshot?.data || []).filter((r) => (!search || stockSearchText(r, industries).includes(search))
       && (!index || r.indices.includes(index))
       && (!board || r.board === board)
       && (!pattern || opportunityFor(r).key === pattern)
       && (mode === 'all' || mode === 'star' && stars.includes(r.ts_code) || mode === 'candidate' && (riskMode ? r.setup_watch : freshMode ? r.trend60?.fresh : r.eligible) || mode === 'entry' && r.eligible || mode === 'first' && r.state === '首阳观察' || mode === 'resume' && r.state === '回调再起观察' || mode === 'observe' && ['首次回调观察', '早期反转观察', ...(freshMode ? [] : ['等待日K确认', '60F趋势未确认']), '回调再起观察', '趋势观察', '等待启动', '等待形态', '启动已过'].includes(r.state)))
       .sort((a, b) => sort === 'efficiency' && freshMode ? (a.trend60?.age_bars ?? 1e9) - (b.trend60?.age_bars ?? 1e9) : sort === 'efficiency' ? (b.startup?.efficiency ?? b.metrics?.efficiency ?? 0) - (a.startup?.efficiency ?? a.metrics?.efficiency ?? 0) : sort === 'risk' ? (a.risk_pct ?? 1e9) - (b.risk_pct ?? 1e9) : b.score - a.score || a.ts_code.localeCompare(b.ts_code))
-  }, [snapshot, query, index, mode, sort, stars, pattern, board, freshMode, riskMode])
+  }, [snapshot, query, index, mode, sort, stars, pattern, board, freshMode, riskMode, industries])
   const selected = rows.find((r) => r.ts_code === code)
   useEffect(() => {
     if (rows.length && !rows.some((r) => r.ts_code === code)) setCode(rows[0].ts_code)
@@ -102,7 +112,7 @@ export default function StockDashboard({ user }) {
       <div className="trend-header-actions"><span className="trend-offline">● 盘后研究</span><button className="btn ghost" disabled={busy} onClick={load}>{busy ? '读取中…' : '刷新快照'}</button></div>
     </header>
     <nav className="market-section-tabs" aria-label="股票行情功能"><button className={section === 'screen' ? 'active' : ''} aria-pressed={section === 'screen'} onClick={() => setSection('screen')}>趋势筛选</button><button className={section === 'tracking' ? 'active' : ''} aria-pressed={section === 'tracking'} onClick={() => setSection('tracking')}>信号跟踪 <small>入选之后</small></button><button className={section === 'intraday' ? 'active' : ''} aria-pressed={section === 'intraday'} onClick={() => setSection('intraday')}>盘中观察</button></nav>
-    {section === 'intraday' ? <Suspense fallback={<div className="trend-placeholder">正在打开盘中观察…</div>}><IntradayWatch /></Suspense> : section === 'tracking' ? <Suspense fallback={<div className="trend-placeholder">正在打开信号跟踪…</div>}><SignalTracking revision={`${snapshot?.run_id || ''}:${chartRevision}`} /></Suspense> : <>
+    {section === 'intraday' ? <Suspense fallback={<div className="trend-placeholder">正在打开盘中观察…</div>}><IntradayWatch industries={industries} /></Suspense> : section === 'tracking' ? <Suspense fallback={<div className="trend-placeholder">正在打开信号跟踪…</div>}><SignalTracking revision={`${snapshot?.run_id || ''}:${chartRevision}`} industries={industries} /></Suspense> : <>
     {error && <div className="trend-notice error" role="alert">{error}<button className="btn ghost" onClick={load}>重试</button></div>}
     {busy && !snapshot && <div className="trend-placeholder">正在读取行情与筛选结果…</div>}
     <MarketFreshness value={freshness} />
@@ -117,7 +127,7 @@ export default function StockDashboard({ user }) {
       {(stale || viewMeta.data_latest.slice(0, 10) !== viewAsOf.slice(0, 10)) && <div className="trend-notice">{stale ? '当前为历史快照。' : ''} 复权因子截至 {meta.factor_latest}，策略只使用已完整验证的数据。刷新读取已发布结果；全池计算由离线任务完成。</div>}
       <section className="trend-workspace">
         <aside className="trend-stock-panel">
-          <div className="trend-search"><span>⌕</span><input aria-label="搜索股票" placeholder="搜索名称或代码" value={query} onChange={(e) => setQuery(e.target.value)} /></div>
+          <div className="trend-search"><span>⌕</span><input aria-label="搜索股票" placeholder="名称 / 代码 / 二级行业" value={query} onChange={(e) => setQuery(e.target.value)} /></div>
           <select aria-label="指数成分池" value={index} onChange={(e) => setIndex(e.target.value)}><option value="">全部股票（可按指数缩小）</option>{Object.entries(INDICES).map(([key, label]) => <option value={key} key={key}>{label}</option>)}</select>
           <select aria-label="上市板块" value={board} onChange={e => setBoard(e.target.value)}><option value="">全部板块</option>{['主板', '创业板', '科创板', '北交所'].map(b => <option key={b} value={b}>{b}{meta.boards?.[b] != null ? ` · ${meta.boards[b]}` : ''}</option>)}</select>
           {freshMode && <p className="trend-list-note">{meta.parent_context_version ? '先看日K母趋势，再看60F局部触发；观察标记不等于入场确认。' : riskMode ? '底部反转与趋势回调分别观察；以结构失效距离衡量风险，首次与后续回调保留细分。' : '观察阴跌 / 深坑后的早期反转；观察标记不代表已经确认底部。'}</p>}
@@ -127,7 +137,7 @@ export default function StockDashboard({ user }) {
           <div className="trend-stock-list">
             {rows.slice(0, 250).map((r) => <div className={`trend-stock-row ${code === r.ts_code ? 'selected' : ''}`} key={r.ts_code}>
               <button className="trend-star" aria-label={`${stars.includes(r.ts_code) ? '移出' : '加入'}自选 ${r.name}`} onClick={() => toggleStar(r.ts_code)}>{stars.includes(r.ts_code) ? '★' : '☆'}</button>
-              <button className="trend-stock-select" onClick={() => setCode(r.ts_code)}><span><b>{r.name}</b><small>{r.ts_code} · {r.board || "未分类"} · {r.industry}</small><OpportunityBadge value={r} /></span><span><b className={r.eligible ? 'trend-gold' : ''}>{r.score.toFixed(1)}</b><small className={r.eligible ? 'trend-gold' : ''}>{r.state}</small></span></button>
+              <button className="trend-stock-select" onClick={() => setCode(r.ts_code)}><span><span className="stock-name-line"><b>{r.name}</b><IndustryLabel code={r.ts_code} industries={industries} /></span><small>{r.ts_code} · {r.board || "未分类"}</small><OpportunityBadge value={r} /></span><span><b className={r.eligible ? 'trend-gold' : ''}>{r.score.toFixed(1)}</b><small className={r.eligible ? 'trend-gold' : ''}>{r.state}</small></span></button>
             </div>)}
             {rows.length > 250 && <p className="trend-list-note">显示前 250 只，请搜索或切换指数缩小范围；导出包含全部筛选结果。</p>}
             {!rows.length && <div className="trend-empty">{mode === 'star' ? '暂无自选，点击股票旁的 ☆ 添加。' : '当前条件下没有股票。可切换“全部”查看过滤原因。'}</div>}
@@ -135,7 +145,7 @@ export default function StockDashboard({ user }) {
         </aside>
         <div className="trend-detail-panel">
           {selected ? <>
-            <div className="trend-stock-title"><div><h2>{selected.name} <small>{selected.ts_code} · {selected.board || "未分类"}</small></h2><p>{selected.indices.map((i) => INDICES[i] || i).join(' / ')} <span>· 名单日期 {selected.membership_date}</span></p></div><div className="trend-selected-tags"><OpportunityBadge value={selected} /><span className={`trend-state ${selected.eligible ? 'passed' : ''}`}>{selected.state}</span></div></div>
+            <div className="trend-stock-title"><div><h2>{selected.name} <small>{selected.ts_code} · {selected.board || "未分类"}</small><IndustryLabel code={selected.ts_code} industries={industries} /></h2><p>{selected.indices.map((i) => INDICES[i] || i).join(' / ')} <span>· 名单日期 {selected.membership_date}</span></p></div><div className="trend-selected-tags"><OpportunityBadge value={selected} /><span className={`trend-state ${selected.eligible ? 'passed' : ''}`}>{selected.state}</span></div></div>
             {selected.parent_trend_label && <p className="trend-parent-info"><b>母趋势：{selected.parent_trend_label}</b>{selected.parent_pullback_bars > 0 && <span> · 已观察回调 {selected.parent_pullback_bars} 根日K</span>}{selected.local_trigger_label && <span> · 触发：{selected.local_trigger_label}</span>}<small>日K背景截至 {dateLabel(selected.parent_context_end)}；保留原信号状态与风险检查。</small></p>}
             {dualMode && <p className="trend-startup-info">原信号类型：{selected.pattern_label || '等待有效形态'} · {mtfMode ? '60F趋势 → 日K入场' : `筛选周期：${SCREEN_TIMEFRAME}`}</p>}
             {freshMode && (!riskMode || selected.pattern !== 'trend_pullback') && selected.trend60?.origin && <p className="trend-startup-info">{selected.trend60.kind} · 60F起点 {dateLabel(selected.trend60.origin)} · 第 {selected.trend60.age_bars} 根 / 推进 {selected.trend60.bullish_count} 阳 · 距起点 {number(selected.trend60.gain_atr)} ATR。首阳是观察线索，须等日K确认，不代表已见底。</p>}

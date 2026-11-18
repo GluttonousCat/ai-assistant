@@ -13,6 +13,7 @@ export const platformApi = {
   quantBacktests: () => request('GET', '/api/v1/quant/backtests?limit=100'),
   quantBacktest: (runId, offset = 0, limit = 30) => request('GET', `/api/v1/quant/backtests/${encodeURIComponent(runId)}?${new URLSearchParams({offset, limit})}`),
   marketDashboard: (options) => request('GET', '/api/v1/market/dashboard', undefined, options),
+  marketIndustries: (options) => request('GET', '/api/v1/market/industries', undefined, options),
   marketFreshness: (options) => request('GET', '/api/v1/market/freshness', undefined, options),
   marketIntraday: (options = {}) => request('GET', '/api/v1/market/intraday', undefined, options),
   marketIntradayChart: (code, runId, timeframe = '60F', options = {}) => request('GET', `/api/v1/market/intraday/${encodeURIComponent(code)}?${new URLSearchParams({ run_id: runId, timeframe })}`, undefined, options),

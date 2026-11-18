@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { platformApi } from '../platformApi'
 import { startPolling } from '../lib/polling'
 import OpportunityBadge from '../OpportunityBadge'
+import IndustryLabel from './IndustryLabel'
+import { compareStockScores, stockSearchText } from './stockList'
 import { opportunityFor } from '../opportunities'
 import TrendChart from './TrendChart'
 import './intraday.css'
@@ -10,7 +12,7 @@ const EMPTY = []
 const OBSERVATION = { selection_mode: 'tracking' }
 const SLOTS = ['10:30', '11:30', '14:00', '15:00']
 
-export default function IntradayWatch() {
+export default function IntradayWatch({ industries }) {
   const [report, setReport] = useState(null)
   const [busy, setBusy] = useState(true)
   const [error, setError] = useState('')
@@ -37,9 +39,9 @@ export default function IntradayWatch() {
     }, { pauseWhenHidden: true, onError: (error) => setError(error.message) })
   }, [revision])
   const rows = useMemo(() => (report?.data || []).filter((r) =>
-    (!query || `${r.ts_code}${r.name}`.toUpperCase().includes(query.trim().toUpperCase()))
+    (!query || stockSearchText(r, industries).includes(query.trim().toUpperCase()))
     && (!kind || opportunityFor(r).key === kind)
-    && (!stage || (stage === 'new' ? r.new_today : !r.new_today))), [report, query, kind, stage])
+    && (!stage || (stage === 'new' ? r.new_today : !r.new_today))).sort(compareStockScores), [report, query, kind, stage, industries])
   useEffect(() => { if (!rows.some((r) => r.ts_code === code)) setCode(rows[0]?.ts_code || '') }, [rows, code])
   const selected = rows.find((r) => r.ts_code === code)
   const identity = selected && report?.run_id ? `${report.run_id}:${report.created_at}:${code}:${timeframe}:${revision}` : ''
@@ -72,14 +74,14 @@ export default function IntradayWatch() {
         <div><span>盘中观察候选</span><strong>{report.data.length}<small>只</small></strong><p>复用现行60F结构 · 保留风险门槛</p></div>
         <div><span>今天出现新起点</span><strong>{report.data.filter((r) => r.new_today).length}<small>只</small></strong><p>其余为前一阶段结构继续观察</p></div>
       </div>
-      <div className="intraday-filters"><input aria-label="搜索盘中观察" placeholder="搜索代码 / 名称" value={query} onChange={(e) => setQuery(e.target.value)} /><select aria-label="盘中机会类型" value={kind} onChange={(e) => setKind(e.target.value)}><option value="">全部机会</option><option value="trend_pullback">趋势回调</option><option value="base_rebound">底部反转</option></select><select aria-label="盘中起点" value={stage} onChange={(e) => setStage(e.target.value)}><option value="">全部起点</option><option value="new">今天新起点</option><option value="continued">延续观察</option></select><span>{rows.length}只 · 免费网页行情快照，非实时推送</span></div>
+      <div className="intraday-filters"><input aria-label="搜索盘中观察" placeholder="名称 / 代码 / 二级行业" value={query} onChange={(e) => setQuery(e.target.value)} /><select aria-label="盘中机会类型" value={kind} onChange={(e) => setKind(e.target.value)}><option value="">全部机会</option><option value="trend_pullback">趋势回调</option><option value="base_rebound">底部反转</option></select><select aria-label="盘中起点" value={stage} onChange={(e) => setStage(e.target.value)}><option value="">全部起点</option><option value="new">今天新起点</option><option value="continued">延续观察</option></select><span>{rows.length}只 · 免费网页行情快照，非实时推送</span></div>
       <div className="trend-workspace">
-        <div className="trend-stock-panel"><div className="trend-list-heading">今日新起点优先 · 盘中观察分</div><div className="trend-stock-list">
-          {rows.map((r) => <div key={r.ts_code} className={`trend-stock-row ${r.ts_code === code ? 'selected' : ''}`}><button className="trend-stock-select" onClick={() => setCode(r.ts_code)}><span><b>{r.name}</b><small>{r.ts_code} · {r.board}</small><OpportunityBadge value={r} /><small>{r.new_today ? '今天新起点' : '延续观察'} · 第{r.trend60.age_bars}根</small></span><span><b>{r.score.toFixed(1)}<small>/ 80分</small></b><small>风险 {r.risk_pct.toFixed(2)}%</small></span></button></div>)}
+        <div className="trend-stock-panel"><div className="trend-list-heading">盘中得分从高到低 · 同分按代码</div><div className="trend-stock-list">
+          {rows.map((r) => <div key={r.ts_code} className={`trend-stock-row ${r.ts_code === code ? 'selected' : ''}`}><button className="trend-stock-select" onClick={() => setCode(r.ts_code)}><span><span className="stock-name-line"><b>{r.name}</b><IndustryLabel code={r.ts_code} industries={industries} /></span><small>{r.ts_code} · {r.board}</small><OpportunityBadge value={r} /><small>{r.new_today ? '今天新起点' : '延续观察'} · 第{r.trend60.age_bars}根</small></span><span><b>{r.score.toFixed(1)}<small>/ 80分</small></b><small>风险 {r.risk_pct.toFixed(2)}%</small></span></button></div>)}
           {!rows.length && <div className="intraday-empty">没有符合本次条件的观察候选。</div>}
         </div></div>
         <div className="trend-detail-panel">
-          {selected ? <><header className="intraday-selected"><div><h3>{selected.name} <small>{selected.ts_code}</small></h3><p>{selected.parent_trend_label} · {selected.local_trigger_label}</p></div><OpportunityBadge value={selected} /></header>
+          {selected ? <><header className="intraday-selected"><div><h3>{selected.name} <small>{selected.ts_code}</small><IndustryLabel code={selected.ts_code} industries={industries} /></h3><p>{selected.parent_trend_label} · {selected.local_trigger_label}</p></div><OpportunityBadge value={selected} /></header>
             <div className="intraday-two-bars">{selected.today_bars.map((r) => <div key={r.bar_end}><span>{r.bar_end.slice(11, 16)} · 已收盘</span><strong className={r.close >= r.open ? 'up' : 'down'}>{r.close.toFixed(2)}</strong><small>开 {r.open.toFixed(2)} · 高 {r.high.toFixed(2)} · 低 {r.low.toFixed(2)}</small></div>)}<div><span>60F结构参考</span><strong>{selected.stop_price.toFixed(2)}</strong><small>风险距离 {selected.risk_pct.toFixed(2)}% · 非成交指令</small></div></div>
             <p className="intraday-reason">{selected.reason}</p>
             <div className="trend-chart-toolbar"><div className="trend-chart-period" role="group" aria-label="盘中图表周期"><button className={timeframe === '60F' ? 'on' : ''} onClick={() => setTimeframe('60F')}>60F</button><button className={timeframe === '1D' ? 'on' : ''} onClick={() => setTimeframe('1D')}>日K</button></div><button className="trend-chart-reset" onClick={() => setReset((v) => v + 1)}>查看最近</button><button className="trend-chart-reset" onClick={() => setFocus((v) => v + 1)}>定位结构起点</button><span>拖动平移 · 滚轮缩放 · 触屏双指缩放</span></div>

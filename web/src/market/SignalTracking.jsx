@@ -1,3 +1,5 @@
+import IndustryLabel from './IndustryLabel'
+import { stockSearchText } from './stockList'
 import { useEffect, useMemo, useState } from 'react'
 import { platformApi } from '../platformApi'
 import OpportunityBadge from '../OpportunityBadge'
@@ -34,10 +36,10 @@ function Horizon({ value }) {
 
 const rowKey = (row) => row.episode_id || row.ts_code
 
-function TrackingRow({ row, selected, onSelect, daily, signalDate }) {
+function TrackingRow({ row, selected, onSelect, daily, signalDate, industries }) {
   const result = row.follow_up
   return <tr className={selected ? 'selected' : ''} onClick={onSelect}>
-    <td><button className="tracking-stock" onClick={onSelect} aria-pressed={selected}><b>{row.name}</b><small>{row.ts_code} · {row.board}</small></button>
+    <td><button className="tracking-stock" onClick={onSelect} aria-pressed={selected}><span className="stock-name-line"><b>{row.name}</b><IndustryLabel code={row.ts_code} industries={industries} /></span><small>{row.ts_code} · {row.board}</small></button>
       <span className={`tracking-state ${row.eligible || row.ever_eligible ? 'entry' : ''}`}>{row.eligible ? '初次入场候选' : row.ever_eligible ? '观察 → 已确认' : '观察候选'}</span>
       {!daily && <small>{row.in_latest_scan ? '最新扫描仍入选' : '已离开候选 · 继续复盘'}</small>}
     </td>
@@ -56,7 +58,7 @@ function TrackingRow({ row, selected, onSelect, daily, signalDate }) {
   </tr>
 }
 
-export default function SignalTracking({ revision }) {
+export default function SignalTracking({ revision, industries }) {
   const [view, setView] = useState('active')
   const [requestedDate, setRequestedDate] = useState('')
   const [report, setReport] = useState(null)
@@ -89,11 +91,11 @@ export default function SignalTracking({ revision }) {
   }, [requestedDate, view, daily, revision, retry])
 
   const rows = useMemo(() => (report?.data || []).filter((r) =>
-    (!query || `${r.ts_code}${r.name}`.toUpperCase().includes(query.trim().toUpperCase()))
+    (!query || stockSearchText(r, industries).includes(query.trim().toUpperCase()))
     && (!group || (group === 'entry' ? (daily ? r.eligible : r.ever_eligible) : !(daily ? r.eligible : r.ever_eligible)))
     && (!pattern || opportunityFor(r).key === pattern) && (!board || r.board === board))
     .sort((a, b) => sort === 'return' ? (b.follow_up.latest_return_pct ?? -Infinity) - (a.follow_up.latest_return_pct ?? -Infinity)
-      : sort === 'recent' ? String(b.first_seen || '').localeCompare(a.first_seen || '') || b.score - a.score : b.score - a.score), [report, query, group, pattern, board, sort, daily])
+      : sort === 'recent' ? String(b.first_seen || '').localeCompare(a.first_seen || '') || b.score - a.score : b.score - a.score), [report, query, group, pattern, board, sort, daily, industries])
   useEffect(() => { if (!rows.some((r) => rowKey(r) === selection)) setSelection(rows[0] ? rowKey(rows[0]) : '') }, [rows, selection])
   const selected = rows.find((r) => rowKey(r) === selection)
   const code = selected?.ts_code
@@ -131,7 +133,7 @@ export default function SignalTracking({ revision }) {
         <div><span>最新收盘平均变化</span><strong className={tone(report.summary.mean_return_pct)}>{percent(report.summary.mean_return_pct)}</strong><p>不同观察期 · 非组合收益</p></div>
       </div>
       <div className="tracking-toolbar">
-        <input aria-label="搜索跟踪股票" placeholder="搜索代码 / 名称" value={query} onChange={(e) => setQuery(e.target.value)} />
+        <input aria-label="搜索跟踪股票" placeholder="名称 / 代码 / 二级行业" value={query} onChange={(e) => setQuery(e.target.value)} />
         <select aria-label="跟踪候选状态" value={group} onChange={(e) => setGroup(e.target.value)}><option value="">全部状态</option><option value="entry">{daily ? '当时入场候选' : '本轮曾确认入场'}</option><option value="watch">{daily ? '当时观察候选' : '本轮仍为观察'}</option></select>
         <select aria-label="跟踪机会类型" value={pattern} onChange={(e) => setPattern(e.target.value)}><option value="">全部机会</option><option value="trend_pullback">趋势回调</option><option value="base_rebound">底部反转</option></select>
         <select aria-label="跟踪板块" value={board} onChange={(e) => setBoard(e.target.value)}><option value="">全部板块</option>{['主板', '创业板', '科创板', '北交所'].map((b) => <option key={b}>{b}</option>)}</select>
@@ -141,11 +143,11 @@ export default function SignalTracking({ revision }) {
       <div className="tracking-table-wrap"><table className="tracking-table"><thead><tr>
         <th>股票 / 本轮状态</th><th>{daily ? '入选日期' : '首见 / 最近入选'}</th><th>机会 / 首见评分</th><th>后续走势</th>
         {HORIZONS.map((h) => <th key={h}>T+{h}<small>交易日收盘</small></th>)}<th>最新变化<small>实际行情日期</small></th><th>期间最高<small>相对首见日收盘</small></th><th>期间最低<small>相对首见日收盘</small></th>
-      </tr></thead><tbody>{rows.map((r) => <TrackingRow key={rowKey(r)} row={r} selected={selection === rowKey(r)} onSelect={() => setSelection(rowKey(r))} daily={daily} signalDate={report.signal_date} />)}</tbody></table>
+      </tr></thead><tbody>{rows.map((r) => <TrackingRow key={rowKey(r)} row={r} selected={selection === rowKey(r)} onSelect={() => setSelection(rowKey(r))} daily={daily} signalDate={report.signal_date} industries={industries} />)}</tbody></table>
         {!rows.length && <div className="trend-placeholder">{view === 'archive' ? '满20个交易日的机会会自动归档；当前没有匹配记录。' : '没有匹配记录，可切换视图或调整筛选条件。'}</div>}
       </div>
       {selected && <section className="tracking-chart-panel">
-        <header><div><h3>{selected.name} <small>{selected.ts_code}</small></h3><p>{selected.first_seen || report.signal_date} 首见 · 首次{selected.eligible ? '入场候选' : '观察候选'} · {Number(selected.score).toFixed(1)}分 <OpportunityBadge value={selected} /></p></div>
+        <header><div><h3>{selected.name} <small>{selected.ts_code}</small><IndustryLabel code={selected.ts_code} industries={industries} /></h3><p>{selected.first_seen || report.signal_date} 首见 · 首次{selected.eligible ? '入场候选' : '观察候选'} · {Number(selected.score).toFixed(1)}分 <OpportunityBadge value={selected} /></p></div>
           <div className="tracking-chart-controls">{['1D', '60F'].map((tf) => <button className={tf === timeframe ? 'active' : ''} key={tf} onClick={() => setTimeframe(tf)}>{tf === '1D' ? '日K' : '60F'}</button>)}<button onClick={() => setFocusSignal((v) => v + 1)}>定位入选日</button><button onClick={() => setReset((v) => v + 1)}>回到最新</button></div>
         </header>
         <div className="tracking-chart-note"><span>↓ 金色标记为本轮首见日 · 日K支持近5年与近期缩放</span><span>查询上限 {report.as_of?.slice(0, 10)} 收盘</span></div>

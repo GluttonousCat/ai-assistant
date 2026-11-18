@@ -1,0 +1,4 @@
+.stock-name-line { display: flex; align-items: center; flex-wrap: wrap; gap: 5px 7px; }
+.stock-industry { display: inline-flex; align-items: center; max-width: 125px; padding: 2px 5px; border: 1px solid #344039; border-radius: 4px; background: #1a221e; color: #a6baac; font-size: 10px; font-weight: 400; line-height: 1.4; vertical-align: middle; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stock-industry.missing { color: #89857b; border-color: #39352e; background: transparent; }
+.trend-stock-title h2 > .stock-industry, .intraday-selected h3 > .stock-industry, .tracking-chart-panel h3 > .stock-industry { margin-left: 9px; }

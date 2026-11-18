@@ -11,11 +11,15 @@ from skills.trend.chart_history import five_year_start
 from tools.market.trend_data import adjust_prices, intraday_report, intraday_schedule, scan_inputs, scan_daily_inputs
 
 
+def rank_candidates(rows):
+    return sorted(rows, key=lambda row: (-row["score"], row["ts_code"]))
+
+
 def dashboard():
     report = intraday_report()
     if not report:
         return None
-    return {**report, "schedule": intraday_schedule()}
+    return {**report, "data": rank_candidates(report["data"]), "schedule": intraday_schedule()}
 
 
 def chart(code, run_id=None, timeframe="60F"):

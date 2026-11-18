@@ -5,7 +5,7 @@ from datetime import date
 from uuid import UUID
 from typing import Literal
 from fastapi import APIRouter, HTTPException, Query
-from tools.market.queries import query_intraday
+from tools.market.queries import query_intraday, stock_industries
 from skills.trend.service import dashboard, freshness
 from skills.trend.chart_history import stock_chart as stock_detail
 from skills.trend.tracking import follow_up, follow_up_chart
@@ -13,6 +13,12 @@ from skills.trend.episodes import episode_tracking
 from skills.trend.intraday import dashboard as intraday_dashboard, chart as intraday_chart
 
 market_router = APIRouter(prefix="/api/v1/market", tags=["market"])
+
+
+@market_router.get("/industries")
+async def market_industries():
+    """Current SW level-2 display metadata; not historical signal inputs."""
+    return await asyncio.to_thread(stock_industries)
 
 
 @market_router.get("/intraday")
