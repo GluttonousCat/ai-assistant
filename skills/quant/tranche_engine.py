@@ -15,11 +15,19 @@ from skills.quant.metrics import summarize
 from skills.quant.registry import STRATEGIES
 from skills.quant.tranches import TrancheConfig, Inventory
 from skills.quant.market_context import MarketPolicy
+from skills.quant.stop_orders import stop_reference
 
 VERSION = "tranche-campaign-next-open-v1"
 
 
-def simulate(series, timeline, strategy_id, cfg=TrancheConfig(), market_policy=None):
+def simulate(
+    series,
+    timeline,
+    strategy_id,
+    cfg=TrancheConfig(),
+    market_policy=None,
+    stop_bars=None,
+):
     base = cfg.base
     clock = pd.DatetimeIndex(timeline)
     if clock.empty or not clock.is_monotonic_increasing or clock.has_duplicates:
@@ -126,7 +134,9 @@ def simulate(series, timeline, strategy_id, cfg=TrancheConfig(), market_policy=N
             t["market_at_entry"] = p["market_at_entry"]
             t["market_grace_used"] = p["market_grace_used"]
 
-    def sell(code, p, i, day, when):
+    def sell(
+        code, p, i, day, when, raw_override=None, quantity_cap=None, resolution=None
+    ):
         nonlocal cash, fees
         s = stocks[code]
         d = s.data
@@ -140,7 +150,7 @@ def simulate(series, timeline, strategy_id, cfg=TrancheConfig(), market_policy=N
         ):
             audit["exit_missing_limit_or_bar"] += 1
             return
-        raw = d["open"][i]
+        raw = d["open"][i] if raw_override is None else raw_override
         if (
             raw <= d["down_limit"][i] + 1e-8
             or raw * (1 - base.slippage) < d["down_limit"][i] - 1e-8
@@ -162,7 +172,9 @@ def simulate(series, timeline, strategy_id, cfg=TrancheConfig(), market_policy=N
         )
         units = min(available, desired)
         scale = d["scale"][i]
-        if all_exit and available >= inv.units - 1e-8:
+        if quantity_cap is not None:
+            units = min(units, quantity_cap / scale)
+        if all_exit and units >= inv.units - 1e-8:
             units = inv.units  # Full disposal includes economic odd-lot remainder.
         else:
             units = np.floor((units * scale + 1e-8) / 100) * 100 / scale
@@ -199,6 +211,9 @@ def simulate(series, timeline, strategy_id, cfg=TrancheConfig(), market_policy=N
             )
         )
         audit["sell_fills"] += 1
+        if resolution is not None:
+            p["fills"][-1]["resolution"] = resolution
+            audit["resting_stop_" + resolution + "_fills"] += 1
         if inv.units <= 1e-8:
             record_close(code, p, when, raw * (1 - base.slippage))
             del positions[code]
@@ -308,7 +323,7 @@ def simulate(series, timeline, strategy_id, cfg=TrancheConfig(), market_policy=N
         day = end.date()
         when = end.normalize() + pd.Timedelta(hours=9, minutes=30)
         for code, p in list(positions.items()):
-            if p["pending_sell"] is not None:
+            if p["pending_sell"] is not None and not p.get("resting_stop_activated"):
                 sell(code, p, int(stocks[code].row_at[step]), day, when)
         marked = cash + sum(
             p["inventory"].units
@@ -379,6 +394,51 @@ def simulate(series, timeline, strategy_id, cfg=TrancheConfig(), market_policy=N
                 positions[code] = p
                 consumed.add(key)
                 audit["campaigns_started"] += 1
+        # Credit intraday stop proceeds only AFTER all opening acquisitions.
+        # Today's new lots remain locked; the prior close's stop never tightens
+        # using today's high before these native bars have been processed.
+        if stop_bars is not None:
+            for code, p in list(positions.items()):
+                i = int(stocks[code].row_at[step])
+                if i < 0:
+                    continue
+                bars = stop_bars.get(code, {}).get(day)
+                if bars is None:
+                    raise ValueError(f"{code} {day}缺少保护止损60F行情")
+                scale = stocks[code].data["scale"][i]
+                for bar in bars:
+                    if bar.volume <= 0:
+                        audit["resting_stop_liquidity_deferred"] += 1
+                        continue
+                    reference = stop_reference(
+                        bar, p["stop"] / scale, p.get("resting_stop_activated", False)
+                    )
+                    if reference is None:
+                        continue
+                    if not p.get("resting_stop_activated"):
+                        audit["resting_stop_activations"] += 1
+                    p["resting_stop_activated"] = True
+                    p["entry_locked"] = True
+                    p["pending_add"] = None
+                    p["pending_sell"] = dict(
+                        all=True, reason="preplaced_protective_stop"
+                    )
+                    capacity = np.floor(bar.volume * base.participation / 100) * 100
+                    if capacity < 100:
+                        audit["resting_stop_liquidity_deferred"] += 1
+                        continue
+                    sell(
+                        code,
+                        p,
+                        i,
+                        day,
+                        bar.end,
+                        raw_override=reference,
+                        quantity_cap=capacity,
+                        resolution=bar.resolution,
+                    )
+                    if code not in positions:
+                        break
         for code, p in positions.items():
             s = stocks[code]
             i = int(s.row_at[step])
@@ -544,8 +604,12 @@ def simulate(series, timeline, strategy_id, cfg=TrancheConfig(), market_policy=N
         for item in opened:
             item["market_at_entry"] = positions[item["ts_code"]]["market_at_entry"]
             item["market_grace_used"] = positions[item["ts_code"]]["market_grace_used"]
+    if stop_bars is not None:
+        config["stop_execution"] = "preplaced_ohlc_volume_capped"
     return dict(
-        execution_version="tranche-market-aware-v2"
+        execution_version="tranche-native60f-stop-v3"
+        if stop_bars is not None
+        else "tranche-market-aware-v2"
         if market_policy is not None
         else VERSION,
         config=config,
