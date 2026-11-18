@@ -27,7 +27,7 @@ from skills.quant.tranche_engine import simulate
 from skills.quant.tranche_prepare import attach_entry_session_low
 from skills.quant.wyckoff_hybrid import combine_families
 
-VERSION = "wyckoff-family-management-v38"
+VERSION = "wyckoff-family-management-v39"
 logger = get_logger(__name__)
 
 
@@ -35,7 +35,7 @@ def main():
     root = Path(get_config().root_dir)
     source = root / "output/quant/wyckoff_price_volume_v33/prepared.pkl"
     manifest = source.with_name("declaration.json")
-    folder = root / "output/quant/wyckoff_family_v38"
+    folder = root / "output/quant/wyckoff_family_v39"
     folder.mkdir(parents=True, exist_ok=True)
     baseline_path, baseline = read_report(root / BASELINE)
     stress_path, stress = read_report(root / STRESS)
@@ -85,6 +85,7 @@ def main():
                 "family_hybrid_two_slots",
                 "family_hybrid_first_session_review",
                 "family_hybrid_first_session_reduce",
+                "family_hybrid_separate_defense",
             ],
             reversal_slot_limit=2,
             volume_protection=asdict(protection),
@@ -103,6 +104,7 @@ def main():
                 "One fixed allocation variant limits concurrent reversals to two of ten positions. Cases are all disclosed and no full-period winner is selected.",
                 "On a trend pullback's first holding day, a completed 60F session that traded through the planned stop triggers a next-open risk exit. Missing sessions are audited. Reversal trade management is unchanged.",
                 "The fixed reduce variant sells the first scheduled tranche, disables additional entries and advances the same cumulative exit schedule. Hard stops still take precedence.",
+                "The separate-defense variant sells the same first-session tranche. It subsequently applies the original 5/8% and 532 schedule to the actual remaining inventory, with risk additions locked. No threshold tuning.",
                 "Both families use existing index safeguards, completed 60F after-close decisions, next legal open, 532 and original cash, fees, limits, settlement, and risk caps.",
             ],
         ),
@@ -130,6 +132,7 @@ def main():
         family_hybrid_two_slots=hybrid,
         family_hybrid_first_session_review=reviewed,
         family_hybrid_first_session_reduce=reviewed,
+        family_hybrid_separate_defense=reviewed,
     )
     calendar = pd.DatetimeIndex(
         [pd.Timestamp(p["date"]) + pd.Timedelta(hours=15) for p in baseline["equity"]]
@@ -142,6 +145,7 @@ def main():
         review = {
             "family_hybrid_first_session_review": "exit",
             "family_hybrid_first_session_reduce": "reduce",
+            "family_hybrid_separate_defense": "reduce_then_profit",
         }.get(name)
         strategy = "wyckoff_60f_v31" if mixed else "swing_60f_v8"
         for window, (start, end) in WINDOWS.items():

@@ -53,9 +53,12 @@ def simulate(
     ):
         raise ValueError("量价持仓席位上限无效")
     if (
-        first_session_stop_review not in (None, "exit", "reduce")
+        first_session_stop_review not in (None, "exit", "reduce", "reduce_then_profit")
         or (first_session_stop_review is not None and stop_bars is not None)
-        or (first_session_stop_review == "reduce" and len(cfg.exit_weights) < 2)
+        or (
+            first_session_stop_review in ("reduce", "reduce_then_profit")
+            and len(cfg.exit_weights) < 2
+        )
     ):
         raise ValueError("首日风险复核仅适用于盘后策略")
 
@@ -181,18 +184,28 @@ def simulate(
         inv = p["inventory"]
         return (inv.cost + base.fee(inv.cost, True)) / inv.units / (1 - base.slippage)
 
-    def queue_tranche_sale(p, reason):
+    def queue_tranche_sale(p, reason, standalone_defense=False):
         inv = p["inventory"]
         if p["exit_base"] is None:
             p["exit_base"] = inv.units
+            p["exit_base_sold"] = p["sold_units"]
             p["profit_anchor"] = inv.cost / inv.units
         p["entry_locked"] = True
         p["pending_add"] = None
         p["pending_sell"] = dict(
             all=False,
-            target_sold=p["exit_base"] * sum(cfg.exit_weights[: p["exit_stage"] + 1]),
+            target_sold=p["exit_base_sold"]
+            + p["exit_base"] * sum(cfg.exit_weights[: p["exit_stage"] + 1]),
             reason=reason,
+            standalone_defense=standalone_defense,
         )
+
+    def finish_tranche_sale(p, pending):
+        if pending.get("standalone_defense"):
+            p["exit_base"] = None
+        else:
+            p["exit_stage"] += 1
+        p["pending_sell"] = None
 
     def record_close(code, p, when, raw_exit):
         inv = p["inventory"]
@@ -278,8 +291,7 @@ def simulate(
         if units <= 1e-10:
             if desired * scale < 100 and not all_exit:
                 audit["partial_exit_below_lot_skipped"] += 1
-                p["exit_stage"] += 1
-                p["pending_sell"] = None
+                finish_tranche_sale(p, pending)
             else:
                 audit["t1_exit_deferred"] += 1
             return
@@ -324,8 +336,7 @@ def simulate(
             not all_exit
             and pending["target_sold"] - p["sold_units"] < 100 / scale + 1e-8
         ):
-            p["exit_stage"] += 1
-            p["pending_sell"] = None
+            finish_tranche_sale(p, pending)
 
     def buy(code, p, i, day, when, marked, stage):
         nonlocal cash, fees
@@ -669,7 +680,12 @@ def simulate(
             if p["pending_sell"] is not None:
                 continue
             if first_session_reduce:
-                queue_tranche_sale(p, "first_session_stop_reduce")
+                queue_tranche_sale(
+                    p,
+                    "first_session_stop_reduce",
+                    standalone_defense=first_session_stop_review
+                    == "reduce_then_profit",
+                )
                 continue
             if support_protection is not None or volume_managed:
                 updated = protected_stop(

@@ -163,6 +163,35 @@ def test_first_session_breach_exits_recovered_pullback_next_open_only():
     assert pd.Timestamp(sell["time"]).date() == clock[2].date()
 
 
+def test_standalone_defense_preserves_profit_threshold_and_sizes_against_remaining_lots():
+    stock, clock = fixture([10, 10.1, 10.3, 10.6, 10.7, 10.9, 11, 11.1])
+    minute = native(stock)
+    day = stock.times[1].normalize()
+    minute.loc[minute.index[minute.bar_end.dt.normalize().eq(day)][0], "low"] = 9.7
+    stock = attach_entry_session_low(minute, stock)
+    plan = config(entry=(0.5, 0.3, 0.2), exits=(0.5, 0.3, 0.2))
+    result = simulate(
+        [stock],
+        clock,
+        "swing_60f_v8",
+        plan,
+        first_session_stop_review="reduce_then_profit",
+    )
+    fill = result["open_positions"][0]["fills"]
+    buy, defense, profit1, profit2 = fill
+    assert [x["reason"] for x in fill] == [
+        "probe",
+        "first_session_stop_reduce",
+        "tranche_profit_1",
+        "tranche_profit_2",
+    ]
+    remaining = buy["quantity"] - defense["quantity"]
+    assert profit1["quantity"] == remaining * 0.5 // 100 * 100
+    assert profit1["quantity"] + profit2["quantity"] == remaining * 0.8 // 100 * 100
+    assert pd.Timestamp(profit1["time"]).date() == clock[4].date()
+    assert pd.Timestamp(profit2["time"]).date() == clock[6].date()
+
+
 def test_supply_warning_pauses_adds_without_requiring_a_defensive_sale():
     stock, clock = volume_stock()
     stock.data["wyckoff_supply_warning"][1] = True
