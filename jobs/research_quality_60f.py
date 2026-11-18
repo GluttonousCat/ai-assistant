@@ -130,6 +130,7 @@ def run(
     version=VERSION,
     stop_bars=None,
     transform=None,
+    model_variants=None,
 ):
     with (root / ORIGINAL).open("rb") as stream:
         originals = pickle.load(stream)["series"]
@@ -171,7 +172,8 @@ def run(
     def calculate(name, window, stress=False):
         start, end = WINDOWS[window]
         cfg = config_for(plan, name, stress, cases)
-        source = window_series(stocks, start, end)
+        variant = (model_variants or {}).get(name)
+        source = window_series(variant["series"] if variant else stocks, start, end)
         market_policy = MarketPolicy(cases[name].get("market_mode", "none"))
         if market_policy.entry_mode != "none":
             source = [apply_policy(stock, market_policy) for stock in source]
@@ -212,6 +214,7 @@ def run(
             strategy_version=version,
             strategy_config={
                 **baseline["strategy_config"],
+                **({"online": variant["model_config"]} if variant else {}),
                 "minimum_native_quality": MINIMUM_QUALITY,
             },
             timeframe="1D",

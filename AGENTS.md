@@ -27,7 +27,7 @@ core/        基础设施 (引擎与各层共用的地基, 不含业务):
              net/helpers·paths/json_response(共用模型JSON解析)
              config并发初始化完整发布/失败可重试；logger并发只建一组handler；security仅密码/JWT，临时密钥每进程固定
 skills/      领域技能 (每技能一目录, 专业知识放 prompt):
-             quant新增candidate_quality(原始质量与月度排序分分离/72原始分门槛)、support_protection(买入后已确认60F更高低点/盘后上移保护)、stop_orders(显式预挂保护/完成60F后下一根才启用保本/标注日K替代，不改变默认盘后执行)；
+             quant新增candidate_quality(原始质量与月度排序分分离/72原始分门槛)、label_research(冻结因果特征恢复/辅助标签比较/绝对与相对收益确认)、support_protection(买入后已确认60F更高低点/盘后上移保护)、stop_orders(显式预挂保护/完成60F后下一根才启用保本/标注日K替代，不改变默认盘后执行)；
              quant(workspace自由组合规则/自然语言条件树/模板兼容/冻结任务；rule_models·rule_indicators·rule_prepare负责有界规则/多周期因果计算，RuleExecutionConfig实际买价止损/显式离场；workspace_runner分派规则或v8模板；v10 tranches/tranche_engine/tranche_prepare:442/532分批、逐批T+1/FIFO、完整周期胜率及部分已实现盈亏；v9结构持有/固定对照；v8参数研究/盘后触发次日执行; 见 docs/agents/quant_backtesting.md) /
              trend(episodes.py连续入选合轮/升级不重开/20交易日归档；chart_history.py独立5年日K展示不改冻结信号；tracking.py历史名单前向跟踪/T+1·3·5·10/真实因子/交易日/缺失分离；parent_context.py独立日K母趋势标注，局部60F反转可属上涨回调，保留原信号与入场条件；structure.py V9有序结构；swing.py V8底背离/回调；V7及更早快照兼容; M8/M13/M21; 见 docs/frontend/stock_dashboard.md) /
              fin_query(Text-to-SQL) / report(skill无SQL编排/normalization纯规范化/ocr后台队列/analysis短事务及提交后续接/collection兼容出口) / scanned_report(OCR) /
