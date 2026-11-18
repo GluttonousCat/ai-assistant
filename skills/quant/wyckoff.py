@@ -9,7 +9,7 @@ from skills.quant.prepare import swing_frame
 from skills.trend.wyckoff import WyckoffConfig, events, features
 
 
-def prepare_wyckoff(minute, stock, cfg=WyckoffConfig(), keep_entries=False):
+def prepare_wyckoff(minute, stock, cfg=WyckoffConfig(), keep_entries=False, after=None):
     if "adjustment" in minute and not minute.adjustment.eq("none").all():
         raise ValueError("威科夫研究只接收未复权原生分钟行情")
     frame, issue = swing_frame(minute, stock)
@@ -42,7 +42,10 @@ def prepare_wyckoff(minute, stock, cfg=WyckoffConfig(), keep_entries=False):
     data["scale_in_ready"] = data["wyckoff_attack"].copy()
     data["tranche_trend_failed"] = data["wyckoff_structure_failed"].copy()
     signals = []
-    by_day = {day: part for day, part in f.groupby(f.bar_end.dt.normalize())}
+    published = f if after is None else f[f.bar_end.gt(after)]
+    by_day = {
+        day: part for day, part in published.groupby(published.bar_end.dt.normalize())
+    }
     at = {t: i for i, t in enumerate(stock.times)}
     for date, day in by_day.items():
         end = date + pd.Timedelta(hours=15)
@@ -60,7 +63,11 @@ def prepare_wyckoff(minute, stock, cfg=WyckoffConfig(), keep_entries=False):
             )
         data["scale_in_ready"][i] = data["wyckoff_attack"][i] = held
     if not keep_entries:
-        eligible = f[f.event.ne("") & f.attack & f.score.ge(cfg.minimum_score)]
+        eligible = published[
+            published.event.ne("")
+            & published.attack
+            & published.score.ge(cfg.minimum_score)
+        ]
         for date, candidates in eligible.groupby(eligible.bar_end.dt.normalize()):
             end = date + pd.Timedelta(hours=15)
             i = at.get(end)
