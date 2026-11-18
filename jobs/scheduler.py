@@ -141,9 +141,9 @@ class DailySyncScheduler:
             result = {"status": "error", "error": str(error)}
         self._record_retry(end, result)
 
-        # Financial-report increment: pull reports announced within the last
-        # FIN_BACKFILL_DAYS days (run in the thread pool, not blocking the event loop)
-        if include_financial:
+        # On an incomplete market refresh, return to the retry loop immediately.
+        # Financial backfills must not consume the 30-minute retry window.
+        if include_financial and result.get("status") == "complete":
             try:
                 fin_result = await asyncio.to_thread(
                     _run_financial_incremental, FIN_BACKFILL_DAYS

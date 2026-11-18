@@ -140,6 +140,21 @@ def test_market_pipeline_runs_off_loop_before_financials(monkeypatch):
     assert all(thread != main for name, thread in seen)
 
 
+def test_failed_market_refresh_does_not_start_slow_financial_tail(monkeypatch):
+    from jobs import refresh_market
+    monkeypatch.setattr(refresh_market, "refresh", lambda *a, **kw: {"status": "error"})
+    def forbidden(*args):
+        raise AssertionError("financial work must not delay market retries")
+    monkeypatch.setattr(scheduler, "_run_financial_incremental", forbidden)
+    monkeypatch.setattr(scheduler, "_run_dividend_daily", forbidden)
+    monkeypatch.setattr(scheduler, "_run_disclosure_daily", forbidden)
+    job = scheduler.DailySyncScheduler()
+    result = asyncio.run(job._run_sync(end=date(2026, 11, 18)))
+    assert result["status"] == "error"
+    assert job._retry_at is not None and job._retry_count == 1
+    assert "financial" not in result
+
+
 def test_retry_skips_a_pipeline_already_completed_by_another_process(monkeypatch):
     job = scheduler.DailySyncScheduler()
     job._retry_at = scheduler._market_time()

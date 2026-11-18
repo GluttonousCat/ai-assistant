@@ -1,8 +1,12 @@
 """Listed A-share classification and current non-ST collection universe."""
 
 import pandas as pd
+import time
 
 from core.config import get_config
+from core.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 def board_of(code, market=None):
@@ -33,11 +37,22 @@ def fetch_listed_universe(existing_bj=()):
     import tushare as ts
 
     pro = ts.pro_api(get_config().tushare_token, timeout=20)
-    f = pro.stock_basic(
-        list_status="L", fields="ts_code,name,industry,market,list_date"
-    )
-    if f is None or len(f) < 4000 or f.ts_code.duplicated().any():
-        raise ValueError("上市股票名单不完整，拒绝替换股票池")
+    required = {"ts_code", "name", "industry", "market", "list_date"}
+    for attempt in range(3):
+        try:
+            f = pro.stock_basic(
+                list_status="L", fields="ts_code,name,industry,market,list_date"
+            )
+            if (f is None or len(f) < 4000 or not required.issubset(f.columns)
+                    or f.ts_code.isna().any() or f.ts_code.duplicated().any()):
+                count = 0 if f is None else len(f)
+                raise ValueError(f"上市股票名单不完整（{count}条），拒绝替换股票池")
+            break
+        except Exception as error:
+            if attempt == 2:
+                raise
+            logger.warning("上市股票名单获取未通过，第%s次重试：%s", attempt + 1, type(error).__name__)
+            time.sleep(attempt + 1)
     f = f.copy()
     f["board"] = [board_of(r.ts_code, r.market) for r in f.itertuples()]
     f = f[
