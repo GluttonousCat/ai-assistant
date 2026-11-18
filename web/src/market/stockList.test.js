@@ -1,6 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { compareStockScores, stockSearchText } from './stockList.js'
+import { compareStockScores, stockSearchText, meetsDisplayScore } from './stockList.js'
+
+test('current recommendations include exactly 72 and exclude lower or unavailable scores', () => {
+  for (const score of [72, 72.1, 80, '72']) assert.equal(meetsDisplayScore({ score }), true)
+  for (const score of [71.999, 60, 0, null, undefined, NaN, Infinity, 'invalid']) assert.equal(meetsDisplayScore({ score }), false)
+})
 
 test('intraday ranking follows score, regardless of new-origin status', () => {
   const rows = [

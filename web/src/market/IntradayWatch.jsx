@@ -3,7 +3,7 @@ import { platformApi } from '../platformApi'
 import { startPolling } from '../lib/polling'
 import OpportunityBadge from '../OpportunityBadge'
 import IndustryLabel from './IndustryLabel'
-import { compareStockScores, stockSearchText } from './stockList'
+import { compareStockScores, stockSearchText, meetsDisplayScore, MIN_DISPLAY_SCORE } from './stockList'
 import { opportunityFor } from '../opportunities'
 import TrendChart from './TrendChart'
 import './intraday.css'
@@ -38,10 +38,11 @@ export default function IntradayWatch({ industries }) {
       } finally { if (!signal.aborted) setBusy(false) }
     }, { pauseWhenHidden: true, onError: (error) => setError(error.message) })
   }, [revision])
-  const rows = useMemo(() => (report?.data || []).filter((r) =>
+  const candidates = useMemo(() => (report?.data || []).filter(meetsDisplayScore), [report])
+  const rows = useMemo(() => candidates.filter((r) =>
     (!query || stockSearchText(r, industries).includes(query.trim().toUpperCase()))
     && (!kind || opportunityFor(r).key === kind)
-    && (!stage || (stage === 'new' ? r.new_today : !r.new_today))).sort(compareStockScores), [report, query, kind, stage, industries])
+    && (!stage || (stage === 'new' ? r.new_today : !r.new_today))).sort(compareStockScores), [candidates, query, kind, stage, industries])
   useEffect(() => { if (!rows.some((r) => r.ts_code === code)) setCode(rows[0]?.ts_code || '') }, [rows, code])
   const selected = rows.find((r) => r.ts_code === code)
   const identity = selected && report?.run_id ? `${report.run_id}:${report.created_at}:${code}:${timeframe}:${revision}` : ''
@@ -71,12 +72,12 @@ export default function IntradayWatch({ industries }) {
       <div className="tracking-stats intraday-stats">
         <div><span>采集范围</span><strong>{report.universe}<small>只</small></strong><p>当前已保存的非ST股票池</p></div>
         <div><span>已完成前缀可得</span><strong>{report.collected}<small>只</small></strong><p>{report.collection_failed}只获取不完整，未据此推荐</p></div>
-        <div><span>盘中观察候选</span><strong>{report.data.length}<small>只</small></strong><p>复用现行60F结构 · 保留风险门槛</p></div>
-        <div><span>今天出现新起点</span><strong>{report.data.filter((r) => r.new_today).length}<small>只</small></strong><p>其余为前一阶段结构继续观察</p></div>
+        <div><span>盘中观察候选 · ≥{MIN_DISPLAY_SCORE}分</span><strong>{candidates.length}<small>只</small></strong><p>复用现行60F结构 · 保留风险门槛</p></div>
+        <div><span>今天出现新起点</span><strong>{candidates.filter((r) => r.new_today).length}<small>只</small></strong><p>其余为前一阶段结构继续观察</p></div>
       </div>
       <div className="intraday-filters"><input aria-label="搜索盘中观察" placeholder="名称 / 代码 / 二级行业" value={query} onChange={(e) => setQuery(e.target.value)} /><select aria-label="盘中机会类型" value={kind} onChange={(e) => setKind(e.target.value)}><option value="">全部机会</option><option value="trend_pullback">趋势回调</option><option value="base_rebound">底部反转</option></select><select aria-label="盘中起点" value={stage} onChange={(e) => setStage(e.target.value)}><option value="">全部起点</option><option value="new">今天新起点</option><option value="continued">延续观察</option></select><span>{rows.length}只 · 免费网页行情快照，非实时推送</span></div>
       <div className="trend-workspace">
-        <div className="trend-stock-panel"><div className="trend-list-heading">盘中得分从高到低 · 同分按代码</div><div className="trend-stock-list">
+        <div className="trend-stock-panel"><div className="trend-list-heading">评分 ≥{MIN_DISPLAY_SCORE} · 从高到低</div><div className="trend-stock-list">
           {rows.map((r) => <div key={r.ts_code} className={`trend-stock-row ${r.ts_code === code ? 'selected' : ''}`}><button className="trend-stock-select" onClick={() => setCode(r.ts_code)}><span><span className="stock-name-line"><b>{r.name}</b><IndustryLabel code={r.ts_code} industries={industries} /></span><small>{r.ts_code} · {r.board}</small><OpportunityBadge value={r} /><small>{r.new_today ? '今天新起点' : '延续观察'} · 第{r.trend60.age_bars}根</small></span><span><b>{r.score.toFixed(1)}<small>/ 80分</small></b><small>风险 {r.risk_pct.toFixed(2)}%</small></span></button></div>)}
           {!rows.length && <div className="intraday-empty">没有符合本次条件的观察候选。</div>}
         </div></div>

@@ -6,7 +6,7 @@ import MarketFreshness from './MarketFreshness'
 import useStockChart from './useStockChart'
 import OpportunityBadge from '../OpportunityBadge'
 import IndustryLabel from './IndustryLabel'
-import { stockSearchText } from './stockList'
+import { stockSearchText, meetsDisplayScore, MIN_DISPLAY_SCORE } from './stockList'
 import { opportunityFor } from '../opportunities'
 import './dashboard.css'
 
@@ -74,7 +74,7 @@ export default function StockDashboard({ user }) {
   }, [snapshot?.run_id, snapshot?.freshness])
   const rows = useMemo(() => {
     const search = query.trim().toUpperCase()
-    return (snapshot?.data || []).filter((r) => (!search || stockSearchText(r, industries).includes(search))
+    return (snapshot?.data || []).filter((r) => meetsDisplayScore(r) && (!search || stockSearchText(r, industries).includes(search))
       && (!index || r.indices.includes(index))
       && (!board || r.board === board)
       && (!pattern || opportunityFor(r).key === pattern)
@@ -133,7 +133,7 @@ export default function StockDashboard({ user }) {
           {freshMode && <p className="trend-list-note">{meta.parent_context_version ? '先看日K母趋势，再看60F局部触发；观察标记不等于入场确认。' : riskMode ? '底部反转与趋势回调分别观察；以结构失效距离衡量风险，首次与后续回调保留细分。' : '观察阴跌 / 深坑后的早期反转；观察标记不代表已经确认底部。'}</p>}
           {(dualMode || freshMode || riskMode) && <select aria-label="机会类型" value={pattern} onChange={e=>setPattern(e.target.value)}><option value="">趋势回调 / 底部反转 · 全部</option><option value="trend_pullback">↑ 趋势回调（含首次与后续）</option><option value="base_rebound">■ 底部反转（含阴跌 / 深坑修复）</option></select>}
           <div className="trend-tabs">{[['candidate', (riskMode || meta.parent_context_version) ? '机会' : freshMode ? '反转' : '候选'], ...(freshMode ? [['entry', '入场']] : []), ...(earlyMode ? [['first', '首阳']] : []), ...(meta.config.track_swing_context ? [['resume', '再起']] : []), ['observe', '观察'], ['star', '自选'], ['all', '全部']].map(([key, label]) => <button key={key} className={mode === key ? 'active' : ''} onClick={() => setMode(key)}>{label}{key === 'star' ? ` ${stars.length}` : ''}</button>)}</div>
-          <div className="trend-list-heading"><span>{rows.length} 只股票</span><select aria-label="排序" value={sort} onChange={(e) => setSort(e.target.value)}><option value="score">质量分排序</option><option value="efficiency">{freshMode ? "反转起点新近排序" : "趋势效率排序"}</option><option value="risk">风险距离排序</option></select><button onClick={exportCsv} title="导出当前筛选" aria-label="导出当前筛选">↓</button></div>
+          <div className="trend-list-heading"><span>{rows.length} 只股票 · ≥{MIN_DISPLAY_SCORE}分</span><select aria-label="排序" value={sort} onChange={(e) => setSort(e.target.value)}><option value="score">质量分排序</option><option value="efficiency">{freshMode ? "反转起点新近排序" : "趋势效率排序"}</option><option value="risk">风险距离排序</option></select><button onClick={exportCsv} title="导出当前筛选" aria-label="导出当前筛选">↓</button></div>
           <div className="trend-stock-list">
             {rows.slice(0, 250).map((r) => <div className={`trend-stock-row ${code === r.ts_code ? 'selected' : ''}`} key={r.ts_code}>
               <button className="trend-star" aria-label={`${stars.includes(r.ts_code) ? '移出' : '加入'}自选 ${r.name}`} onClick={() => toggleStar(r.ts_code)}>{stars.includes(r.ts_code) ? '★' : '☆'}</button>
