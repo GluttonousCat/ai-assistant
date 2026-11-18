@@ -1,6 +1,7 @@
-// Real-time monitor page (adminOnly): one SSE frame every 2s — agent sessions/funnel/tools/LLM + PG data freshness
+// Admin monitor: durable background tasks, redacted logs and Agent metrics.
 import { useEffect, useRef, useState } from 'react'
 import { platformApi } from './platformApi'
+import BackgroundMonitor from './monitor/BackgroundMonitor'
 
 const PATH_LABEL = { fast: '快车道', subagent: '域子Agent', full: '全工具循环' }
 const EV_ICON = { session_start: '▶', session_end: '■', tool: '⚡', llm_fail: '✖', error: '✖' }
@@ -39,6 +40,7 @@ export default function Monitor() {
   const [st, setSt] = useState(null)
   const [live, setLive] = useState(true)
   const [err, setErr] = useState('')
+  const [tab, setTab] = useState('jobs')
   const streamRef = useRef(null)
 
   useEffect(() => {
@@ -102,7 +104,7 @@ export default function Monitor() {
       <header className="mon-head">
         <div>
           <h2>
-            实时监控
+            运行观测
             <span className={`live-dot ${live ? 'on' : ''}`} />
             <span className="live-word">{live ? 'LIVE' : '已暂停'}</span>
           </h2>
@@ -113,8 +115,12 @@ export default function Monitor() {
         <button className="btn ghost" onClick={() => setLive(!live)}>{live ? '暂停' : '恢复'}</button>
       </header>
 
+      <nav className="obs-tabs" aria-label="监控视图">
+        {[['jobs', '后台任务'], ['logs', '运行日志'], ['agent', 'Agent监控']].map(([key, label]) => <button className={tab === key ? 'selected' : ''} aria-pressed={tab === key} onClick={() => setTab(key)} key={key}>{label}</button>)}
+      </nav>
+      {tab !== 'agent' ? <BackgroundMonitor state={st.background} mode={tab} live={live} /> : <>
       <div className="mon-lamps">
-        <Lamp ok={pg.ok} label="PostgreSQL" sub={pg.ok ? `${pg.latency_ms}ms` : (pg.error || '不可达')} />
+        <Lamp ok={pg.ok && !pg.stale} label="PostgreSQL" sub={pg.pending ? '探测中…' : pg.stale ? '旧探测结果，正在重试…' : pg.ok ? `${pg.latency_ms}ms` : (pg.error || '不可达')} />
         <Lamp ok={pipe.ocr === 0} label="研报管线" sub={pg.ok ? `OCR排队 ${pipe.ocr || 0} · 提取失败 ${pipe.failed || 0}` : '—'} />
         <Lamp ok={!!pg.last_trade_date} label="行情数据" sub={pg.last_trade_date ? `最新交易日 ${pg.last_trade_date}` : '—'} />
         <Lamp ok={(c.llm_fails || 0) < 5} label="LLM 网关" sub={`${c.llm_calls || 0} 调用 · 失败 ${c.llm_fails || 0}`} />
@@ -225,6 +231,7 @@ export default function Monitor() {
           </table>
         </section>
       </div>
+      </>}
     </div>
   )
 }

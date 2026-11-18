@@ -12,6 +12,7 @@ import pandas as pd
 from core.config import get_config
 from core.local_state import file_lock, read_json, write_json
 from core.logger import get_logger
+from core.observability import observed, task_progress
 from storage.repositories.market import save_closed_prefix
 from storage.repositories.trend import save_adjustments
 from tools.market.adjustments import fetch_adjustments
@@ -68,6 +69,7 @@ def closed_prefix(frame, day, cutoff, now):
     return filtered
 
 
+@observed("intraday_collect", "盘中60F行情采集")
 def collect(day, cutoff="11:30", workers=4, limit=0):
     cfg = get_config()
     now = datetime.now(ZoneInfo("Asia/Shanghai"))
@@ -124,6 +126,7 @@ def collect(day, cutoff="11:30", workers=4, limit=0):
             return outcome
 
         logger.info("盘中采集 %s %s: 股票池%s，缓存%s，待采集%s", day, cutoff, len(members), len(outcomes), len(pending))
+        task_progress(f"采集 {day} {cutoff} 已完成60F", completed=len(outcomes), total=len(members))
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = [pool.submit(one, member) for member in pending]
             for future in as_completed(futures):
@@ -131,11 +134,14 @@ def collect(day, cutoff="11:30", workers=4, limit=0):
                 if len(outcomes) % 100 == 0 or len(outcomes) == len(members):
                     progress = {"completed": len(outcomes), "total": len(members), "ok": sum(r["status"] == "ok" for r in outcomes), "updated_at": datetime.now(ZoneInfo("Asia/Shanghai")).isoformat()}
                     write_json(folder / "progress.json", progress)
+                    task_progress(completed=progress["completed"], total=progress["total"])
                     logger.info("盘中采集进度 %s/%s，完整%s", progress["completed"], progress["total"], progress["ok"])
         result = {"day": day, "cutoff": cutoff, "total": len(members), "complete": sum(r["status"] == "ok" for r in outcomes),
                   "rows": sum(r["rows"] for r in outcomes), "failed": [r for r in outcomes if r["status"] != "ok"],
                   "discarded_later": sum(r.get("discarded_later", 0) for r in outcomes)}
         write_json(folder / "audit.json", result)
+        if result["failed"]:
+            task_progress(warning=f"{len(result['failed'])} 只股票采集失败，详见本轮审计")
         return result
 
 

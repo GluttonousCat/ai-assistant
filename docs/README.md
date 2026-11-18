@@ -40,6 +40,7 @@ docs/
 | 模块拆分、合并与依赖收敛 | [ops/module_boundaries.md](ops/module_boundaries.md) |
 | 分钟行情、非ST扩池补齐、新闻快照和指数成分股池 | [ops/data_sources.md](ops/data_sources.md) |
 | 后端每天18:00趋势选股图文邮件（无需Codex） | [ops/market_digest.md](ops/market_digest.md) |
+| 查看后台采集进度、运行日志和Agent监控 | [frontend/monitor.md](frontend/monitor.md) |
 | 每天17:00更新日K、60F与看板 / 重启补漏 | [ops/daily_sync.md](ops/daily_sync.md) |
 | 股票行情、独立盘中60F观察、5年日K、连续信号合轮/归档与T+1/3/5/10跟踪 | [frontend/stock_dashboard.md](frontend/stock_dashboard.md) |
 | 策略创作工作台/可组合指标条件/自然语言规则/后台回测、主板60F策略、442/532分批及研究偏差 | [agents/quant_backtesting.md](agents/quant_backtesting.md) |

@@ -25,6 +25,7 @@ from typing import Optional, Any, Dict
 
 from core.config import get_config
 from core.logger import get_logger
+from core.observability import observed, task_progress
 
 logger = get_logger(__name__)
 
@@ -74,6 +75,7 @@ class ZSXQScheduleScheduler:
         return max(0.0, (target - datetime.now()).total_seconds())
 
     # ---------- Round execution ----------
+    @observed("reports_round", "研报定时流水线")
     def _run_round(self, hour: int) -> dict:
         """Run one crawl round synchronously (executed in the thread pool)."""
         cfg = get_config()
@@ -94,6 +96,7 @@ class ZSXQScheduleScheduler:
         # 1+2: crawl topics + collect/download files (reuses
         # daily_fetch_zxsq.run_once)
         try:
+            task_progress("抓取研报、下载并逐篇分析")
             from jobs.daily_fetch_zxsq import run_once
             fetch = run_once(
                 str(group_id),
@@ -103,13 +106,17 @@ class ZSXQScheduleScheduler:
             )
             result["fetch"] = {k: v for k, v in fetch.items()
                                if k in ("topics", "collect", "download", "pg_sync")}
+            if fetch.get("error") or str(fetch.get("pg_sync", "")).startswith("error"):
+                task_progress(warning="研报抓取或入库未完全成功，请查看子任务与日志")
         except Exception as e:
             logger.error(f"知识星球抓取失败: {e}")
+            task_progress(warning=f"研报抓取失败: {e}")
             result["fetch"] = {"error": str(e)}
 
         # 3: LLM Analysis metadata extraction (org/target/industry/region/market
         #    -> table columns; lightweight, seconds per report)
         try:
+            task_progress("补齐研报元信息")
             from tools.finance.report_meta_analysis import analyze_pending
             if get_config().openai_api_key:
                 n = analyze_pending(limit=META_ANALYSIS_LIMIT)
@@ -118,10 +125,12 @@ class ZSXQScheduleScheduler:
                 result["meta_analysis"] = {"skipped": "未配置 OPENAI_API_KEY"}
         except Exception as e:
             logger.error(f"LLM Analysis 失败: {e}")
+            task_progress(warning=f"元信息分析失败: {e}")
             result["meta_analysis"] = {"error": str(e)}
 
         # 4: LLM deep extraction (rating/forecasts/views/tags)
         try:
+            task_progress("深度提取待分析研报")
             from skills.base import SkillContext
             from skills.report.skill import ReportSkill
             limit = EXTRACT_LIMITS.get(hour, 8)
@@ -129,10 +138,13 @@ class ZSXQScheduleScheduler:
                 ctx = ReportSkill()(SkillContext(
                     user_input="", params={"mode": "extract", "limit": limit}))
                 result["extract"] = ctx.result or {"error": ctx.error}
+                if ctx.error:
+                    task_progress(warning=ctx.error)
             else:
                 result["extract"] = {"skipped": "未配置 OPENAI_API_KEY"}
         except Exception as e:
             logger.error(f"研报 LLM 提取失败: {e}")
+            task_progress(warning=f"深度提取失败: {e}")
             result["extract"] = {"error": str(e)}
 
         # 5: at the end of the morning round, generate the daily digest
@@ -140,10 +152,12 @@ class ZSXQScheduleScheduler:
         #    round)
         if hour == self.run_hours[0]:
             try:
+                task_progress("生成每日研报摘要")
                 from jobs.daily_digest import generate
                 result["digest"] = str(generate())
             except Exception as e:
                 logger.error(f"每日研报晨报生成失败: {e}")
+                task_progress(warning=f"研报摘要失败: {e}")
                 result["digest"] = {"error": str(e)}
 
         self.last_run = datetime.now()

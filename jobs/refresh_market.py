@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 
 from core.config import get_config
 from core.logger import get_logger
+from core.observability import observed, task_progress
 from jobs.sync_intraday import sync_one, SOURCE
 from storage.repositories import market as store
 from storage.repositories.trend import publish
@@ -76,6 +77,7 @@ def publish_snapshot(target, coverage, progress=None):
     return {"run_id": run_id, "as_of": cutoff, "universe": len(rows)}
 
 
+@observed("market_refresh", "盘后行情与趋势更新")
 def refresh(target: date, *, start=None, quotes=True, workers=4):
     expected = expected_date()
     if not is_trading_day(target) or expected is None or target > expected:
@@ -96,6 +98,10 @@ def refresh(target: date, *, start=None, quotes=True, workers=4):
         def update(**values):
             state.update(values)
             write_state(state)
+            labels = {"universe": "更新股票池", "daily": "更新日K、估值与复权因子", "60F": "补齐60F行情",
+                      "audit": "核验行情完整性", "snapshot": "扫描趋势并发布快照", "done": "行情快照已发布"}
+            task_progress(labels.get(state["stage"], state["stage"]),
+                          completed=values.get("completed"), total=values.get("total", state.get("total")))
 
         update()
         try:

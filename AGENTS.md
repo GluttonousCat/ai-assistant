@@ -2,7 +2,7 @@
 
 > 本文件是给 AI Agent（及新成员）的**项目第一入口**。读完本文件即可建立全局认知，
 > 再按需深入 `docs/` 对应模块文档。人类同事请从 [docs/README.md](docs/README.md) 进。
-> 更新：2026-11-17
+> 更新：2026-11-18
 
 ## 1. 项目是什么
 
@@ -67,7 +67,7 @@ web/src/     Login / Platform(侧边栏壳+角色门控) / AgentChat(智能对�
              chat/resultData(纯图形数据)/ResultLineChart(绘图)，旧platformApi出口兼容
              market/(StockDashboard+TrendChart+SignalTracking+IntradayWatch,股票行情#market含趋势筛选/信号跟踪/独立盘中观察；四轮自动更新/可拖拽60F与5年日K，按轮次隔离截止) /
              quant/(StrategyWorkspace规则工作台+QuantDashboard历史报告+EquityChart,策略与回测#quant) /
-             Reports / UserAdmin / Monitor(实时监控SSE, adminOnly); Markdownish 共享渲染器；
+             Reports / UserAdmin / Monitor(后台任务/日志/Agent观测SSE, adminOnly); Markdownish 共享渲染器；
              opportunities.js/OpportunityBadge.jsx统一趋势回调（蓝↑）与底部反转（紫■）展示，不修改历史信号
 ```
 
@@ -181,6 +181,7 @@ vision=qwen3.8-flash（deepseek 不收图片）。**思考开关由 `llm.enable_
 | 股票看板与趋势筛票 | [docs/frontend/stock_dashboard.md](docs/frontend/stock_dashboard.md) | 60F/日K趋势回调与阴跌砸坑反弹/独立截止/全池快照/可解释条件；不宣称已验证收益 |
 | 量化策略与回测 | [docs/agents/quant_backtesting.md](docs/agents/quant_backtesting.md) | 注册策略/真实限价/T+1资金组合/2026样本内研究/固定名单偏差与实际已知名单对照 |
 | 前端研报 | [docs/frontend/reports.md](docs/frontend/reports.md) | 流水线/表结构/去重/LLM Analysis/AI分析流式弹窗 |
+| 运行观测 | [docs/frontend/monitor.md](docs/frontend/monitor.md) | 后台采集阶段/跨进程任务历史/日志筛选脱敏/Agent监控，仅管理员 |
 | 前端框架 | [docs/frontend/framework_theme.md](docs/frontend/framework_theme.md) | 品牌/深黑暗棕主题/桌面入口 |
 | 模型体系 | [docs/agents/llm_models.md](docs/agents/llm_models.md) | 用途路由/两个模型的坑 |
 | 扫描件 Agent | [docs/agents/scanned_report_agent.md](docs/agents/scanned_report_agent.md) | PDF→PNG→视觉OCR 解耦设计 |

@@ -25,6 +25,7 @@ from zoneinfo import ZoneInfo
 
 from core.config import get_config as _cfg
 from core.logger import get_logger
+from core.observability import observed
 from tools.kline.calendar import is_trading_day
 
 logger = get_logger(__name__)
@@ -48,6 +49,7 @@ def _market_time(now: Optional[datetime] = None) -> datetime:
     )
 
 
+@observed("financial_sync", "财务报表增量同步")
 def _run_financial_incremental(days: int) -> dict:
     """Thread-pool entry: incremental financial-statement sync (blocking)."""
     from tools.market.sync_financial import run_financial_incremental
@@ -55,6 +57,7 @@ def _run_financial_incremental(days: int) -> dict:
     return run_financial_incremental(days=days)
 
 
+@observed("dividend_sync", "分红送转增量同步")
 def _run_dividend_daily(days: int) -> int:
     """Thread-pool entry: per-day incremental dividends/bonus shares
     (3 channels x days days = 3*days calls)."""
@@ -63,6 +66,7 @@ def _run_dividend_daily(days: int) -> int:
     return run_dividend_daily(days=days)
 
 
+@observed("disclosure_sync", "财报披露日期同步")
 def _run_disclosure_daily(days: int) -> int:
     """Thread-pool entry: per-day incremental report disclosure dates
     (2 channels x days days)."""

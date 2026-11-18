@@ -225,6 +225,8 @@ class FileDownloader:
         file_name = file_data.get('name', 'unknown')
         file_size = file_data.get('size', 0)
 
+        from core.observability import task_progress
+        task_progress(f"正在下载：{file_name}（{file_size / 1024:.0f} KB）")
         self.log(f"📥 下载: {file_name} ({file_size/1024:.1f}KB)")
 
         if self.is_stopped():
@@ -286,6 +288,8 @@ class FileDownloader:
     def _long_delay(self):
         """Enforced long sleep."""
         delay = random.uniform(self.long_sleep_min, self.long_sleep_max)
+        from core.observability import task_progress
+        task_progress(f"下载完成，反检测等待 {delay:.0f} 秒")
         self.log(f"🛌 长休眠: {delay:.0f}秒")
         self._sleep(delay)
         self.log(f"😴 休眠结束")

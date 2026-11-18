@@ -24,6 +24,7 @@ from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.logger import get_logger
+from core.observability import observed, task_progress
 logger = get_logger(__name__)
 
 from core.config import get_config
@@ -45,6 +46,7 @@ def _process_one_report(group_id: str) -> str:
     """
     new_ids: list = []
     try:
+        task_progress("同步下载文件至研报库")
         from jobs.sync_zxsq_to_pg import ZSXQ2PGSync
         sync = ZSXQ2PGSync(str(group_id))
         new_ids = sync.run() or []  # Incremental watermark: only newly downloaded files are processed, seconds-fast
@@ -72,14 +74,18 @@ def _process_one_report(group_id: str) -> str:
                 for r in docs:
                     rid = r["report_id"]
                     try:
+                        task_progress(f"研报 #{rid} 元信息分析")
                         analyze_report_meta(rid)  # Metadata takes seconds (filename only)
+                        task_progress(f"研报 #{rid} 提取观点、评级与盈利预测")
                         ctx = ReportSkill()(SkillContext(user_input="", params={
                             "mode": "extract", "report_id": rid, "limit": 1}))
                         if ctx.error:
+                            task_progress(warning=f"研报 #{rid} 深度提取失败: {ctx.error}")
                             logger.warning(f"研报 #{rid} 深度提取失败: {ctx.error}")
                         else:
                             extracted += 1
                     except Exception as e:
+                        task_progress(warning=f"研报 #{rid} 单篇分析失败: {e}")
                         logger.warning(f"研报 #{rid} 单篇分析失败: {e}")
         else:
             # No new files: opportunistically clear pending metadata (oldest first)
@@ -89,6 +95,7 @@ def _process_one_report(group_id: str) -> str:
         return f"error: analysis ({e})"
 
     try:
+        task_progress("合并重复报告")
         from jobs.merge_report_duplicates import merge
         merge()
     except Exception as e:
@@ -98,6 +105,7 @@ def _process_one_report(group_id: str) -> str:
     return "ok" + (f"+extracted {extracted}" if extracted else "")
 
 
+@observed("reports_fetch", "研报抓取与逐篇入库")
 def run_once(group_id: str, max_fetch: int = 10, max_pages: int = 10,
              download_only_files: bool = False, crawl_topics: bool = True) -> dict:
     """Run one fetch round; returns statistics."""
@@ -111,6 +119,7 @@ def run_once(group_id: str, max_fetch: int = 10, max_pages: int = 10,
     # 0. Also crawl the latest topics (research-report core-view text lives in the
     #    topics; crawl daily to stay in sync)
     if crawl_topics:
+        task_progress("抓取最新话题")
         from tools.zsxq.crawler import ZSXQCrawler
         try:
             crawler = ZSXQCrawler(cookie, str(group_id))
@@ -124,11 +133,13 @@ def run_once(group_id: str, max_fetch: int = 10, max_pages: int = 10,
             crawler.close()
         except Exception as e:
             result["topics"] = {"error": str(e)}
+            task_progress(warning=f"话题抓取失败: {e}")
 
     dl = FileDownloader(cookie, str(group_id))
 
     # 1. Collect the file list
     if not download_only_files:
+        task_progress("收集待下载文件清单")
         collect = dl.collect_files(max_pages=max_pages)
         result["collect"] = collect
 
@@ -145,6 +156,7 @@ def run_once(group_id: str, max_fetch: int = 10, max_pages: int = 10,
         # no hardcoded overrides here anymore
         n_done = 0
         while n_done < max_fetch:
+            task_progress("下载研报（含反检测等待间隔）", completed=n_done, total=min(max_fetch, pending_before))
             # First retry previously failed tasks (at most 3 per round, fail_count<=5),
             # then download new files
             retried = 0
@@ -162,11 +174,16 @@ def run_once(group_id: str, max_fetch: int = 10, max_pages: int = 10,
 
             # Download one by one (download_pending internally picks by pending status)
             stats = dl.download_pending(max_files=1)
+            if stats.get("failed", 0):
+                task_progress(warning="本轮存在下载失败，请查看采集日志")
             if stats.get("total", 0) == 0:
                 break
             n_done += 1
             # Immediately process the just-downloaded file
+            task_progress("逐篇入库、分析与去重", completed=n_done, total=min(max_fetch, pending_before))
             status = _process_one_report(group_id)
+            if status.startswith("error"):
+                task_progress(warning=status)
             processed += 1
             logger.info(f"🔬 已入库分析 {processed} 篇 ({status})")
 
@@ -179,12 +196,14 @@ def run_once(group_id: str, max_fetch: int = 10, max_pages: int = 10,
     # 3. Wrap-up: fallback sync + deep extraction (pick up reports missed this round
     #    or produced by dedup)
     try:
+        task_progress("收尾：补齐研报入库")
         from jobs.sync_zxsq_to_pg import ZSXQ2PGSync
         sync = ZSXQ2PGSync(str(group_id))
         sync.run()
         result["pg_sync"] = "ok"
     except Exception as e:
         result["pg_sync"] = f"error: {e}"
+        task_progress(warning=f"收尾入库失败: {e}")
 
     return result
 

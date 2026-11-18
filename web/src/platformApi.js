@@ -89,4 +89,5 @@ export const platformApi = {
   // Real-time monitor (adminOnly): one SSE frame every 2s {state:{metrics,pg}}; returns {promise, abort}
   monitorStream: (onEvent) => sseStream('/api/monitor/stream', {}, onEvent),
   monitorState: () => request('GET', '/api/monitor/state'),
+  monitorLogs: (params, signal) => request('GET', `/api/monitor/logs?${new URLSearchParams(params)}`, undefined, { signal }),
 }

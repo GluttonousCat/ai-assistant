@@ -118,3 +118,7 @@ def get_logger(name: str = "app") -> logging.Logger:
             pkg or "cli"
         )  # %(name)s also prints the real package name, never __main__
     return _LogManager.setup(name)
+
+
+def log_directory() -> Path:
+    return _project_root() / str(_settings()["dir"])

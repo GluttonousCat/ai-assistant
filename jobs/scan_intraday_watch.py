@@ -14,6 +14,7 @@ import pandas as pd
 from core.config import get_config
 from core.local_state import read_json, write_json, file_lock
 from core.logger import get_logger
+from core.observability import observed, task_progress
 from jobs.cache_intraday_prefix import SLOTS
 from skills.trend.intraday import observe
 from skills.trend.chart_history import stock_chart
@@ -69,10 +70,12 @@ def make_chart(row, snapshot, cutoff, daily_cutoff, folder):
     temporary.replace(target)
 
 
+@observed("intraday_scan", "盘中趋势扫描")
 def run(day, clock="11:30", wait=False, render_static=False):
     if clock not in SLOTS:
         raise ValueError("不支持的60F截止时点")
     cfg = get_config()
+    task_progress(f"准备扫描 {day} {clock} 的60F趋势")
     folder = Path(cfg.root_dir) / "output" / "market" / "intraday_watch" / f"{day}_{clock.replace(':', '')}"
     if wait:
         deadline = time.monotonic() + 1800
@@ -100,6 +103,7 @@ def run(day, clock="11:30", wait=False, render_static=False):
             for future in as_completed(futures):
                 results.extend(future.result())
                 write_json(folder / "analysis_progress.json", {"completed": len(results), "total": len(members)})
+                task_progress(completed=len(results), total=len(members))
                 if len(results) % 250 == 0 or len(results) == len(members):
                     logger.info("盘中扫描进度 %s/%s", len(results), len(members))
         candidates = sorted([r for r in results if r["status"] == "candidate"], key=lambda r: (not r["new_today"], -r["score"], r["ts_code"]))

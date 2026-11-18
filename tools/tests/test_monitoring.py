@@ -37,3 +37,26 @@ def test_unavailable_database_is_a_cached_monitor_result(monkeypatch):
     monkeypatch.setattr(m, "database_state", fail)
     assert m.database_snapshot() == {"ok": False, "error": "unavailable"}
     assert m.database_snapshot()["ok"] is False and len(calls) == 1
+
+
+def test_slow_probe_does_not_block_local_status_or_spawn_per_viewer(monkeypatch):
+    entered, release = threading.Event(), threading.Event()
+    calls = []
+
+    def slow():
+        calls.append(True)
+        entered.set()
+        release.wait(5)
+
+    monkeypatch.setattr(m, "database_snapshot", slow)
+    monkeypatch.setattr(m, "_cached", None)
+    monkeypatch.setattr(m, "_probe_thread", None)
+    try:
+        assert m.cached_database_snapshot()["pending"]
+        assert entered.wait(1)
+        for _ in range(20):
+            assert m.cached_database_snapshot()["pending"]
+        assert len(calls) == 1
+    finally:
+        release.set()
+        m._probe_thread.join(1)

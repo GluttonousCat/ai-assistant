@@ -3,6 +3,7 @@
 import threading
 from typing import Any, Dict
 from core.logger import get_logger
+from core.observability import observed, task_progress
 from tools.finance import report_text
 
 logger = get_logger(__name__)
@@ -26,13 +27,16 @@ def queue_ocr(row: Dict[str, Any]) -> bool:
     rid, fname = (row["report_id"], row.get("file_name") or path)
     report_text.mark_ocr_pending(rid)
 
+    @observed("report_ocr", "研报视觉OCR与接续提取")
     def _job():
         from tools.pdf import ocr_pdf
         from harness.llm import get_vision_llm
         from skills.report.prompts import VISION_OCR_PROMPT
 
         try:
+            task_progress(f"研报 #{rid} 等待OCR工作槽")
             with _OCR_SEMAPHORE:
+                task_progress(f"研报 #{rid} 正在进行视觉OCR")
                 text = ocr_pdf(
                     path,
                     prompt=VISION_OCR_PROMPT,
@@ -49,11 +53,13 @@ def queue_ocr(row: Dict[str, Any]) -> bool:
                     ok = True
             else:
                 report_text.mark_ocr_failed(rid)
+                task_progress(warning="OCR未返回可用正文")
             if not ok:
                 return
             from skills.base import SkillContext
             from skills.report.skill import ReportSkill
 
+            task_progress(f"研报 #{rid} OCR完成，正在接续深度提取")
             ctx = ReportSkill()(
                 SkillContext(
                     user_input="",
@@ -61,10 +67,12 @@ def queue_ocr(row: Dict[str, Any]) -> bool:
                 )
             )
             if ctx.error:
+                task_progress(warning=ctx.error)
                 logger.warning(f"OCR 后自动提取失败 #{rid}: {ctx.error}")
             else:
                 logger.info(f"OCR 后自动提取完成 #{rid}")
         except Exception as e:
+            task_progress(warning=f"OCR或接续提取失败: {e}")
             report_text.mark_ocr_failed(rid)
             logger.warning(f"视觉提取失败 #{rid}: {e}")
 
