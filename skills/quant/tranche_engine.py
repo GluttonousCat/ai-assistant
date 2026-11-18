@@ -35,8 +35,34 @@ def simulate(
     support_protection=None,
     intraday_protection=None,
     wyckoff_policy=None,
+    wyckoff_families=None,
+    wyckoff_slot_limit=None,
 ):
     base = cfg.base
+    if wyckoff_families is not None and (
+        wyckoff_policy is None
+        or not wyckoff_families
+        or not set(wyckoff_families) <= {"base_rebound", "trend_pullback"}
+    ):
+        raise ValueError("量价持仓类别必须明确且启用量价管理")
+    if wyckoff_slot_limit is not None and (
+        wyckoff_families is None
+        or type(wyckoff_slot_limit) is not int
+        or not 1 <= wyckoff_slot_limit <= base.max_positions
+    ):
+        raise ValueError("量价持仓席位上限无效")
+
+    def uses_wyckoff(family):
+        return wyckoff_policy is not None and (
+            wyckoff_families is None or family in wyckoff_families
+        )
+
+    def entry_order(order):
+        code, signal = order
+        # Model forecasts and Wyckoff quality grades have different units.
+        secondary = wyckoff_families is not None and uses_wyckoff(signal["family"])
+        return secondary, -signal["score"], code
+
     if strategy_id == "wyckoff_60f_v31" and wyckoff_policy is None:
         raise ValueError("量价策略必须显式启用量价管理")
     if wyckoff_policy is not None and (
@@ -81,6 +107,11 @@ def simulate(
             "higher_low_known",
         }.issubset(s.data):
             raise ValueError("缺少已完成60F量价防守与进攻证据")
+        if wyckoff_families is not None and not {
+            "wyckoff_attack",
+            "wyckoff_atr",
+        }.issubset(s.data):
+            raise ValueError("混合持仓缺少独立量价增仓或波幅数据")
         if support_protection is not None and not {
             "confirmed_higher_low",
             "higher_low_origin",
@@ -250,7 +281,7 @@ def simulate(
                 reason=pending["reason"],
             )
         )
-        if support_protection is not None or wyckoff_policy is not None:
+        if support_protection is not None or uses_wyckoff(p["family"]):
             p["fills"][-1].update(
                 stop_adjusted=p["stop"],
                 inventory_risk=inv.risk_at(p["stop"]),
@@ -292,7 +323,7 @@ def simulate(
         risk = (fill - p["stop"]) / fill * 100
         if not 0 < risk <= base.max_entry_risk_pct:
             audit["gap_or_risk_rejected"] += 1
-            if support_protection is not None or wyckoff_policy is not None:
+            if support_protection is not None or uses_wyckoff(p["family"]):
                 audit["add_risk_rejected" if stage else "probe_risk_rejected"] += 1
             return False
         if stage and fill <= p["highest_buy_price"] + 1e-10:
@@ -354,7 +385,7 @@ def simulate(
                 reason="probe" if not stage else "confirmed_add",
             )
         )
-        if support_protection is not None or wyckoff_policy is not None:
+        if support_protection is not None or uses_wyckoff(p["family"]):
             p["fills"][-1].update(
                 stop_adjusted=p["stop"],
                 inventory_risk=inv.risk_at(p["stop"]),
@@ -395,14 +426,20 @@ def simulate(
                 if i >= 0:
                     buy(code, p, i, day, when, marked, p["pending_add"])
                 p["pending_add"] = None
-        for code, sig in sorted(
-            orders.get(step, []), key=lambda x: (-x[1]["score"], x[0])
-        ):
+        for code, sig in sorted(orders.get(step, []), key=entry_order):
             key = (code, sig["family"], sig["leg"])
             if code in positions or key in consumed:
                 continue
             if len(positions) >= base.max_positions:
                 audit["capacity_rejected"] += 1
+                continue
+            if (
+                wyckoff_slot_limit is not None
+                and uses_wyckoff(sig["family"])
+                and sum(uses_wyckoff(p["family"]) for p in positions.values())
+                >= wyckoff_slot_limit
+            ):
+                audit["wyckoff_capacity_rejected"] += 1
                 continue
             s = stocks[code]
             i = int(s.row_at[step])
@@ -507,7 +544,11 @@ def simulate(
             if i < 0:
                 continue
             close = d["adjusted_close"][i]
-            eps = 1e-8 * d["atr"][i] if np.isfinite(d["atr"][i]) else 1e-10 * close
+            volume_managed = uses_wyckoff(p["family"])
+            mixed_volume = volume_managed and wyckoff_families is not None
+            atr = d["wyckoff_atr" if mixed_volume else "atr"][i]
+            add_ready = d["wyckoff_attack" if mixed_volume else "scale_in_ready"][i]
+            eps = 1e-8 * atr if np.isfinite(atr) else 1e-10 * close
             p["last_mark"] = close
             p["last_seen"] = end.isoformat()
             p["peak"] = max(p["peak"], d["adjusted_high"][i])
@@ -515,6 +556,8 @@ def simulate(
             inv = p["inventory"]
             held = step - p["entry_step"] + 1
             line = d["trail_a" if p["family"] == "trend_pullback" else "trail_b"][i]
+            if mixed_volume:
+                line = d["confirmed_higher_low"][i]
             if np.isfinite(line) and close >= line:
                 p["line_reclaimed"] = True
             hard_reason = None
@@ -525,10 +568,10 @@ def simulate(
                 )
             elif held >= base.max_holding_bars:
                 hard_reason = "holding_timeout"
-            elif wyckoff_policy is not None and d["wyckoff_structure_failed"][i]:
+            elif volume_managed and d["wyckoff_structure_failed"][i]:
                 hard_reason = "wyckoff_support_failed"
             elif (
-                wyckoff_policy is None
+                not volume_managed
                 and base.trend_exit
                 and p["line_reclaimed"]
                 and held >= base.min_trend_holding_bars
@@ -536,7 +579,7 @@ def simulate(
             ):
                 hard_reason = "structure_failed"
             elif (
-                wyckoff_policy is None
+                not volume_managed
                 and p["family"] == "base_rebound"
                 and held >= base.rebound_patience
                 and p["peak"] - p["first_price"]
@@ -578,27 +621,23 @@ def simulate(
                 continue
             if p["pending_sell"] is not None:
                 continue
-            if support_protection is not None or wyckoff_policy is not None:
+            if support_protection is not None or volume_managed:
                 updated = protected_stop(
                     p,
                     close,
-                    d["atr"][i],
+                    atr,
                     d["confirmed_higher_low"][i],
                     d["higher_low_origin"][i],
                     d["higher_low_known"][i],
                     end,
-                    bool(
-                        d["wyckoff_demand_ready"][i]
-                        if wyckoff_policy is not None
-                        else d["scale_in_ready"][i]
-                    ),
-                    wyckoff_policy or support_protection,
+                    bool(d["wyckoff_demand_ready"][i] if volume_managed else add_ready),
+                    wyckoff_policy if volume_managed else support_protection,
                 )
                 if updated > p["stop"]:
                     p["stop"] = updated
                     audit["support_stop_raises"] += 1
             if (
-                wyckoff_policy is not None
+                volume_managed
                 and d["wyckoff_supply_defense"][i]
                 and not p.get("supply_defense_used")
                 and p["exit_stage"] < len(cfg.exit_weights) - 1
@@ -642,8 +681,8 @@ def simulate(
                 not p["entry_locked"]
                 and not grace_now
                 and p["buy_stage"] < len(cfg.entry_weights)
-                and d["scale_in_ready"][i]
-                and (wyckoff_policy is None or not d["wyckoff_supply_warning"][i])
+                and add_ready
+                and (not volume_managed or not d["wyckoff_supply_warning"][i])
                 and (market_policy is None or d["market_add_allowed"][i])
                 and close > p["highest_buy_price"] + eps
                 and close - p["first_price"] + eps
@@ -651,7 +690,6 @@ def simulate(
             ):
                 p["pending_add"] = p["buy_stage"]
             if (close / anchor - 1) * 100 >= cfg.protect_at_pct:
-                atr = d["atr"][i]
                 if np.isfinite(atr) and atr > 0:
                     candidate = cost_floor(p)
                     if np.isfinite(line):
@@ -717,8 +755,14 @@ def simulate(
         config["intraday_protection"] = asdict(intraday_protection)
     if wyckoff_policy is not None:
         config["wyckoff_policy"] = asdict(wyckoff_policy)
+    if wyckoff_families is not None:
+        config["wyckoff_families"] = sorted(wyckoff_families)
+    if wyckoff_slot_limit is not None:
+        config["wyckoff_slot_limit"] = wyckoff_slot_limit
     return dict(
-        execution_version="tranche-wyckoff-after-close-v5"
+        execution_version="tranche-family-management-v6"
+        if wyckoff_families is not None
+        else "tranche-wyckoff-after-close-v5"
         if wyckoff_policy is not None
         else "tranche-support-after-close-v4"
         if support_protection is not None

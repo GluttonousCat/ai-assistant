@@ -81,6 +81,49 @@ def test_ma_failure_cannot_force_volume_strategy_to_exit():
     assert r["open_positions"]
 
 
+def test_mixed_campaigns_keep_separate_exit_rules_and_priority_units():
+    trend, clock = volume_stock()
+    trend.data["wyckoff_atr"] = trend.data["atr"].copy()
+    rebound = replace(
+        trend,
+        code="000001.SZ",
+        data={key: value.copy() for key, value in trend.data.items()},
+        signals=[{**trend.signals[0], "family": "base_rebound", "score": 100}],
+    )
+    rebound.data["wyckoff_structure_failed"][3] = True
+    plan = config(entry=(1,), exits=(1,))
+    plan = replace(
+        plan, base=replace(plan.base, trend_exit=True, min_trend_holding_bars=1)
+    )
+    kwargs = dict(
+        wyckoff_policy=SupportProtection(), wyckoff_families=("base_rebound",)
+    )
+    constrained = simulate([rebound, trend], clock, "wyckoff_60f_v31", plan, **kwargs)
+    assert [t["ts_code"] for t in constrained["trades"]] == [trend.code]
+    both = simulate(
+        [rebound, trend],
+        clock,
+        "wyckoff_60f_v31",
+        replace(plan, base=replace(plan.base, max_positions=2)),
+        **kwargs,
+    )
+    assert {t["family"]: t["reason"] for t in both["trades"]} == {
+        "trend_pullback": "structure_failed",
+        "base_rebound": "wyckoff_support_failed",
+    }
+    second_rebound = replace(rebound, code="000002.SZ")
+    capped = simulate(
+        [rebound, second_rebound, trend],
+        clock,
+        "wyckoff_60f_v31",
+        replace(plan, base=replace(plan.base, max_positions=3)),
+        wyckoff_slot_limit=1,
+        **kwargs,
+    )
+    assert {t["ts_code"] for t in capped["trades"]} == {trend.code, rebound.code}
+    assert capped["execution_audit"]["wyckoff_capacity_rejected"] == 1
+
+
 def test_supply_warning_pauses_adds_without_requiring_a_defensive_sale():
     stock, clock = volume_stock()
     stock.data["wyckoff_supply_warning"][1] = True
