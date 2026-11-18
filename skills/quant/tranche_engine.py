@@ -37,6 +37,7 @@ def simulate(
     wyckoff_policy=None,
     wyckoff_families=None,
     wyckoff_slot_limit=None,
+    first_session_stop_review=None,
 ):
     base = cfg.base
     if wyckoff_families is not None and (
@@ -51,6 +52,12 @@ def simulate(
         or not 1 <= wyckoff_slot_limit <= base.max_positions
     ):
         raise ValueError("量价持仓席位上限无效")
+    if (
+        first_session_stop_review not in (None, "exit", "reduce")
+        or (first_session_stop_review is not None and stop_bars is not None)
+        or (first_session_stop_review == "reduce" and len(cfg.exit_weights) < 2)
+    ):
+        raise ValueError("首日风险复核仅适用于盘后策略")
 
     def uses_wyckoff(family):
         return wyckoff_policy is not None and (
@@ -97,6 +104,12 @@ def simulate(
     audit = Counter()
     family = STRATEGIES[strategy_id]["family"]
     for s in series:
+        if (
+            first_session_stop_review is not None
+            and any(sig["family"] == "trend_pullback" for sig in s.signals)
+            and "entry_session_60f_low" not in s.data
+        ):
+            raise ValueError("首日风险复核缺少原生60F数据")
         if wyckoff_policy is not None and not {
             "wyckoff_demand_ready",
             "wyckoff_supply_warning",
@@ -167,6 +180,19 @@ def simulate(
     def cost_floor(p):
         inv = p["inventory"]
         return (inv.cost + base.fee(inv.cost, True)) / inv.units / (1 - base.slippage)
+
+    def queue_tranche_sale(p, reason):
+        inv = p["inventory"]
+        if p["exit_base"] is None:
+            p["exit_base"] = inv.units
+            p["profit_anchor"] = inv.cost / inv.units
+        p["entry_locked"] = True
+        p["pending_add"] = None
+        p["pending_sell"] = dict(
+            all=False,
+            target_sold=p["exit_base"] * sum(cfg.exit_weights[: p["exit_stage"] + 1]),
+            reason=reason,
+        )
 
     def record_close(code, p, when, raw_exit):
         inv = p["inventory"]
@@ -562,16 +588,36 @@ def simulate(
                 p["line_reclaimed"] = True
             hard_reason = None
             grace_now = False
+            first_session_reduce = False
             if close <= p["stop"]:
                 hard_reason = (
                     "protected_stop" if p["stop"] > p["initial_stop"] else "stop_loss"
                 )
-            elif held >= base.max_holding_bars:
+            elif (
+                first_session_stop_review is not None
+                and held == 1
+                and p["family"] == "trend_pullback"
+            ):
+                session_low = d["entry_session_60f_low"][i]
+                if not np.isfinite(session_low):
+                    audit["first_session_review_unavailable"] += 1
+                elif session_low <= p["initial_stop"] + eps:
+                    audit["first_session_stop_breach"] += 1
+                    if first_session_stop_review == "exit":
+                        hard_reason = "first_session_stop_breach"
+                    else:
+                        first_session_reduce = True
+            if hard_reason is None and held >= base.max_holding_bars:
                 hard_reason = "holding_timeout"
-            elif volume_managed and d["wyckoff_structure_failed"][i]:
+            elif (
+                hard_reason is None
+                and volume_managed
+                and d["wyckoff_structure_failed"][i]
+            ):
                 hard_reason = "wyckoff_support_failed"
             elif (
-                not volume_managed
+                hard_reason is None
+                and not volume_managed
                 and base.trend_exit
                 and p["line_reclaimed"]
                 and held >= base.min_trend_holding_bars
@@ -579,7 +625,8 @@ def simulate(
             ):
                 hard_reason = "structure_failed"
             elif (
-                not volume_managed
+                hard_reason is None
+                and not volume_managed
                 and p["family"] == "base_rebound"
                 and held >= base.rebound_patience
                 and p["peak"] - p["first_price"]
@@ -621,6 +668,9 @@ def simulate(
                 continue
             if p["pending_sell"] is not None:
                 continue
+            if first_session_reduce:
+                queue_tranche_sale(p, "first_session_stop_reduce")
+                continue
             if support_protection is not None or volume_managed:
                 updated = protected_stop(
                     p,
@@ -642,18 +692,8 @@ def simulate(
                 and not p.get("supply_defense_used")
                 and p["exit_stage"] < len(cfg.exit_weights) - 1
             ):
-                if p["exit_base"] is None:
-                    p["exit_base"] = inv.units
-                    p["profit_anchor"] = inv.cost / inv.units
                 p["supply_defense_used"] = True
-                p["entry_locked"] = True
-                p["pending_add"] = None
-                p["pending_sell"] = dict(
-                    all=False,
-                    target_sold=p["exit_base"]
-                    * sum(cfg.exit_weights[: p["exit_stage"] + 1]),
-                    reason="wyckoff_supply_defense",
-                )
+                queue_tranche_sale(p, "wyckoff_supply_defense")
                 audit["wyckoff_defensive_orders"] += 1
                 continue
             anchor = (
@@ -666,17 +706,7 @@ def simulate(
                 and (close / anchor - 1) * 100 + 1e-8
                 >= cfg.take_profit_pct[p["exit_stage"]]
             ):
-                if p["exit_base"] is None:
-                    p["exit_base"] = inv.units
-                    p["profit_anchor"] = anchor
-                p["entry_locked"] = True
-                p["pending_add"] = None
-                p["pending_sell"] = dict(
-                    all=False,
-                    target_sold=p["exit_base"]
-                    * sum(cfg.exit_weights[: p["exit_stage"] + 1]),
-                    reason=f"tranche_profit_{p['exit_stage'] + 1}",
-                )
+                queue_tranche_sale(p, f"tranche_profit_{p['exit_stage'] + 1}")
             elif (
                 not p["entry_locked"]
                 and not grace_now
@@ -759,8 +789,12 @@ def simulate(
         config["wyckoff_families"] = sorted(wyckoff_families)
     if wyckoff_slot_limit is not None:
         config["wyckoff_slot_limit"] = wyckoff_slot_limit
+    if first_session_stop_review is not None:
+        config["first_session_stop_review"] = first_session_stop_review
     return dict(
-        execution_version="tranche-family-management-v6"
+        execution_version="tranche-first-session-review-v7"
+        if first_session_stop_review is not None
+        else "tranche-family-management-v6"
         if wyckoff_families is not None
         else "tranche-wyckoff-after-close-v5"
         if wyckoff_policy is not None

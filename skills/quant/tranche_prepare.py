@@ -7,6 +7,31 @@ from skills.quant.prepare import MarketSeries, swing_frame
 from skills.trend.swing import indicators
 
 
+def attach_entry_session_low(minute, stock):
+    """Provide completed native session lows on the stock's execution scale."""
+    frame, issue = swing_frame(minute, stock)
+    if issue:
+        raise ValueError(issue)
+    slots = frame.bar_end - frame.bar_end.dt.normalize()
+    allowed = pd.to_timedelta(["10:30:00", "11:30:00", "14:00:00", "15:00:00"])
+    frame["valid_slot"] = slots.isin(allowed)
+    frame["traded_low"] = frame.low.where(frame.volume.gt(0))
+    days = frame.groupby(frame.bar_end.dt.normalize()).agg(
+        low=("traded_low", "min"),
+        slots=("bar_end", "size"),
+        valid=("valid_slot", "all"),
+    )
+    low = days.low.where(days.slots.eq(4) & days.valid).reindex(stock.times.normalize())
+    return MarketSeries(
+        stock.code,
+        stock.name,
+        stock.observed_at,
+        stock.times,
+        {**stock.data, "entry_session_60f_low": low.to_numpy(dtype=float, copy=True)},
+        stock.signals,
+    )
+
+
 def confirm_signal_close(minute, stock):
     """Annotate whether each native 60F trigger held its close through 15:00.
 

@@ -8,6 +8,7 @@ from skills.quant.registry import catalog
 from skills.quant.support_protection import SupportProtection
 from skills.quant.tests.test_tranches import fixture, config
 from skills.quant.tranche_engine import simulate
+from skills.quant.tranche_prepare import attach_entry_session_low
 from skills.quant.wyckoff import prepare_wyckoff
 from skills.quant.tests.test_stop_orders import native
 
@@ -122,6 +123,44 @@ def test_mixed_campaigns_keep_separate_exit_rules_and_priority_units():
     )
     assert {t["ts_code"] for t in capped["trades"]} == {trend.code, rebound.code}
     assert capped["execution_audit"]["wyckoff_capacity_rejected"] == 1
+
+
+def test_first_session_breach_exits_recovered_pullback_next_open_only():
+    stock, clock = volume_stock()
+    minute = native(stock)
+    day = stock.times[1].normalize()
+    mask = minute.bar_end.dt.normalize().eq(day)
+    minute.loc[minute.index[mask][0], "low"] = 9.7
+    enriched = attach_entry_session_low(minute, stock)
+    assert enriched.data["entry_session_60f_low"][1] == 9.7
+    assert np.isnan(
+        attach_entry_session_low(minute.drop(minute.index[mask][0]), stock).data[
+            "entry_session_60f_low"
+        ][1]
+    )
+    plan = config(entry=(1,), exits=(1,))
+    result = simulate(
+        [enriched], clock, "swing_60f_v8", plan, first_session_stop_review="exit"
+    )
+    trade = result["trades"][0]
+    assert trade["reason"] == "first_session_stop_breach"
+    assert pd.Timestamp(trade["exit_time"]).date() == clock[2].date()
+    assert trade["fills"][-1]["price"] == stock.data["open"][2]
+    plain = simulate([enriched], clock, "swing_60f_v8", plan)
+    assert not plain["trades"]
+    reversal = replace(stock, signals=[{**stock.signals[0], "family": "base_rebound"}])
+    result = simulate(
+        [reversal], clock, "swing_60f_v8", plan, first_session_stop_review="exit"
+    )
+    assert not result["trades"]
+    partial = simulate(
+        [enriched], clock, "swing_60f_v8", config(), first_session_stop_review="reduce"
+    )
+    position = partial["open_positions"][0]
+    buy, sell = position["fills"]
+    assert buy["side"] == "buy" and sell["reason"] == "first_session_stop_reduce"
+    assert sell["quantity"] == buy["quantity"] * 0.4
+    assert pd.Timestamp(sell["time"]).date() == clock[2].date()
 
 
 def test_supply_warning_pauses_adds_without_requiring_a_defensive_sale():
