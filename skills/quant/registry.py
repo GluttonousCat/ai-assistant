@@ -3,6 +3,13 @@
 from skills.trend.strategy import VERSION, TrendConfig
 
 STRATEGIES = {
+    "wyckoff_60f_v31": {
+        "name": "60F量价·移动防守与进攻",
+        "family": None,
+        "generation": "wyckoff",
+        "research_only": True,
+        "description": "Spring低量测试或SOS后LPS；量价确认加仓、测试支撑上移与供应确认分批防守。实验策略，不宣称完整阶段识别。",
+    },
     "custom_rules_v1": {
         "name": "自定义组合规则",
         "family": None,
@@ -98,6 +105,8 @@ def catalog():
 
     result = []
     for key, value in STRATEGIES.items():
+        if value.get("research_only"):
+            continue
         gen = value.get("generation")
         if gen == "rules":
             from skills.quant.rule_models import RuleStrategy

@@ -38,6 +38,8 @@ def simulate(
         or timeframe not in ("60F", "1D")
     ):
         raise ValueError("未知策略/成分模式/周期")
+    if STRATEGIES[strategy_id].get("generation") == "wyckoff":
+        raise ValueError("量价研究使用分批执行器与显式量价管理")
     timeline = pd.DatetimeIndex(timeline)
     if cfg.exit_policy == "structure" and (
         not isinstance(cfg, StructureExitConfig) or timeframe != "1D"

@@ -34,8 +34,17 @@ def simulate(
     stop_bars=None,
     support_protection=None,
     intraday_protection=None,
+    wyckoff_policy=None,
 ):
     base = cfg.base
+    if strategy_id == "wyckoff_60f_v31" and wyckoff_policy is None:
+        raise ValueError("量价策略必须显式启用量价管理")
+    if wyckoff_policy is not None and (
+        not isinstance(wyckoff_policy, SupportProtection)
+        or support_protection is not None
+        or stop_bars is not None
+    ):
+        raise ValueError("量价防守需要独立的盘后支撑策略")
     if intraday_protection is not None and (
         not isinstance(intraday_protection, IntradayProtection) or stop_bars is None
     ):
@@ -62,6 +71,16 @@ def simulate(
     audit = Counter()
     family = STRATEGIES[strategy_id]["family"]
     for s in series:
+        if wyckoff_policy is not None and not {
+            "wyckoff_demand_ready",
+            "wyckoff_supply_warning",
+            "wyckoff_supply_defense",
+            "wyckoff_structure_failed",
+            "confirmed_higher_low",
+            "higher_low_origin",
+            "higher_low_known",
+        }.issubset(s.data):
+            raise ValueError("缺少已完成60F量价防守与进攻证据")
         if support_protection is not None and not {
             "confirmed_higher_low",
             "higher_low_origin",
@@ -231,7 +250,7 @@ def simulate(
                 reason=pending["reason"],
             )
         )
-        if support_protection is not None:
+        if support_protection is not None or wyckoff_policy is not None:
             p["fills"][-1].update(
                 stop_adjusted=p["stop"],
                 inventory_risk=inv.risk_at(p["stop"]),
@@ -273,7 +292,7 @@ def simulate(
         risk = (fill - p["stop"]) / fill * 100
         if not 0 < risk <= base.max_entry_risk_pct:
             audit["gap_or_risk_rejected"] += 1
-            if support_protection is not None:
+            if support_protection is not None or wyckoff_policy is not None:
                 audit["add_risk_rejected" if stage else "probe_risk_rejected"] += 1
             return False
         if stage and fill <= p["highest_buy_price"] + 1e-10:
@@ -335,7 +354,7 @@ def simulate(
                 reason="probe" if not stage else "confirmed_add",
             )
         )
-        if support_protection is not None:
+        if support_protection is not None or wyckoff_policy is not None:
             p["fills"][-1].update(
                 stop_adjusted=p["stop"],
                 inventory_risk=inv.risk_at(p["stop"]),
@@ -506,15 +525,19 @@ def simulate(
                 )
             elif held >= base.max_holding_bars:
                 hard_reason = "holding_timeout"
+            elif wyckoff_policy is not None and d["wyckoff_structure_failed"][i]:
+                hard_reason = "wyckoff_support_failed"
             elif (
-                base.trend_exit
+                wyckoff_policy is None
+                and base.trend_exit
                 and p["line_reclaimed"]
                 and held >= base.min_trend_holding_bars
                 and d["tranche_trend_failed"][i]
             ):
                 hard_reason = "structure_failed"
             elif (
-                p["family"] == "base_rebound"
+                wyckoff_policy is None
+                and p["family"] == "base_rebound"
                 and held >= base.rebound_patience
                 and p["peak"] - p["first_price"]
                 < base.rebound_min_progress_r * p["initial_risk"]
@@ -555,7 +578,7 @@ def simulate(
                 continue
             if p["pending_sell"] is not None:
                 continue
-            if support_protection is not None:
+            if support_protection is not None or wyckoff_policy is not None:
                 updated = protected_stop(
                     p,
                     close,
@@ -564,12 +587,36 @@ def simulate(
                     d["higher_low_origin"][i],
                     d["higher_low_known"][i],
                     end,
-                    bool(d["scale_in_ready"][i]),
-                    support_protection,
+                    bool(
+                        d["wyckoff_demand_ready"][i]
+                        if wyckoff_policy is not None
+                        else d["scale_in_ready"][i]
+                    ),
+                    wyckoff_policy or support_protection,
                 )
                 if updated > p["stop"]:
                     p["stop"] = updated
                     audit["support_stop_raises"] += 1
+            if (
+                wyckoff_policy is not None
+                and d["wyckoff_supply_defense"][i]
+                and not p.get("supply_defense_used")
+                and p["exit_stage"] < len(cfg.exit_weights) - 1
+            ):
+                if p["exit_base"] is None:
+                    p["exit_base"] = inv.units
+                    p["profit_anchor"] = inv.cost / inv.units
+                p["supply_defense_used"] = True
+                p["entry_locked"] = True
+                p["pending_add"] = None
+                p["pending_sell"] = dict(
+                    all=False,
+                    target_sold=p["exit_base"]
+                    * sum(cfg.exit_weights[: p["exit_stage"] + 1]),
+                    reason="wyckoff_supply_defense",
+                )
+                audit["wyckoff_defensive_orders"] += 1
+                continue
             anchor = (
                 p["profit_anchor"]
                 if p["exit_base"] is not None
@@ -596,6 +643,7 @@ def simulate(
                 and not grace_now
                 and p["buy_stage"] < len(cfg.entry_weights)
                 and d["scale_in_ready"][i]
+                and (wyckoff_policy is None or not d["wyckoff_supply_warning"][i])
                 and (market_policy is None or d["market_add_allowed"][i])
                 and close > p["highest_buy_price"] + eps
                 and close - p["first_price"] + eps
@@ -667,8 +715,12 @@ def simulate(
         config["support_protection"] = asdict(support_protection)
     if intraday_protection is not None:
         config["intraday_protection"] = asdict(intraday_protection)
+    if wyckoff_policy is not None:
+        config["wyckoff_policy"] = asdict(wyckoff_policy)
     return dict(
-        execution_version="tranche-support-after-close-v4"
+        execution_version="tranche-wyckoff-after-close-v5"
+        if wyckoff_policy is not None
+        else "tranche-support-after-close-v4"
         if support_protection is not None
         else "tranche-native60f-stop-v3"
         if stop_bars is not None
