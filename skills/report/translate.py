@@ -113,10 +113,10 @@ def translate_report(report_id: int) -> bool:
     # accept directly when the Chinese ratio > 0.1; for table-heavy originals
     # (mostly quote/data tables, whose translation naturally has a low Chinese
     # ratio) relax to "Chinese share improved 30%+ over the original"
-    cn_ratio = len(_CJK.findall(cn)) / len(cn)
+    cn_ratio = len(_CJK.findall(cn)) / max(1, len(cn))
     src_ratio = len(_CJK.findall(text)) / len(text)
-    if len(cn.strip()) > 100 and (cn_ratio > 0.1 or cn_ratio >= src_ratio * 1.3):
-        n = report_text.save_translation(report_id, cn)
+    if len(cn.strip()) > 100 and (cn_ratio > 0.1 or cn_ratio > src_ratio * 1.3):
+        n = report_text.save_translation(report_id, cn, row["content_text"])
         return n > 0
     logger.warning(f"#{report_id} 译文质量异常 (仍英文或过短), 未入库")
     return False

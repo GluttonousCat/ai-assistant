@@ -215,6 +215,8 @@ def prepare_extraction(row, data):
     if title and title != row.get("title"):
         fields["title"] = title[:200]
     summary = {
+        "material_type": canonical.get("material_type"),
+        "material_source": canonical.get("material_source"),
         "report_id": row["report_id"],
         "title": title or row.get("title"),
         "market": market,
@@ -227,8 +229,10 @@ def prepare_extraction(row, data):
         "key_points": text_items(data.get("key_points"), 6, 150),
         "risks": text_items(data.get("risks"), 10, 200),
         "evidence": data.get("evidence") or [],
+        "research_insights": canonical.get("research_insights") or {},
         "coverage": coverage,
         "forecast_count": len(forecasts),
         "forecasts": forecasts,
     }
-    return fields, forecasts, summary
+    # Keep secondhand numbers visible, without counting another broker forecast.
+    return fields, [] if data.get("material_type") == "commentary" else forecasts, summary

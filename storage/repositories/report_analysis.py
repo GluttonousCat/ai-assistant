@@ -7,8 +7,9 @@ from storage.schema.reports import ensure_report_analysis_columns
 _COLUMNS = (
     "report_id, title, file_name, content_text, content_chars, ts_code, "
     "report_type, author, org_name, publish_date, market, symbols, file_path, "
-    "extraction_status, analysis_json"
+    "source, extraction_status, analysis_json, analysis_status"
 )
+_REPORT_SOURCE = "COALESCE(source,'') NOT IN ('zsxq_topic','zsxq_topic_pdf_absent')"
 _UPDATE_FIELDS = frozenset(
     (
         "analysis_json",
@@ -34,12 +35,12 @@ def extraction_candidates(report_id=None, limit=1):
     with PgClient(read_only=True) as pg:
         if report_id:
             return pg.fetch_all(
-                f"SELECT {_COLUMNS} FROM fin.report_meta WHERE report_id=%s",
+                f"SELECT {_COLUMNS} FROM fin.report_meta WHERE report_id=%s AND {_REPORT_SOURCE}",
                 (int(report_id),),
             )
         return pg.fetch_all(
             f"SELECT {_COLUMNS} FROM fin.report_meta "
-            "WHERE (content_chars > 200 OR file_path IS NOT NULL) "
+            f"WHERE {_REPORT_SOURCE} AND (content_chars > 200 OR file_path IS NOT NULL) "
             "AND (analysis_status IS NULL OR analysis_status NOT IN ('done','failed')) "
             "ORDER BY ts_code NULLS LAST, report_id LIMIT %s",
             (limit,),
@@ -50,33 +51,44 @@ def load_report(report_id):
     ensure_report_analysis_columns()
     with PgClient(read_only=True) as pg:
         return pg.fetch_one(
-            f"SELECT {_COLUMNS} FROM fin.report_meta WHERE report_id=%s",
+            f"SELECT {_COLUMNS} FROM fin.report_meta WHERE report_id=%s AND {_REPORT_SOURCE}",
             (int(report_id),),
         )
 
 
-def mark_failed(report_id):
+_SNAPSHOT_MATCH = (
+    "report_id=%s AND analysis_json IS NOT DISTINCT FROM %s "
+    "AND file_path IS NOT DISTINCT FROM %s AND content_text IS NOT DISTINCT FROM %s"
+)
+
+
+def _snapshot(row):
+    return row["report_id"], row.get("analysis_json"), row.get("file_path"), row.get("content_text")
+
+
+def mark_failed(row):
     with PgClient() as pg:
         pg.execute(
             "UPDATE fin.report_meta SET analysis_status='failed' "
-            "WHERE report_id=%s AND analysis_status IS DISTINCT FROM 'done'",
-            (report_id,),
+            f"WHERE {_SNAPSHOT_MATCH} AND analysis_status IS DISTINCT FROM 'done'",
+            _snapshot(row),
         )
 
 
-def save_extraction(report_id, fields, forecasts, *, previous_analysis):
+def save_extraction(row, fields, forecasts):
     if not fields or fields.keys() - _UPDATE_FIELDS:
         raise ValueError("Invalid report metadata fields")
     with PgClient() as pg:
         assignments = [f"{key}=%s" for key in fields]
         changed = pg.execute(
             f"UPDATE fin.report_meta SET {', '.join(assignments)}, analysis_status='done' "
-            "WHERE report_id=%s AND analysis_json IS NOT DISTINCT FROM %s",
-            (*fields.values(), report_id, previous_analysis),
+            f"WHERE {_SNAPSHOT_MATCH}",
+            (*fields.values(), *_snapshot(row)),
         )
         if changed == 0:
             return False
         # Replacement is atomic, including an empty forecast result.
+        report_id = row["report_id"]
         pg.execute("DELETE FROM fin.report_forecast WHERE report_id=%s", (report_id,))
         for forecast in forecasts:
             pg.execute(
@@ -105,7 +117,7 @@ def matched_reports(target):
     with PgClient(read_only=True) as pg:
         clause, args = _match_reports(pg, target)
         return pg.fetch_all(
-            f"SELECT {_COLUMNS} FROM fin.report_meta WHERE {clause} AND content_chars > 0 "
+            f"SELECT {_COLUMNS} FROM fin.report_meta WHERE {_REPORT_SOURCE} AND {clause} AND content_chars > 0 "
             "ORDER BY publish_date DESC NULLS LAST LIMIT 10",
             tuple(args),
         )
@@ -149,3 +161,27 @@ def _resolve_a_share(pg, target):
         "SELECT ts_code FROM stock.stock_basic WHERE name=%s", (target.strip(),)
     )
     return row["ts_code"] if row else None
+
+
+def completed_attachment_page(limit, before_id=None, report_id=None):
+    """Read a bounded page for offline upgrades. Preview never initializes DDL."""
+    conditions = [
+        "analysis_status='done'", _REPORT_SOURCE,
+        "COALESCE(NULLIF(file_name,''), file_path,'') ~* '\\.(pdf|docx?)$'",
+        "extraction_status IS DISTINCT FROM 'pending_ocr'",
+    ]
+    args = []
+    for column, value in (("report_id < %s", before_id), ("report_id = %s", report_id)):
+        if value is not None:
+            conditions.append(column)
+            args.append(value)
+    args.append(limit)
+    with PgClient(read_only=True) as pg:
+        return pg.fetch_all(
+            "SELECT report_id, title, file_path, analysis_json, "
+            "((COALESCE(source,'') NOT IN ('zsxq','zsxq_file') OR "
+            r"content_text ~ '^\[\[PDF_PAGE:[1-9][0-9]*\]\]') AND "
+            "length(trim(COALESCE(content_text,'')))>0) AS has_body "
+            f"FROM fin.report_meta WHERE {' AND '.join(conditions)} ORDER BY report_id DESC LIMIT %s",
+            tuple(args),
+        )

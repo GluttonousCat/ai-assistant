@@ -83,7 +83,7 @@ export const platformApi = {
   analyzeReport: (id) => request('POST', `/api/reports/${id}/analyze`),
   // Single-report AI analysis, streaming version (SSE): events are isomorphic with chatStream
   //   {type:'stage', stage, message} {type:'delta', text} {type:'data', data} {type:'error'|'done'}
-  // Returns {promise, abort}: closing the modal calls abort() to drop the connection (backend analysis still completes ingestion)
+  // Returns {promise, abort}; the reports page can keep listening after the modal closes.
   analyzeReportStream: (id, onEvent) =>
     sseStream(`/api/reports/${id}/analyze/stream`, {}, onEvent),
 

@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from core.logger import get_logger
-from skills.content.profile import build_company_profile, profile_digest
+from skills.content.profile import build_company_profile, profile_digest, report_attribution
 from skills.content.prompts import (DISCLAIMER, GZH_STOCK_ARTICLE_PROMPT,
                              GZH_TOPIC_ARTICLE_PROMPT)
 
@@ -115,7 +115,6 @@ def write_stock_article(stock: str, years: int = 5,
 def write_topic_article(topic: str, days: int = 90, limit: int = 8) -> Dict[str, Any]:
     """Report-topic summary: retrieve -> take views -> write. Compliance: views
     paraphrased with the institution credited; never copy original text"""
-    import json
     from harness.llm import get_agent_llm
     from harness.mcp import get_registry
     registry = get_registry()
@@ -131,12 +130,14 @@ def write_topic_article(topic: str, days: int = 90, limit: int = 8) -> Dict[str,
         det = registry.call("read_report", {"report_id": r["report_id"],
                                             "excerpt_chars": 3000})
         body = ""
+        source = r
         if det.get("ok"):
+            source = {**r, **det["data"]}
             body = (det["data"].get("content_excerpt") or "")[:2500]
             view = (det["data"].get("analysis") or {}).get("core_view") or ""
             body = (view + "\n" + body).strip()
-        blocks.append(f"### {r['title']}\n机构: {r['org']} | 日期: {r['publish_date']} "
-                      f"| 评级: {r.get('rating') or '—'}\n{body}")
+        blocks.append(f"### {r['title']}\n{report_attribution(source)} | 日期: {r['publish_date']} "
+                      f"| 材料所列评级: {source.get('rating') or '—'}\n{body}")
 
     prompt = GZH_TOPIC_ARTICLE_PROMPT.format(
         topic=topic, reports="\n\n".join(blocks), disclaimer=DISCLAIMER)

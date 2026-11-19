@@ -124,3 +124,18 @@ def test_crawler_closes_after_a_failed_background_operation(monkeypatch):
 
     asyncio.run(run())
     crawler.close.assert_called_once()
+
+
+def test_pending_attachment_does_not_expose_topic_commentary_as_original(monkeypatch):
+    pg = MagicMock()
+    pg.__enter__.return_value = pg
+    old = {"report_id": 7, "source": "zsxq_file", "extraction_status": "pending",
+           "file_path": "scan.pdf", "content_text": "话题文字", "content_text_cn": "话题译文"}
+    pg.fetch_one.side_effect = lambda *_: old.copy()
+    pg.fetch_all.return_value = []
+    monkeypatch.setattr(repo, "PgClient", lambda **kwargs: pg)
+    assert repo.report_detail(7)["content_text"] == ""
+    assert repo.report_body(7)["content_text"] == ""
+    assert "NOT IN ('zsxq_topic','zsxq_topic_pdf_absent')" in pg.fetch_one.call_args.args[0]
+    old.update(file_path=None, extraction_status="extracted", content_text="[[PDF_PAGE:1]]\n已识别原文")
+    assert "已识别原文" in repo.report_body(7)["content_text"]

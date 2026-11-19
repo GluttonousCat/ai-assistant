@@ -29,7 +29,8 @@ def pipeline(monkeypatch):
             state["transactions"].append("rollback" if error else "commit")
 
         def fetch_one(self, sql, args):
-            return None if state["deleted"] else state["rows"][0]
+            if not state["deleted"]:
+                return next((r for r in state["rows"] if r["report_id"] == args[0]), None)
 
         def fetch_all(self, sql, args):
             return state["rows"]
@@ -104,6 +105,28 @@ def test_missing_record_never_inserts_forecasts_or_starts_followup(pipeline):
     assert not any("INSERT" in sql for sql, _ in state["sql"])
 
 
+@pytest.mark.parametrize("streaming", [False, True])
+def test_verified_insight_survives_save_and_stream(pipeline, streaming):
+    skill, state, _, model = pipeline
+    model["evidence"] = [{
+        "kind": "driver", "insight_type": "theses", "statement": "预计净利润900亿元。",
+        "source": {"segment": 1, "quote": "报告预计2026年净利润900亿元。"},
+    }]
+    if streaming:
+        events = list(skill.extract_stream(1))
+        summary = next(event["data"] for event in events if event["type"] == "data")
+    else:
+        summary = skill._extract_one(state["rows"][0])
+    sql, params = next((sql, args) for sql, args in state["sql"] if sql.startswith("UPDATE"))
+    stored = json.loads(params[0])
+    assert stored["research_insights"] == summary["research_insights"]
+    assert stored["research_insights"]["theses"][0]["source"] == {
+        "segment": 1, "quote": "报告预计2026年净利润900亿元。", "page": None,
+    }
+    assert "content_text IS NOT DISTINCT FROM %s" in sql
+    assert params[-1] == state["rows"][0]["content_text"]
+
+
 @pytest.mark.parametrize("raw", ["{broken}", "[1,2]", '"text"', "null"])
 def test_invalid_or_non_object_model_output_is_failed_not_success(pipeline, raw):
     skill, state, background, _ = pipeline
@@ -115,11 +138,24 @@ def test_invalid_or_non_object_model_output_is_failed_not_success(pipeline, raw)
     assert not background
 
 
-def test_batch_summary_separates_completed_ocr_and_missing_text(pipeline, monkeypatch):
+def test_metadata_only_retry_preserves_previous_analysis(pipeline):
     skill, state, background, _ = pipeline
+    state["rows"][0]["analysis_json"] = '{"core_view":"原有解读"}'
+    state["raw"] = '{"market":"A股","forecasts":[],"key_points":[],"evidence":[]}'
+    events = list(skill.extract_stream(1))
+    assert events[-1]["type"] == "error" and "原有分析已保留" in events[-1]["message"]
+    assert not background
+    assert not any("DELETE" in sql or "analysis_json=%s" in sql for sql, _ in state["sql"])
+
+
+def test_batch_summary_separates_completed_ocr_and_missing_text(pipeline, monkeypatch, tmp_path):
+    skill, state, background, _ = pipeline
+    scan = tmp_path / "scan.pdf"
+    scan.touch()
+    monkeypatch.setattr("tools.finance.report_extractor.ReportExtractor.pdf_pages", lambda *args, **kwargs: [""])
     state["rows"] += [
-        dict(report_id=2, content_chars=0, file_path="scan.pdf"),
-        dict(report_id=3, content_chars=0),
+        dict(report_id=2, content_chars=0, file_path=str(scan)),
+        dict(report_id=3, content_chars=0, file_path=str(tmp_path / "missing.pdf")),
     ]
     monkeypatch.setattr(skill, "_vision_backfill", lambda row: False)
     context = SkillContext()

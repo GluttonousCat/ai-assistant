@@ -23,6 +23,15 @@ from core.logger import get_logger
 
 logger = get_logger(__name__)
 
+
+def report_attribution(report: Dict[str, Any]) -> str:
+    org = report.get("org") or "未注明机构"
+    if report.get("material_type") == "commentary":
+        return f"二手解读（材料提及机构：{org}）"
+    if report.get("material_type") == "original":
+        return f"研报原文（机构：{org}）"
+    return f"材料性质待核实（机构字段：{org}）"
+
 # (section name, tool, args) — order is the narrative order
 _SECTIONS: List[tuple] = [
     ("basic", "resolve_stock", {"text": "{stock}"}),
@@ -196,7 +205,7 @@ def profile_digest(profile: Dict[str, Any], max_chars: int = 6000) -> str:
     rp = s.get("reports") or {}
     if rp.get("reports"):
         parts.append("[近期研报] " + "; ".join(
-            f"{r.get('org')}《{str(r.get('title'))[:24]}》{r.get('rating') or ''}"
+            f"{report_attribution(r)}《{str(r.get('title'))[:24]}》{r.get('rating') or ''}"
             for r in rp["reports"][:4]))
 
     ind = s.get("industry") or {}

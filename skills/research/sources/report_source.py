@@ -169,6 +169,8 @@ def build_views_from_report(detail: Optional[Dict[str, Any]], brief: Dict[str, A
     analysis = detail.get("analysis") or {}
 
     pieces: List[tuple] = []
+    if analysis.get("material_type") == "commentary" or brief.get("material_type") == "commentary":
+        context_prefix += "【材料转述】"
     core = str(analysis.get("core_view") or "").strip()
     if core:
         pieces.append(("viewpoint", core, ""))
@@ -187,6 +189,21 @@ def build_views_from_report(detail: Optional[Dict[str, Any]], brief: Dict[str, A
         s = str(rk).strip()
         if s:
             pieces.append(("risk", s, ""))
+
+    # Preserve concrete follow-up conditions with their location in the material.
+    insights = analysis.get("research_insights")
+    if isinstance(insights, dict):
+        for kind in ("assumptions", "changes", "watchpoints"):
+            entries = insights.get(kind)
+            for item in entries[:2] if isinstance(entries, list) else ():
+                if not isinstance(item, dict) or not isinstance(item.get("source"), dict):
+                    continue
+                source = item["source"]
+                page, segment = source.get("page"), source.get("segment")
+                if not source.get("quote") or not item.get("statement") or not isinstance(segment, int):
+                    continue
+                location = f"PDF 第{page}页" if page else f"片段{segment}"
+                pieces.append(("viewpoint", f"{item['statement']}（{location}）", ""))
 
     views, seen = [], set()
     for cat, stmt, period in pieces:
@@ -381,11 +398,14 @@ def collect_report_views(stock: str, days: int = 365, out_dir: Path | None = Non
                 qa = _call(reg, "read_report", report_id=rid, question=_QA_QUESTION)
                 if qa is not None:
                     qa_used += 1
+                    qa_prefix = prefix
+                    if analysis.get("material_type") == "commentary" or b.get("material_type") == "commentary":
+                        qa_prefix += "【材料转述】"
                     got += parse_qa_views(qa.get("answer") or "", rid,
                                           detail.get("org") or b.get("org") or "",
                                           detail.get("publish_date")
                                           or b.get("publish_date") or "",
-                                          ts_code=ts_code, context_prefix=prefix)
+                                          ts_code=ts_code, context_prefix=qa_prefix)
         views += got
 
     # report_forecast table fill-in: only fill same report+period+metric gaps (includes

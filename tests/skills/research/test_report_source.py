@@ -133,6 +133,17 @@ class TestCategoryValidation:
 # ---------- single-report building ----------
 
 class TestBuildViewsFromReport:
+    def test_commentary_preserves_attribution_and_watchpoint_location(self):
+        detail = _detail()
+        detail["analysis"].update(material_type="commentary", research_insights={
+            "watchpoints": [{"statement": "下季度关注渠道库存。", "source": {
+                "segment": 4, "page": 3, "quote": "Watch channel inventories next quarter.",
+            }}],
+        })
+        views = build_views_from_report(detail, brief=BRIEF_101)
+        assert all(v.statement.startswith("【材料转述】") for v in views)
+        assert any("渠道库存" in v.statement and "第3页" in v.statement for v in views)
+
     def test_caps_and_dropped_and_order(self):
         views = build_views_from_report(_detail(), brief=BRIEF_101)
         by_cat = [v.category for v in views]

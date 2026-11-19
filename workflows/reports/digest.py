@@ -46,6 +46,7 @@ def fetch_reports(since: datetime) -> List[Dict[str, Any]]:
             "       file_name, extraction_status "
             "FROM fin.report_meta "
             "WHERE created_at >= %s "
+            "AND COALESCE(source,'') NOT IN ('zsxq_topic','zsxq_topic_pdf_absent') "
             "ORDER BY created_at", (since,))
         forecasts = pg.fetch_all(
             "SELECT report_id, forecast_type, forecast_period, "
@@ -63,9 +64,12 @@ def fetch_reports(since: datetime) -> List[Dict[str, Any]]:
             aj = json.loads(r["analysis_json"] or "{}")
         except (ValueError, TypeError):
             pass
+        if not isinstance(aj, dict):
+            aj = {}
+        d["commentary"] = aj.get("material_type") == "commentary"
         d["rating"] = aj.get("rating") or ""
         d["core_view"] = str(aj.get("core_view") or "")[:120]
-        d["forecasts"] = fby.get(r["report_id"], [])
+        d["forecasts"] = [] if d["commentary"] else fby.get(r["report_id"], [])
         out.append(d)
     return out
 
@@ -88,6 +92,8 @@ def _llm_summary(reports: List[Dict[str, Any]]) -> str:
                  if r["rating"] and r["rating"] != "无" else "未评级"]
         if r["core_view"]:
             parts.append(r["core_view"])
+        if r.get("commentary"):
+            parts.append("二手材料转述")
         lines.append(" | ".join(str(p) for p in parts))
     if not lines:
         return "本期无新增研报。"
@@ -99,7 +105,7 @@ def _llm_summary(reports: List[Dict[str, Any]]) -> str:
           "1) 共 2~3 段、总计 300~500 字, 简体中文;\n"
           "2) 第一段概括今日覆盖的行业与主题脉络;\n"
           "3) 第二段点名值得关注的个股观点与预测变化(带机构名);\n"
-          "4) 若信息不足以支撑某点, 直接略过, 严禁编造清单外内容;\n"
+          "4) 二手材料的观点注明转述，同一机构的原文与转述只作为一个来源。若依据不足请略过;\n"
           "5) 直接输出综述正文, 不要任何前后缀或标题。"
     )
     from harness.llm import get_agent_llm
@@ -171,6 +177,8 @@ def generate(days: int = 1) -> Path:
                 shown += 1
                 bits = [f"**《{r['title'] or r['file_name']}》**"]
                 seg = r["org_name"] or "未知机构"
+                if r.get("commentary"):
+                    seg += "（材料转述）"
                 if r["target"] or r["ts_code"]:
                     seg += f" | {r['target'] or r['ts_code']}"
                 if r["rating"] and r["rating"] != "无":

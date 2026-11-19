@@ -4,26 +4,21 @@ Zhixingqiu crawler data → PG research-report warehouse sync script.
 
 Data flow:
   output/{group_id}/topics_{group_id}.db (sqlite)
-    ├── topics table        → fin.report_meta.title/text      (topic text serves as the report body)
+    ├── topics table        → fin.report_meta.title/text      (separate topic commentary)
     └── topic_files table   → fin.report_meta (file_path = locally downloaded file, extract body)
   output/{group_id}/downloads/*   → fin.report_meta (attachment extraction; supports pdf/docx/txt/md)
 
 Usage:
   python -m workflows.reports.sync [--group <group_id>] [--only-args] [--limit N]
 
-Features:
-- Checkpoint resume: fin.report_sync_meta records last_topic_id; re-runs only process
-  newly added topic attachments
-- Idempotent: report_meta is deduplicated by (source='zsxq', topic_id); repeated
-  syncs only update
-- Text extraction: when the local file is missing, degrade to the topic's text;
-  extraction_status='pending' marks it for later backfill
+Topic text is stored independently. Attachments are identified by file ID.
+Missing files remain pending until the original arrives, including downloads that
+complete after the ingestion watermark.
 """
 from __future__ import annotations
 
 import argparse
 import os
-import sys
 
 from core.logger import get_logger
 logger = get_logger(__name__)
@@ -31,22 +26,18 @@ logger = get_logger(__name__)
 from core.config import get_config
 from storage.pg import PgClient
 from storage.pg_schema import (
+    ensure_report_analysis_columns,
     init_report_schema,
     T_REPORT_META,
     T_REPORT_FORECAST,
     T_REPORT_SYNC_META,
 )
+from storage.repositories import report_ingestion
 from storage.sqlite.files import FilesDatabase
 from storage.sqlite.topics import TopicsDatabase
 from tools.finance.report_extractor import get_extractor
 from core.helpers import strip_zsxq_tags, is_chinese_translated
 
-# Idempotency check: exists in report_meta OR was deleted by dedup-merge with an
-# audit-trail row (audited ones are never re-inserted, preventing the
-# ingest → merge-delete → full-sync re-insert → re-analyze ping-pong loop)
-_EXISTS_SQL = (
-    f"SELECT 1 FROM fin.report_meta WHERE file_id=%s "
-    f"UNION ALL SELECT 1 FROM fin.report_meta_merged WHERE file_id=%s LIMIT 1")
 from core.paths import PathManager
 
 # Max length of extracted report text (avoids oversized files filling the PG
@@ -66,9 +57,10 @@ def _nn(s):
 
 
 class ZSXQ2PGSync:
-    def __init__(self, group_id: str, limit: int = None):
+    def __init__(self, group_id: str, limit: int = None, *, ready_limit: int | None = None):
         self.group_id = str(group_id)
         self.limit = limit
+        self.ready_limit = ready_limit
         self.path_manager = PathManager()
         self.db_path = self.path_manager.get_topics_db_path(self.group_id)
         self.files_db_path = self.path_manager.get_files_db_path(self.group_id)
@@ -95,12 +87,17 @@ class ZSXQ2PGSync:
         # Deploy the PG tables
         with PgClient() as pg:
             init_report_schema(pg)
+        ensure_report_analysis_columns()
 
         self._new_ids = []
         if os.path.exists(self.db_path):
             self._sync_topics()
+        if self.ready_limit:
+            # Download callbacks look for the newest completed downloads first.
+            self._sync_group_files()
+        if os.path.exists(self.db_path):
             self._sync_files()
-        if self.files_db is not None:
+        if not self.ready_limit:
             self._sync_group_files()
         self._print_summary()
         return self._new_ids
@@ -129,7 +126,7 @@ class ZSXQ2PGSync:
 
                 # Idempotent: skip if already synced
                 exists = pg.fetch_one(
-                    f"SELECT 1 FROM {T_REPORT_META} WHERE source='zsxq_topic' AND topic_id=%s",
+                    f"SELECT 1 FROM {T_REPORT_META} WHERE source IN ('zsxq_topic','zsxq_topic_pdf_absent') AND topic_id=%s",
                     (topic_id,),
                 )
 
@@ -153,213 +150,66 @@ class ZSXQ2PGSync:
             self._set_sync_marker(pg, "last_topic_id", value_int=max_topic_id)
             logger.info(f"📄 话题文本已同步 (本批次 {total} 条, 跳过 {skipped} 条短内容)")
 
-    # ---------- Attachment sync ----------
     def _sync_files(self):
-        """topic_files table of the topics DB → report_meta (source='zsxq'),
-        including text extraction."""
-        with PgClient() as pg:
-            last_file_id = self._get_sync_marker(pg, "last_file_id")
-            rows = self.db.get_topic_files_after(last_file_id, self.limit)
+        # A previously discovered file can finish downloading at any later time.
+        self._sync_attachments(self.db.get_topic_files_after(0), "zsxq", self.limit)
 
-            total = 0
-            max_file_id = last_file_id
-            skipped_cn = 0
-            for row in rows:
-                file_id = row["file_id"]
-                max_file_id = max(max_file_id, file_id)
-                name = _nn(row.get("name") or "")
-
-                # Chinese-translated versions are not ingested (keep the English
-                # original; the download layer already skips them — this is a
-                # fallback for files already on disk)
-                if is_chinese_translated(name):
-                    skipped_cn += 1
-                    continue
-
-                # Already in DB / previously merged-and-deleted? Idempotent skip
-                exists = pg.fetch_one(_EXISTS_SQL, (file_id, file_id))
-                if exists:
-                    total += 1
-                    continue
-
-                file_path = self._resolve_local_path(row)
-                content, chars, status = self._extract(file_path, row)
-                content = _nn(content)
-
-                if not content:
-                    status = "failed"
-
-                inserted = pg.fetch_all(
-                    f"""INSERT INTO {T_REPORT_META}
-                        (topic_id, file_id, title, file_name, file_path, file_size,
-                         content_text, content_chars, source, extraction_status,
-                         publish_date)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'zsxq', %s, %s)
-                        RETURNING report_id""",
-                    (
-                        row.get("topic_id"),
-                        file_id,
-                        self._derive_title(name),
-                        name,
-                        file_path,
-                        row.get("size"),
-                        content,
-                        chars,
-                        status,
-                        self._parse_date(row.get("create_time")),
-                    ),
-                )
-                if inserted:
-                    self._new_ids.append(inserted[0]["report_id"])
-                total += 1
-
-            self._set_sync_marker(pg, "last_file_id", value_int=max_file_id)
-            logger.info(f"📎 附件已同步 (本批次 {total} 个"
-                  + (f", 跳过中文版 {skipped_cn} 个" if skipped_cn else "") + ")")
-
-            # Backfill: at first sync the file was not yet downloaded (pending);
-            # now that it has arrived -> extract body text and update
-            backfilled = 0
-            pendings = pg.fetch_all(
-                f"SELECT report_id, file_path FROM {T_REPORT_META} "
-                f"WHERE source='zsxq' AND extraction_status='pending' LIMIT 100")
-            for pr in pendings:
-                fp = pr.get("file_path")
-                if not fp or not os.path.exists(fp):
-                    continue
-                text = _nn(self.extractor.extract(fp))
-                if text:
-                    pg.execute(
-                        f"UPDATE {T_REPORT_META} SET content_text=%s, content_chars=%s, "
-                        f"extraction_status='extracted' WHERE report_id=%s",
-                        (text[:MAX_TEXT_CHARS], len(text), pr["report_id"]))
-                    backfilled += 1
-            if backfilled:
-                logger.info(f"📎 附件正文回填 {backfilled} 个 (此前文件未就绪)")
-
-    # ---------- Group-file sync (files DB; file-centric groups like Maoge's
-    #      research-report circle) ----------
     def _sync_group_files(self):
-        """files table of the files DB → report_meta (source='zsxq_file'); extracts
-        text of already-downloaded files."""
-        from core.helpers import sanitize_filename
-        if self.files_db is None:
-            return
+        if self.files_db is not None:
+            self._sync_attachments(self.files_db.get_completed_files(limit=-1), "zsxq_file")
 
-        # Sync watermark: group files are tracked by file_id (independent of
-        # topic_files' last_file_id)
-        with PgClient() as pg:
-            marker_key = f"group_file_id_{self.group_id}"
-            last_file_id = self._get_sync_marker(pg, marker_key)
-            # Audio files are not ingested into the report warehouse
-            # (mp3/m4a/wav/aac/flac)
-            _audio_exts = ('.mp3', '.m4a', '.wav', '.aac', '.flac')
-            # Fetch ALL completed files (no watermark here: download completion
-            # order is unrelated to file_id, so an older file that completes after
-            # the watermark has passed would be missed forever); idempotency comes
-            # from the exists check below
-            rows = [r for r in self.files_db.get_completed_files()
-                    if not (r.get("name") or "").lower().endswith(_audio_exts)]
-
-            total = 0
-            skipped_cn = 0
-            max_file_id = last_file_id
-            for row in rows:
-                file_id = row["file_id"]
-                max_file_id = max(max_file_id, file_id)
-
+    def _sync_attachments(self, rows, source, limit=None):
+        processed = 0
+        for offset in range(0, len(rows), 1000):
+            batch = rows[offset:offset + 1000]
+            states = report_ingestion.attachment_states([row["file_id"] for row in batch])
+            for row in batch:
+                if self.ready_limit and len(self._new_ids) >= self.ready_limit:
+                    return
                 name = _nn(row.get("name") or "")
-
-                # Chinese-translated versions are not ingested (keep the English
-                # original)
-                if is_chinese_translated(name):
-                    skipped_cn += 1
+                if is_chinese_translated(name) or name.lower().endswith((".mp3", ".m4a", ".wav", ".aac", ".flac")):
                     continue
-
-                # Idempotent: skip if the file is already in the DB or was
-                # previously merged-and-deleted
-                exists = pg.fetch_one(_EXISTS_SQL, (file_id, file_id))
-                if exists:
+                previous = states.get(row["file_id"])
+                if previous:
+                    if previous["extraction_status"] == "merged":
+                        continue
+                    # A legacy scanned attachment with an existing path may
+                    # still have pending text. Its upgrade is explicit.
+                    old_path = previous["file_path"]
+                    if old_path and os.path.isfile(old_path):
+                        continue
+                path = self._resolve_local_path(row)
+                if previous and not path:
                     continue
-                file_path = self._resolve_local_path(row)
-                content, chars, status = self._extract(file_path, row)
-                content = _nn(content)
-
-                # Attach the topic text (if PDF extraction came up empty, fall
-                # back to the topic text)
-                if (not content or chars < MIN_REPORT_CHARS) and row.get("topic_id"):
-                    topic = self.db.get_topic(row["topic_id"]) if os.path.exists(self.db_path) else None
-                    if topic:
-                        topic_text = strip_zsxq_tags(topic.get("text") or "")
-                        if len(topic_text) >= MIN_REPORT_CHARS:
-                            content, chars, status = topic_text, len(topic_text), "pending"
-
-                if not content:
-                    status = "failed"
-
-                inserted = pg.fetch_all(
-                    f"""INSERT INTO {T_REPORT_META}
-                        (topic_id, file_id, title, file_name, file_path, file_size,
-                         content_text, content_chars, source, extraction_status,
-                         publish_date)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'zsxq_file', %s, %s)
-                        RETURNING report_id""",
-                    (
-                        row.get("topic_id"),
-                        file_id,
-                        self._derive_title(name),
-                        name,
-                        file_path,
-                        row.get("size"),
-                        (content or "")[:MAX_TEXT_CHARS],
-                        chars,
-                        status,
-                        self._parse_date(row.get("create_time")),
-                    ),
+                text = _nn(self.extractor.extract(path)) if path else None
+                status = "extracted" if text else ("failed" if path else "pending")
+                report_id = report_ingestion.save_attachment(
+                    {**row, "name": name}, source, path, (text or "")[:MAX_TEXT_CHARS],
+                    len(text or ""), status, previous_path=previous["file_path"] if previous else None,
                 )
-                if inserted:
-                    self._new_ids.append(inserted[0]["report_id"])
-                total += 1
-
-            self._set_sync_marker(pg, marker_key, value_int=max_file_id)
-            logger.info(f"📁 群文件已同步 (本批次 {total} 个"
-                  + (f", 跳过中文版 {skipped_cn} 个" if skipped_cn else "") + ")")
-
-    # ---------- Helper methods ----------
-    def _extract(self, file_path, row) -> tuple:
-        """Returns (text, chars, status)."""
-        if file_path and os.path.exists(file_path):
-            text = self.extractor.extract(file_path)
-            if text:
-                return text, len(text), "extracted"
-            return None, 0, "failed"
-
-        # File not downloaded: degrade to the topic text (if it is long enough to
-        # look like a report body)
-        topic = self.db.get_topic(row.get("topic_id")) if row.get("topic_id") else None
-        if topic:
-            text = strip_zsxq_tags(topic.get("text") or "")
-            if len(text) >= 200:
-                return text, len(text), "pending"
-        return None, 0, "failed"
+                if report_id:
+                    self._new_ids.append(report_id)
+                processed += 1
+                if limit and processed >= limit:
+                    return
 
     def _resolve_local_path(self, row) -> str:
         """Local path of an attachment: first check local_path, then guess by the
         sanitized filename, finally the raw filename."""
         from core.helpers import sanitize_filename
         local = row.get("local_path")
-        if local and os.path.exists(local):
+        if local and os.path.isfile(local):
             return local
 
         # Files on disk are stored under their sanitized name (by the downloader)
         name = row.get("name") or ""
         guess = os.path.join(self.download_dir, sanitize_filename(name))
-        if os.path.exists(guess):
+        if os.path.isfile(guess):
             return guess
 
         # Last-resort fallback: the raw filename
         raw_guess = os.path.join(self.download_dir, name)
-        return raw_guess if os.path.exists(raw_guess) else None
+        return raw_guess if os.path.isfile(raw_guess) else None
 
     def _get_sync_marker(self, pg, key: str) -> int:
         row = pg.fetch_one(

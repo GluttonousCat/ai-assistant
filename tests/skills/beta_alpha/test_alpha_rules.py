@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from skills.beta_alpha.skills.alpha import classify_drift, edge_trend, to_yuan
+from skills.beta_alpha.analysis.alpha_context import forecast_divergence
 
 
 def test_to_yuan_unit_factors():
@@ -19,6 +20,18 @@ def test_to_yuan_unit_factors():
 
 def test_to_yuan_strips_whitespace():
     assert to_yuan(1.0, " 亿元 ") == 1e8
+
+
+def test_divergence_compares_scaled_rmb_separately_from_foreign_currency():
+    rows = [
+        {"forecast_type": "revenue", "forecast_period": "2027", "org_name": org,
+         "forecast_unit": unit, "forecast_value": value}
+        for org, unit, value in [("A", "亿元", 1), ("B", "万元", 10_000),
+                                 ("C", "亿美元", 3), ("D", "亿美元", 4)]
+    ]
+    stats = {s["unit"]: s for s in forecast_divergence(rows)}
+    assert stats["元"]["mean"] == 1e8 and stats["元"]["cv"] == 0
+    assert stats["亿美元"]["mean"] == 3.5 and stats["亿美元"]["n_forecasts"] == 2
 
 
 def test_classify_drift_direction():

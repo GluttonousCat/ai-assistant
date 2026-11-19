@@ -15,9 +15,11 @@ from harness.mcp.tools._common import _jsonable, resolve_one
 def _brief(row) -> Dict[str, Any]:
     """report_meta row -> concise summary."""
     rating = None
+    material_type = "unknown"
     try:
         aj = json.loads(row.get("analysis_json") or "{}")
         rating = aj.get("rating")
+        material_type = aj.get("material_type") or "unknown"
     except Exception:
         pass
     return {
@@ -28,6 +30,7 @@ def _brief(row) -> Dict[str, Any]:
         "market": row.get("market"),
         "target": row.get("target"),
         "rating": rating,
+        "material_type": material_type,
         "symbols": row.get("symbols"),
     }
 
@@ -37,7 +40,8 @@ def _brief(row) -> Dict[str, Any]:
     domain="report",
     description=(
         "检索平台已入库的券商研报 (知识星球来源): 按关键词/股票标的/行业/商品主题匹配标题、"
-        "标签与观点摘要, 返回报告列表 (标题/机构/日期/评级/标的)。"
+        "标签与观点摘要, 返回标题、机构、日期、评级及材料性质。commentary 是二手解读，"
+        "评级和观点须注明材料转述，unknown 表示材料性质待核实。"
         "用户问 '最近有哪些XX的研报'/'谁在写XX'/'XX行业观点' 时先调本工具, "
         "需要研报内容细节再用 read_report。只检索不解读。"
     ),
@@ -384,20 +388,17 @@ def summarize_sell_side(stock: str, days: int = 365) -> Dict[str, Any]:
         return float(v) if v is not None and hasattr(v, "quantize") else v
 
     orgs = sorted({r["org_name"] for r in rows if r["org_name"]})
-    groups: Dict[str, Dict[str, list]] = {}
+    groups = {}
     for r in rows:
         if not r["forecast_period"] or not r["forecast_type"]:
             continue
-        key = f"{r['forecast_period']}.{r['forecast_type']}"
-        groups.setdefault(key, {"vals": [], "units": set()}).setdefault(
-            "units", set()
-        ).add(r["forecast_unit"] or "")
-        groups[key]["vals"].append(_f(r["forecast_value"]))
+        unit = (r["forecast_unit"] or "").strip()
+        value = _f(r["forecast_value"])
+        if unit and isinstance(value, (int, float)):
+            key = (f"{r['forecast_period']}.{r['forecast_type']}", unit)
+            groups.setdefault(key, []).append(value)
     summary = []
-    for key, g in groups.items():
-        vals = [v for v in g["vals"] if isinstance(v, (int, float))]
-        if not vals:
-            continue
+    for (key, unit), vals in groups.items():
         summary.append(
             {
                 "period_type": key,
@@ -405,10 +406,10 @@ def summarize_sell_side(stock: str, days: int = 365) -> Dict[str, Any]:
                 "mean": round(sum(vals) / len(vals), 2),
                 "min": round(min(vals), 2),
                 "max": round(max(vals), 2),
-                "unit": (list(g["units"]) or [""])[0],
+                "unit": unit,
             }
         )
-    summary.sort(key=lambda s: (-s["n_forecasts"], s["period_type"]))
+    summary.sort(key=lambda s: (-s["n_forecasts"], s["period_type"], s["unit"]))
     detail = []
     for r in rows[:12]:
         detail.append(

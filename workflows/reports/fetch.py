@@ -49,7 +49,7 @@ def _process_one_report(group_id: str) -> str:
         task_progress("同步下载文件至研报库")
         from workflows.reports.sync import ZSXQ2PGSync
 
-        sync = ZSXQ2PGSync(str(group_id))
+        sync = ZSXQ2PGSync(str(group_id), ready_limit=1)
         new_ids = (
             sync.run() or []
         )  # Incremental watermark: only newly downloaded files are processed, seconds-fast
@@ -59,10 +59,8 @@ def _process_one_report(group_id: str) -> str:
     extracted = 0
     try:
         if new_ids:
-            # Run per-report LLM analysis only on just-ingested PDF/docx (precisely
-            # targeted, unaffected by old backlog);
-            # topic text entries (txt) are merged by merge() into the same topic's PDF
-            # and do not consume LLM calls separately
+            # Analyze the single ready attachment returned by this download callback.
+            # Topic commentary is retained separately from the broker's source.
             from storage.pg import PgClient
 
             with PgClient() as pg:
@@ -242,7 +240,7 @@ def run_once(
         task_progress("收尾：补齐研报入库")
         from workflows.reports.sync import ZSXQ2PGSync
 
-        sync = ZSXQ2PGSync(str(group_id))
+        sync = ZSXQ2PGSync(str(group_id), ready_limit=1)
         sync.run()
         result["pg_sync"] = "ok"
     except Exception as e:

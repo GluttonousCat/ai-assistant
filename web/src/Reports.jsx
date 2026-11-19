@@ -13,9 +13,18 @@ const EVIDENCE_LABEL = {
   revision: '预期调整', risk: '风险', industry: '行业观察',
 }
 
+const INSIGHT_GROUPS = [
+  ['theses', '研究判断'],
+  ['assumptions', '关键假设'],
+  ['changes', '预期变化'],
+  ['watchpoints', '跟踪与验证'],
+]
+
+const MATERIAL_LABEL = { original: '研报原文', commentary: '二手解读', unknown: '材料性质待核实' }
+
 function parseAnalysis(raw) {
   try {
-    const parsed = JSON.parse(raw)
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null
   } catch {
     return null
@@ -23,25 +32,70 @@ function parseAnalysis(raw) {
 }
 
 function SourceQuote({ source }) {
-  if (!source?.quote) return null
+  if (typeof source?.quote !== 'string' || !source.quote.trim()) return null
+  const location = source.page ? `PDF 第 ${source.page} 页` : source.segment ? `正文片段 ${source.segment}` : '原文'
   return (
-    <details>
-      <summary className="dim">{source.page ? `PDF 第 ${source.page} 页` : `正文片段 ${source.segment}`} · 查看出处</summary>
+    <details className="report-source">
+      <summary className="dim">{location} · 查看出处</summary>
       <blockquote>{source.quote}</blockquote>
     </details>
   )
 }
 
+function ResearchInsights({ insights }) {
+  return INSIGHT_GROUPS.map(([group, title]) => {
+    const entries = Array.isArray(insights?.[group])
+      ? insights[group].filter(entry => typeof entry?.statement === 'string' && entry.statement.trim())
+      : []
+    if (!entries.length) return null
+    return (
+      <section key={group} className="research-insights">
+        <h3>{title}</h3>
+        <ul>
+          {entries.map((entry, i) => {
+            const attributes = [
+              ['涉及对象', entry.subject], ['观察指标', entry.indicator],
+              ['条件', entry.condition], ['时间范围', entry.horizon],
+            ].filter(([, value]) => typeof value === 'string' && value.trim())
+            return (
+              <li key={i}>
+                <p>{entry.statement}</p>
+                {attributes.length > 0 && (
+                  <dl>
+                    {attributes.map(([label, value]) => (
+                      <div key={label}><dt>{label}</dt><dd>{value}</dd></div>
+                    ))}
+                  </dl>
+                )}
+                <SourceQuote source={entry.source} />
+              </li>
+            )
+          })}
+        </ul>
+      </section>
+    )
+  })
+}
+
 function AnalysisOverview({ data }) {
   if (!data) return null
   const { coverage } = data
+  const materialLabel = MATERIAL_LABEL[data.material_type]
+  const commentary = data.material_type === 'commentary'
   const keyPoints = Array.isArray(data.key_points) ? data.key_points.filter(point => typeof point === 'string') : []
   const risks = Array.isArray(data.risks) ? data.risks.filter(risk => typeof risk === 'string') : []
   return (
     <div className="ai-result">
-      {typeof data.rating === 'string' && data.rating && data.rating !== '无' && (
-        <div className="report-meta"><span className="badge EARLY">报告评级 · {data.rating}</span></div>
+      {(materialLabel || (typeof data.rating === 'string' && data.rating && data.rating !== '无')) && (
+        <div className="report-meta">
+          {materialLabel && <strong>{materialLabel}</strong>}
+          {typeof data.rating === 'string' && data.rating && data.rating !== '无' && (
+            <span className="badge EARLY">{commentary ? '材料转述评级' : '材料所列评级'} · {data.rating}</span>
+          )}
+        </div>
       )}
+      {commentary && <p className="report-attribution">下列判断和预测来自这份解读材料的转述，展开出处可核对材料中的表述。</p>}
+      {materialLabel && data.material_source && <SourceQuote source={data.material_source} />}
       {coverage && (
         <p className="dim">
           已分析 {coverage.analyzed_segments}/{coverage.segment_count} 个正文片段
@@ -50,6 +104,8 @@ function AnalysisOverview({ data }) {
           {coverage.missing_pages?.length > 0 && ` · 缺少 ${coverage.missing_pages.length} 页`}
           {coverage.rejected_forecasts > 0 && ` · ${coverage.rejected_forecasts} 条预测未通过出处核对`}
           {coverage.forecast_conflicts > 0 && ` · ${coverage.forecast_conflicts} 组预测口径冲突`}
+          {coverage.rejected_evidence > 0 && ` · ${coverage.rejected_evidence} 条研究依据未通过核对`}
+          {coverage.rejected_insights > 0 && ` · ${coverage.rejected_insights} 条研究判断的条件或字段未通过核对`}
         </p>
       )}
       {typeof data.core_view === 'string' && data.core_view && <p className="ai-coreview">{data.core_view}</p>}
@@ -58,6 +114,7 @@ function AnalysisOverview({ data }) {
           {keyPoints.map((point, i) => <li key={i}>{point}</li>)}
         </ul>
       )}
+      <ResearchInsights insights={data.research_insights} />
       {risks.length > 0 && (
         <>
           <div className="panel-title">风险提示</div>
@@ -81,16 +138,20 @@ function AnalysisOverview({ data }) {
   )
 }
 
-function ForecastTable({ forecasts }) {
+function ForecastTable({ forecasts, materialType }) {
   if (!forecasts?.length) return null
+  const showSymbols = forecasts.some(forecast => forecast.ts_code || forecast.symbol)
   return (
     <div className="forecast-box">
-      <div className="panel-title">盈利预测与目标价</div>
+      <div className="panel-title">
+        {materialType === 'commentary' ? '解读材料转述的预测与目标价' : '盈利预测与目标价'}
+      </div>
       <table className="grid">
-        <thead><tr><th>指标</th><th>期间</th><th>预测值</th><th>单位</th><th>预测依据</th></tr></thead>
+        <thead><tr>{showSymbols && <th>标的</th>}<th>指标</th><th>期间</th><th>预测值</th><th>单位</th><th>预测依据</th></tr></thead>
         <tbody>
           {forecasts.map((forecast, i) => (
             <tr key={i}>
+              {showSymbols && <td>{forecast.ts_code || forecast.symbol || '—'}</td>}
               <td>{METRIC_LABEL[forecast.metric] || forecast.metric}</td>
               <td className="dim">{forecast.period === 'NA' ? '—' : forecast.period || '—'}</td>
               <td>{forecast.value}</td>
@@ -122,12 +183,15 @@ export default function Reports() {
   const [ai, setAi] = useState(null)
   const aiAbortRef = useRef(null)
   const listRequest = useRef(null)
+  const reloadList = useRef(null)
   const detailRequest = useRef(null)
+  const openDetailId = useRef(null)
   const streamBoxRef = useRef(null)
 
   const pageSize = 15
 
   const load = async (p = page, searchQuery = query) => {
+    reloadList.current = () => load(p, searchQuery)
     listRequest.current?.abort()
     const controller = new AbortController()
     listRequest.current = controller
@@ -152,11 +216,12 @@ export default function Reports() {
   }
 
   useEffect(() => { load(1) }, [analysis, market]) // eslint-disable-line
-  useEffect(() => { window._reportsReload = () => load(page) }, [page, query, analysis, market]) // eslint-disable-line
+  useEffect(() => { window._reportsReload = () => reloadList.current?.() }, [])
   useEffect(() => () => {
     listRequest.current?.abort()
     detailRequest.current?.abort()
     aiAbortRef.current?.()
+    aiAbortRef.current = null
     delete window._reportsReload
   }, [])
 
@@ -173,6 +238,7 @@ export default function Reports() {
   }
 
   async function openDetail(id) {
+    openDetailId.current = id
     detailRequest.current?.abort()
     const controller = new AbortController()
     detailRequest.current = controller
@@ -186,6 +252,7 @@ export default function Reports() {
   }
 
   function closeDetail() {
+    openDetailId.current = null
     detailRequest.current?.abort()
     setDetail(null)
   }
@@ -206,9 +273,7 @@ export default function Reports() {
   }, [ai?.text]) // eslint-disable-line
 
   function closeAi() {
-    // Abort the unfinished SSE connection (the backend analysis thread is unaffected and still completes ingestion)
-    aiAbortRef.current?.()
-    aiAbortRef.current = null
+    // Keep listening while hidden so persisted changes reach the current list and detail.
     setAi(null)
   }
 
@@ -216,7 +281,11 @@ export default function Reports() {
   function analyze(r) {
     setBusyId(r.report_id)
     setAi({ id: r.report_id, title: r.title, stages: [], text: '', data: null, error: null, done: false })
+    let saved = false
+    let streamFinished = false
     const handle = platformApi.analyzeReportStream(r.report_id, (ev) => {
+      if (ev.type === 'data') saved = true
+      if (ev.type === 'done') streamFinished = true
       setAi((prev) => {
         if (!prev || prev.id !== r.report_id) return prev
         if (ev.type === 'stage') {
@@ -225,18 +294,23 @@ export default function Reports() {
         }
         if (ev.type === 'delta') return { ...prev, text: prev.text + ev.text }
         if (ev.type === 'data') return { ...prev, data: ev.data }
-        if (ev.type === 'error') return { ...prev, error: ev.message }
-        if (ev.type === 'done') return { ...prev, done: true, stages: prev.stages.map((s) => ({ ...s, status: 'ok' })) }
+        if (ev.type === 'error') return { ...prev, error: ev.message, stages: prev.stages.map((s) => s.status === 'active' ? { ...s, status: 'failed' } : s) }
+        if (ev.type === 'done') return { ...prev, done: true, stages: prev.stages.map((s) => s.status === 'active' ? { ...s, status: 'ok' } : s) }
         return prev
       })
     })
     aiAbortRef.current = handle.abort
     handle.promise
+      .then(() => {
+        if (aiAbortRef.current === handle.abort && !streamFinished) throw new Error('分析连接中断，可在详情中查看已保存的结果。')
+      })
       .catch((e) => setAi((prev) => (prev && prev.id === r.report_id && !prev.error ? { ...prev, error: e.message } : prev)))
       .finally(() => {
+        if (aiAbortRef.current !== handle.abort) return
         setBusyId(null)
         aiAbortRef.current = null
-        load(page) // refresh the list status badges
+        reloadList.current?.()
+        if (saved && openDetailId.current === r.report_id) openDetail(r.report_id)
       })
   }
 
@@ -391,9 +465,10 @@ export default function Reports() {
                 )}
 
                 <AnalysisOverview data={detail.analysis} />
-                <ForecastTable forecasts={detail.analysis?.analysis_version >= 2
+                <ForecastTable materialType={detail.analysis?.material_type} forecasts={detail.analysis?.analysis_version >= 2
                   ? detail.analysis.forecasts
                   : detail.forecasts?.map(f => ({
+                    ts_code: f.ts_code, symbol: f.symbol,
                     metric: f.forecast_type, period: f.forecast_period,
                     value: f.forecast_value, unit: f.forecast_unit, raw_text: f.raw_text,
                   }))} />
@@ -424,7 +499,7 @@ export default function Reports() {
               {ai.stages.map((s, i) => (
                 <div key={i} className={`agent-step ${s.status}`}>
                   <span className="agent-dot">
-                    {s.status === 'active' ? <span className="spinner-dot" /> : '✓'}
+                    {s.status === 'active' ? <span className="spinner-dot" /> : s.status === 'failed' ? '×' : '✓'}
                   </span>
                   <span>{s.message}</span>
                 </div>
@@ -456,7 +531,7 @@ export default function Reports() {
                   <span className="code">{ai.data.ts_code || (ai.data.symbols || []).join(', ') || '未识别标的'}</span>
                 </div>
                 <AnalysisOverview data={ai.data} />
-                <ForecastTable forecasts={ai.data.forecasts} />
+                <ForecastTable materialType={ai.data.material_type} forecasts={ai.data.forecasts} />
               </div>
             )}
 

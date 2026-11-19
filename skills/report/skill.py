@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from core.json_response import parse_json_response
 import json
+from pathlib import Path
 import re
 from typing import Any, Dict, Iterator, List, Optional
 
@@ -16,7 +17,7 @@ from core.logger import get_logger
 from tools.finance import report_analysis
 from skills.report import normalization as normalize
 from skills.report.document import load_document, qa_context
-from skills.report.extraction import InvalidExtraction, analyze_document
+from skills.report.extraction import ANALYSIS_VERSION, InvalidExtraction, analyze_document, saved_analysis_version
 from skills.report.ocr import queue_ocr
 
 from skills.base import BaseSkill, SkillContext
@@ -109,9 +110,15 @@ class ReportSkill(BaseSkill):
         if not rows:
             context.result = {"summary": "没有待分析的研报 (需先爬取并同步到 PG)"}
             return
-        processed, failed, queued, discarded = [], [], [], []
+        processed, failed, queued, discarded, skipped = [], [], [], [], []
         for row in rows:
             rid = row["report_id"]
+            if params.get("upgrade_only") and (
+                row.get("analysis_status") != "done"
+                or saved_analysis_version(row.get("analysis_json")) >= ANALYSIS_VERSION
+            ):
+                skipped.append(rid)
+                continue
             try:
                 document = load_document(row)
                 if not document.segments and self._queue_missing_pdf(row):
@@ -129,7 +136,10 @@ class ReportSkill(BaseSkill):
                 context.log(f"研报 #{rid} 提取完成")
             else:
                 current = report_analysis.load_report(rid)
-                changed = not current or current.get("analysis_json") != row.get("analysis_json")
+                changed = not current or any(
+                    current.get(key) != row.get(key)
+                    for key in ("analysis_json", "file_path", "content_text")
+                )
                 (discarded if changed else failed).append(rid)
                 context.log(f"研报 #{rid} 未保存本次结果")
         context.result = {
@@ -138,6 +148,7 @@ class ReportSkill(BaseSkill):
             "failed": failed,
             "queued_ocr": queued,
             "discarded": discarded,
+            "skipped": skipped,
         }
 
     def extract_stream(self, report_id: int) -> Iterator[Dict[str, Any]]:
@@ -170,7 +181,7 @@ class ReportSkill(BaseSkill):
                     "完成后会自动回到列表, 可再次点击 AI 分析",
                 )
             else:
-                report_analysis.mark_failed(row["report_id"])
+                report_analysis.mark_failed(row)
                 yield _ev("error", message="该研报无正文文本且无源文件, 无法分析")
             return
 
@@ -181,20 +192,15 @@ class ReportSkill(BaseSkill):
                     data = event["data"]
                 else:
                     yield event
+            yield _ev("stage", stage="parse", message="核对出处并规范化评级、代码和预测口径…")
+            summary = self._apply_extract_result(row, data)
         except InvalidExtraction as e:
-            report_analysis.mark_failed(report_id)
+            report_analysis.mark_failed(row)
             yield _ev("error", message=str(e))
             return
         except Exception as e:
-            yield _ev("error", message=f"LLM 调用失败: {e}")
+            yield _ev("error", message=f"研报分析失败: {e}")
             return
-
-        yield _ev(
-            "stage",
-            stage="parse",
-            message="核对出处并规范化评级、代码和预测口径…",
-        )
-        summary = self._apply_extract_result(row, data)
         if summary is None:
             yield _ev(
                 "error",
@@ -204,8 +210,9 @@ class ReportSkill(BaseSkill):
         yield _ev(
             "stage",
             stage="save",
-            message=f"结果入库: fin.report_meta + fin.report_forecast "
-            f"(盈利预测 {summary['forecast_count']} 条)",
+            message=(f"解读材料及转述预测 {summary['forecast_count']} 条已保存"
+                     if summary.get("material_type") == "commentary"
+                     else f"分析结果及盈利预测 {summary['forecast_count']} 条已入库"),
         )
         self._after_extract(row["report_id"])
         yield _ev("data", data=summary)
@@ -214,7 +221,7 @@ class ReportSkill(BaseSkill):
 
     def _queue_missing_pdf(self, row: Dict[str, Any]) -> bool:
         path = row.get("file_path") or ""
-        if not path.lower().endswith(".pdf"):
+        if not path.lower().endswith(".pdf") or not Path(path).is_file():
             return False
         self._vision_backfill({**row, "content_chars": 0})
         return True
@@ -227,10 +234,10 @@ class ReportSkill(BaseSkill):
             for event in analyze_document(document, title, self._extract_llm()):
                 if event["type"] == "result":
                     data = event["data"]
+            summary = self._apply_extract_result(row, data)
         except InvalidExtraction:
-            report_analysis.mark_failed(row["report_id"])
+            report_analysis.mark_failed(row)
             return None
-        summary = self._apply_extract_result(row, data)
         if summary:
             self._after_extract(row["report_id"])
         return summary
@@ -257,9 +264,11 @@ class ReportSkill(BaseSkill):
         self, row: Dict[str, Any], data: Dict[str, Any]
     ) -> Optional[Dict[str, Any]]:
         fields, forecasts, summary = normalize.prepare_extraction(row, data)
-        if report_analysis.save_extraction(
-            row["report_id"], fields, forecasts, previous_analysis=row.get("analysis_json")
+        if data.get("analysis_version") and not any(
+            summary.get(key) for key in ("core_view", "key_points", "risks", "evidence", "forecasts")
         ):
+            raise InvalidExtraction("未提取到研究观点、可核对的证据或有效预测，原有分析已保留")
+        if report_analysis.save_extraction(row, fields, forecasts):
             return summary
         logger.info("#%s 提取完成但记录已被更新或去重, 结果丢弃", row["report_id"])
         return None
@@ -301,8 +310,11 @@ class ReportSkill(BaseSkill):
                 data = self._parse_json(r.get("analysis_json") or "")
                 if not isinstance(data, dict):
                     data = {}
+            insights = data.get("research_insights")
             reports_payload.append(
                 {
+                    "report_id": r["report_id"],
+                    "material_type": data.get("material_type") or "unknown",
                     "title": r["title"],
                     "market": r.get("market") or (data.get("market") or ""),
                     "org": r.get("org_name") or (data.get("org_name") or ""),
@@ -313,14 +325,31 @@ class ReportSkill(BaseSkill):
                     "forecasts": data.get("forecasts") or [],
                     "risks": data.get("risks") or [],
                     "evidence": (data.get("evidence") or [])[:8],
+                    "research_insights": insights if isinstance(insights, dict) else {},
+                    "partial_coverage": (data.get("coverage") or {}).get("partial")
+                    if isinstance(data.get("coverage"), dict) else None,
                     "publish_date": str(r.get("publish_date") or ""),
                 }
             )
 
         question = params.get("question") or ""
+        prompt_reports = []
+        for report in reports_payload:
+            # Keep the full forecasts in the response. Bound each report's share of
+            # the synthesis prompt and retain anchors for attribution.
+            comparisons = {
+                kind: entries[:2] for kind, entries in report["research_insights"].items()
+                if isinstance(entries, list) and entries
+            }
+            prompt_reports.append({
+                **report, "research_insights": comparisons,
+                "evidence": [] if comparisons else report["evidence"][:4],
+                "forecasts": report["forecasts"][:12],
+                "total_forecasts": len(report["forecasts"]),
+            })
         summary = llm.invoke(
             REPORT_SUMMARY_PROMPT.format(
-                reports_json=json.dumps(reports_payload, ensure_ascii=False, indent=1),
+                reports_json=json.dumps(prompt_reports, ensure_ascii=False),
                 user_question=question or "(无)",
             )
         )
@@ -342,13 +371,16 @@ class ReportSkill(BaseSkill):
         if not row:
             context.result = {"summary": f"研报 #{report_id} 不存在"}
             return
-        passages = qa_context(load_document(row), question)
+        analysis = self._parse_json(row.get("analysis_json") or "")
+        passages = qa_context(load_document(row), question, analysis)
         if not passages:
             context.result = {"summary": "该研报无文本内容"}
             return
         answer = self._llm().invoke(
             REPORT_QA_PROMPT.format(
-                title=row["title"], report_text="\n\n".join(p.render() for p in passages), question=question
+                title=row["title"], report_text="\n\n".join(p.render() for p in passages),
+                material_type=analysis.get("material_type", "unknown") if isinstance(analysis, dict) else "unknown",
+                question=question,
             )
         )
         context.result = {"summary": answer, "report_id": row["report_id"]}

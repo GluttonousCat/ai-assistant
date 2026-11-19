@@ -72,9 +72,14 @@ def forecast_divergence(rows) -> List[Dict]:
     df["value"] = df.apply(
         lambda r: to_yuan(r["forecast_value"], r["forecast_unit"]), axis=1
     )
+    # Compare scaled values only when they describe the same unit and currency.
+    df["unit"] = df["forecast_unit"].fillna("").str.strip().replace({
+        "万亿元": "元", "亿元": "元", "百万元": "元", "万元": "元",
+        "亿元/年": "元/年", "倍数": "倍",
+    })
     out = []
-    for (ftype, period), g in df.groupby(["forecast_type", "forecast_period"]):
-        if len(g) < 2:
+    for (ftype, period, unit), g in df.groupby(["forecast_type", "forecast_period", "unit"]):
+        if not unit or len(g) < 2:
             continue
         vals = g["value"]
         mean = float(vals.mean())
@@ -86,6 +91,7 @@ def forecast_divergence(rows) -> List[Dict]:
             {
                 "forecast_type": ftype,
                 "forecast_period": str(period),
+                "unit": unit,
                 "n_forecasts": int(len(g)),
                 "n_orgs": int(g["org_name"].nunique()),
                 "mean": mean,
@@ -160,9 +166,11 @@ def report_views(rows) -> List[Dict]:
     out = []
     for r in rows:
         rating = core_view = None
+        material_type = "unknown"
         try:
             aj = json.loads(r["analysis_json"] or "{}")
             rating = aj.get("rating")
+            material_type = aj.get("material_type") or "unknown"
             cv = aj.get("core_view") or aj.get("summary")
             core_view = str(cv)[:120] + "…" if cv and len(str(cv)) > 120 else cv
         except Exception:
@@ -173,6 +181,7 @@ def report_views(rows) -> List[Dict]:
                 "org": r["org_name"],
                 "date": str(r["publish_date"]),
                 "rating": rating,
+                "material_type": material_type,
                 "core_view": core_view,
             }
         )

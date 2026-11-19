@@ -152,7 +152,7 @@ class FilesDatabase(BaseDatabase):
             SELECT file_id, topic_id, name, size, hash, local_path, create_time
             FROM files
             WHERE download_status = 'completed' AND local_path IS NOT NULL
-            ORDER BY create_time DESC
+            ORDER BY download_time DESC, create_time DESC, file_id DESC
             LIMIT ?
         ''', (limit,))
         cols = [d[0] for d in self.cursor.description]

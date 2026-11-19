@@ -6,7 +6,7 @@ validation/analysis pipeline.
 
 Strategy:
 - PDF: prefer PyMuPDF (fitz); fall back to pdfplumber / pypdf when missing
-- DOCX: python-docx; degrade to unzipping word/document.xml directly via zipfile
+- DOCX: read paragraphs and table rows in document order from word/document.xml
 - TXT/MD: read as utf-8 / gbk
 """
 from __future__ import annotations
@@ -78,28 +78,23 @@ class ReportExtractor:
     def _extract_docx(self, path: str) -> str:
         # .doc (legacy format) is binary; if zipfile cannot open it, raise and
         # let the caller mark failure
-        try:
-            import docx  # python-docx
-
-            document = docx.Document(path)
-            parts = [p.text for p in document.paragraphs]
-            for table in document.tables:
-                for row in table.rows:
-                    parts.append(" | ".join(cell.text for cell in row.cells))
-            return "\n".join(parts)
-        except ImportError:
-            pass
-
-        # Fallback: read word/document.xml directly via zipfile
         with zipfile.ZipFile(path) as z:
             xml = z.read("word/document.xml")
-        root = ElementTree.fromstring(xml)
-        ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
-        paragraphs = []
-        for p in root.iter("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}p"):
-            texts = [t.text or "" for t in p.iter("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t")]
-            paragraphs.append("".join(texts))
-        return "\n".join(paragraphs)
+        w = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+
+        def blocks(element):
+            for child in element:
+                if child.tag == w + "p":
+                    yield "".join(
+                        node.text or "" if node.tag == w + "t" else " "
+                        for node in child.iter() if node.tag in (w + "t", w + "tab", w + "br")
+                    )
+                elif child.tag == w + "tr":
+                    yield " | ".join(" ".join(blocks(cell)) for cell in child.findall(w + "tc"))
+                else:
+                    yield from blocks(child)
+
+        return "\n".join(blocks(ElementTree.fromstring(xml)))
 
     def _extract_text(self, path: str) -> str:
         for enc in ("utf-8", "gbk", "gb18030", "latin-1"):

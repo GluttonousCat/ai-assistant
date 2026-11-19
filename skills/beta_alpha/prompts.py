@@ -122,7 +122,7 @@ CHAIN_REFINE_PROMPT = """你设计的产业链种子模板经过「关键词 vs 
 # ---------- alpha: four-quadrant summary ----------
 ALPHA_SUMMARY_PROMPT = """你是个股投研分析师。基于以下「预期差四象限」结构化数据, 写一段对 {stock_name}({ts_code}) 的预期差分析。
 
-1) 券商盈利预测分歧 (fin.report_forecast, 已按单位归一到元):
+1) 券商盈利预测分歧（按预测期间、指标和可比单位统计；金额见 unit）:
 {forecast}
 
 2) 财务动量 (fina_indicator, 报告期同比/单季):
@@ -131,7 +131,7 @@ ALPHA_SUMMARY_PROMPT = """你是个股投研分析师。基于以下「预期差
 3) 估值水位 (daily_basic 近3年分位, 0=最低 100=最高):
 {valuation}
 
-4) 近期研报观点 (知识星球研报库):
+4) 近期材料观点（commentary 须标明来自二手解读，不能计为独立券商观点；unknown 的出处待核实）:
 {views}
 
 写作要求:

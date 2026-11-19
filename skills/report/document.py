@@ -12,6 +12,19 @@ _CHUNK_CHARS = 24_000
 _MAX_CHUNKS = 12
 _SEGMENT_CHARS = 8_000
 _QA_CHARS = 12_000
+# Prefer informative sections within each band of an oversized report.
+# Match section names and measure labels rather than isolated market keywords.
+_RESEARCH_SECTIONS = tuple(re.compile(pattern, re.I) for pattern in (
+    r"投资逻辑|核心假设|核心观点|investment thesis|key assumptions?|investment case",
+    r"盈利预测|估值方法|目标价|forecast revisions?|earnings estimates?|price target|valuation method",
+    r"超预期|预期差|一致预期|较前次|vs\.? consensus|versus consensus|estimate changes?",
+    r"催化剂|催化因素|敏感性分析|风险因素|sensitivity analysis|key risks?|catalysts?",
+))
+
+
+def _section_score(batch):
+    body = "\n".join(segment.text for segment in batch)
+    return sum(bool(pattern.search(body)) for pattern in _RESEARCH_SECTIONS)
 
 
 @dataclass(frozen=True)
@@ -55,10 +68,17 @@ def _segments(pages):
 
 def load_document(row) -> Document:
     """Prefer the original PDF layout when available, retaining legacy text fallbacks."""
-    text = row.get("content_text") or ""
+    # Older pending attachments may carry the posting author's commentary in
+    # content_text. Only the recovered attachment can establish their source.
     path = row.get("file_path")
+    zsxq_attachment = row.get("source") in ("zsxq", "zsxq_file")
+    text = row.get("content_text") or ""
+    if (zsxq_attachment and row.get("extraction_status") in ("pending", "pending_ocr")
+            and not _OCR_PAGE.match(text)):
+        text = ""
     is_pdf = Path(path or row.get("file_name") or "").suffix.lower() == ".pdf"
-    local_pdf = is_pdf and path and Path(path).is_file()
+    local_file = bool(path and Path(path).is_file())
+    local_pdf = is_pdf and local_file
     markers = list(_OCR_PAGE.finditer(text))
     if markers and markers[0].start() == 0:
         ends = [marker.start() for marker in markers[1:]] + [len(text)]
@@ -73,8 +93,19 @@ def load_document(row) -> Document:
     if pages and any(page.strip() for page in pages):
         missing = tuple(i for i, body in enumerate(pages, 1) if not body.strip())
         return Document(_segments(enumerate(pages, 1)), "pdf_text", len(pages), missing)
-    if pages and row.get("extraction_status") != "extracted":
+    if pages and (zsxq_attachment or row.get("extraction_status") != "extracted"):
         return Document([], "pdf_ocr", len(pages), tuple(range(1, len(pages) + 1)))
+    if zsxq_attachment and (not local_file or local_pdf):
+        # Older ingestion also merged posting text into "extracted" attachment
+        # rows. Without a file path or usable local PDF pages its origin is ambiguous.
+        return Document([], "stored_text", incomplete_text=True)
+    suffix = Path(path or "").suffix.lower()
+    if suffix in {".docx", ".doc", ".txt", ".md", ".markdown"} and (
+        not text or (row.get("content_chars") or 0) > len(text)
+    ) and Path(path).is_file():
+        complete = get_extractor().extract(path)
+        if complete and len(complete) > len(text):
+            return Document(_segments([(None, complete)]), "local_file")
     return Document(
         _segments([(None, text)]),
         "stored_text",
@@ -96,9 +127,18 @@ def extraction_batches(document: Document):
     if batch:
         batches.append(batch)
     if len(batches) > _MAX_CHUNKS:
-        # Include both ends of an oversized report and spread the remaining work.
+        # Preserve both ends and coverage across the source. Within each band
+        # prioritize sections that explain revisions, assumptions or catalysts.
         last = len(batches) - 1
-        batches = [batches[i * last // (_MAX_CHUNKS - 1)] for i in range(_MAX_CHUNKS)]
+        bands = _MAX_CHUNKS - 2
+        selected = [batches[0]]
+        for i in range(bands):
+            start = 1 + i * (last - 1) // bands
+            stop = 1 + (i + 1) * (last - 1) // bands
+            middle = (start + stop - 1) / 2
+            best = max(range(start, stop), key=lambda j: (_section_score(batches[j]), -abs(j - middle)))
+            selected.append(batches[best])
+        batches = [*selected, batches[-1]]
     return batches
 
 
@@ -109,29 +149,64 @@ def _terms(text: str) -> set[str]:
     return terms
 
 
-def qa_context(document: Document, question: str):
-    """Select passages across the document with lexical relevance and page labels."""
+def _source_hints(analysis, query_terms):
+    """Use indexed Chinese statements to locate their quotes in the current original."""
+    hints = {}
+    if not isinstance(analysis, dict):
+        return hints
+    groups = [analysis.get("evidence"), analysis.get("forecasts")]
+    insights = analysis.get("research_insights")
+    if isinstance(insights, dict):
+        groups.extend(insights.values())
+    for group in groups:
+        if not isinstance(group, list):
+            continue
+        for item in group:
+            if not isinstance(item, dict) or not isinstance(item.get("source"), dict):
+                continue
+            source = item["source"]
+            quote = source.get("quote")
+            number = source.get("segment")
+            if type(number) is not int or not isinstance(quote, str) or not 8 <= len(quote) <= 360:
+                continue
+            labels = " ".join(
+                item[k] for k in ("statement", "subject", "indicator", "condition", "horizon", "raw_text")
+                if isinstance(item.get(k), str)
+            )
+            matched = query_terms & _terms(labels)
+            if matched:
+                hints.setdefault(number, []).append(("".join(quote.casefold().split()), matched))
+    return hints
+
+
+def qa_context(document: Document, question: str, analysis=None):
+    """Rank original passages, including cross-language matches through checked quotes."""
     if sum(len(segment.render()) + 2 for segment in document.segments) <= _QA_CHARS:
         return document.segments
-    passages = [
-        Segment(number, segment.page, part)
-        for number, (segment, part) in enumerate(
-            ((segment, part) for segment in document.segments for part in _pieces(segment.text, 2400)), 1
-        )
-    ]
     query_terms = _terms(question)
-    hits = [query_terms & _terms(p.text) for p in passages]
+    hints = _source_hints(analysis, query_terms)
+    passages, hits = [], []
+    for segment in document.segments:
+        for part in _pieces(segment.text, 2400):
+            passages.append(Segment(segment.number, segment.page, part))
+            terms = query_terms & _terms(part)
+            if segment.number in hints:
+                body = "".join(part.casefold().split())
+                for quote, translated_terms in hints[segment.number]:
+                    if quote in body:
+                        terms.update(translated_terms)
+            hits.append(terms)
     weights = {
         term: math.log1p(len(passages) / (1 + sum(term in passage_hits for passage_hits in hits)))
         for term in query_terms
     }
     ranked = sorted(
-        zip(passages, hits), key=lambda pair: (-sum(weights[t] for t in pair[1]), pair[0].number)
+        range(len(passages)), key=lambda i: -sum(weights[t] for t in sorted(hits[i]))
     )
     selected, size = [], 0
-    for passage, _ in ranked:
-        n = len(passage.render()) + 2
+    for i in ranked:
+        n = len(passages[i].render()) + 2
         if size + n <= _QA_CHARS:
-            selected.append(passage)
+            selected.append(i)
             size += n
-    return sorted(selected, key=lambda passage: passage.number)
+    return [passages[i] for i in sorted(selected)]

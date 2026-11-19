@@ -205,12 +205,14 @@ def analyze_pending(limit: int = 50, force: bool = False,
     with PgClient() as pg:
         if force:
             ids = [r["report_id"] for r in pg.fetch_all(
-                "SELECT report_id FROM fin.report_meta ORDER BY report_id "
+                "SELECT report_id FROM fin.report_meta "
+                "WHERE COALESCE(source,'') NOT IN ('zsxq_topic','zsxq_topic_pdf_absent') ORDER BY report_id "
                 "LIMIT %s OFFSET %s", (limit, offset))]
         else:
             ids = [r["report_id"] for r in pg.fetch_all(
                 "SELECT report_id FROM fin.report_meta "
                 "WHERE (org_name IS NULL OR org_name = '' OR industry IS NULL OR industry = '') "
+                "AND COALESCE(source,'') NOT IN ('zsxq_topic','zsxq_topic_pdf_absent') "
                 "ORDER BY report_id LIMIT %s", (limit,))]
     if not ids:
         return 0

@@ -82,7 +82,8 @@ DB 实时角色校验）、`storage/pg.py`（PgClient 是上下文管理器，�
   ※ 中文翻译版(文件名"中文版-"等, is_chinese_translated)下载/入库层直接过滤, 保留英文原版
   → 每下载1个立即(逐篇流水, 下载完即"已分析"前端可用):
      sync_zxsq_to_pg 入库(返回新report_id) → LLM Analysis(仅文件名→标题/机构/标的/行业/地区/市场)
-     → 深度提取(正文→评级/盈利预测/tags, 单篇, 输出一律中文) → merge_report_duplicates 去重(txt并入PDF)
+     → 深度提取(正文→材料性质/判断/假设/预期变化/跟踪条件/评级/预测，原文引述保留原语言)
+     → 去重按附件身份判定，同话题可保留多份原件，话题文字独立留存；存量分批升级见 docs/frontend/reports.md
   ※ 深度提取也可由研报中心「AI 分析」按钮 SSE 流式触发(弹窗展示 Agent 流程+模型输出,
     POST /api/reports/{id}/analyze/stream; 与批量链路共用 _apply_extract_result)
   ※ 轮末批量提取(限额8/15篇)与 analyze_pending 仅作兜底清积压, 不在主链路上

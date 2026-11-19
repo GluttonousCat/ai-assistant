@@ -46,7 +46,7 @@ docs/
 | 策略创作工作台/可组合指标条件/自然语言规则/后台回测、主板60F策略、442/532分批及研究偏差 | [agents/quant_backtesting.md](agents/quant_backtesting.md) |
 | 改登录/注册逻辑 | [frontend/login.md](frontend/login.md) |
 | 改问答链路/加流式 | [frontend/chat.md](frontend/chat.md) |
-| 改研报展示/提取 | [frontend/reports.md](frontend/reports.md) |
+| 改研报展示、附件去重、分段提取、观点溯源或存量升级 | [frontend/reports.md](frontend/reports.md) |
 | 换 LLM 模型 | [agents/llm_models.md](agents/llm_models.md) |
 | 处理扫描件 PDF | [agents/scanned_report_agent.md](agents/scanned_report_agent.md) |
 | 加/改产业链Beta、个股Alpha Skill | [agents/chain_beta_skill.md](agents/chain_beta_skill.md) |

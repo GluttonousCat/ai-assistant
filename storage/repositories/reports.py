@@ -1,5 +1,6 @@
 """Report catalog persistence. HTTP and model execution stay outside storage."""
 
+from pathlib import Path
 from typing import Optional
 
 from storage.pg import PgClient
@@ -154,6 +155,16 @@ def report_stocks():
     return {"items": rows}
 
 
+def _has_unverified_attachment_text(row):
+    if row.get("source") not in ("zsxq", "zsxq_file"):
+        return False
+    body = row.get("content_text") or ""
+    if body.startswith("[[PDF_PAGE:"):
+        return False
+    path = row.get("file_path")
+    return row.get("extraction_status") in ("pending", "pending_ocr") or not (path and Path(path).is_file())
+
+
 def report_detail(report_id: int):
     with PgClient(read_only=True) as pg:
         row = pg.fetch_one(
@@ -171,7 +182,7 @@ def report_detail(report_id: int):
             raise LookupError("研报不存在")
         forecasts = pg.fetch_all(
             (
-                "SELECT forecast_type, forecast_period, forecast_value, "
+                "SELECT ts_code, symbol, forecast_type, forecast_period, forecast_value, "
                 "forecast_unit, confidence, raw_text FROM fin.report_forecast WHERE "
                 "report_id=%s ORDER BY forecast_period, forecast_type"
             ),
@@ -184,8 +195,9 @@ def report_detail(report_id: int):
                 if k == "created_at"
                 else row[k].strftime("%Y-%m-%d")
             )
-    row["content_text"] = (
-        row.pop("content_text_cn", None) or row.get("content_text") or ""
+    translation = row.pop("content_text_cn", None)
+    row["content_text"] = "" if _has_unverified_attachment_text(row) else (
+        translation or row.get("content_text") or ""
     )[:8000]
     row["forecasts"] = forecasts
     return row
@@ -246,7 +258,8 @@ def add_report(ts_code, title, content):
 
 
 def search_research(keyword="", stock=None, days=180, limit=10):
-    conds, args = ([], [])
+    conds = ["COALESCE(rm.source,'') NOT IN ('zsxq_topic','zsxq_topic_pdf_absent')"]
+    args = []
     if stock:
         hit = stock
         conds.append("(rm.ts_code=%s OR rm.title ILIKE %s OR rm.tags_targets ILIKE %s)")
@@ -281,9 +294,12 @@ def report_body(report_id):
         row = pg.fetch_one(
             (
                 "SELECT report_id, title, org_name, publish_date, market, target,"
-                "        industry, content_text, analysis_json FROM fin.report_meta "
-                "WHERE report_id=%s"
+                "        industry, content_text, analysis_json, source, extraction_status, file_path "
+                "FROM fin.report_meta WHERE report_id=%s "
+                "AND COALESCE(source,'') NOT IN ('zsxq_topic','zsxq_topic_pdf_absent')"
             ),
             (int(report_id),),
         )
+    if row and _has_unverified_attachment_text(row):
+        row["content_text"] = ""
     return row

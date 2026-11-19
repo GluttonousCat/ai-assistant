@@ -42,18 +42,21 @@ def load_translation(report_id):
         )
 
 
-def save_translation(report_id, text):
+def save_translation(report_id, text, source_text):
     with PgClient() as pg:
         return pg.execute(
-            "UPDATE fin.report_meta SET content_text_cn=%s WHERE report_id=%s AND content_text_cn IS NULL",
-            (text, report_id),
+            "UPDATE fin.report_meta SET content_text_cn=%s WHERE report_id=%s AND content_text_cn IS NULL "
+            "AND content_text IS NOT DISTINCT FROM %s",
+            (text, report_id, source_text),
         )
 
 
 def translation_candidates():
     with PgClient(read_only=True) as pg:
         return pg.fetch_all(
-            "SELECT report_id, left(content_text, 2000) head FROM fin.report_meta WHERE content_chars > 200 AND content_text_cn IS NULL"
+            "SELECT report_id, left(content_text, 2000) head FROM fin.report_meta "
+            "WHERE content_chars > 200 AND content_text_cn IS NULL "
+            "AND COALESCE(source,'') NOT IN ('zsxq_topic','zsxq_topic_pdf_absent')"
         )
 
 
