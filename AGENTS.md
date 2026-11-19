@@ -39,7 +39,7 @@ jobs/        quant_worker(个人工作台持久队列/OS锁串行/独立任务�
              market_digest_scheduler(后端每日18点/当日启动补漏/独立于17点行情/Codex任务已暂停) /
              intraday_scheduler(交易日10:32/11:32/14:02/15:02，收盘120秒后采集/扫描；当天固定来源与池/串行OS锁/回执/启动只补最新到期轮次) /
              cache_intraday_prefix(当天已完成60F前缀/小窗口/断点续传/不推进完整日状态) / scan_intraday_watch(已发布60F规则复用/盘中80分观察/此前完整日K/独立原子归档，PNG可选导出，不覆盖正式快照) /
-             send_market_digest(后端定时或CLI调用;≥60分入场/观察分组;日K+60F同源前复权PNG/CSV;SMTP TLS/逐部分回执/延迟至20点;缺授权码不发) /
+             send_market_digest(后端定时或CLI调用;大于75分入场/观察分组;日K+60F同源前复权PNG/CSV;SMTP TLS/逐部分回执/延迟至20点;缺授权码不发) /
              annotate_trend_context(离线派生母趋势/局部触发快照，原始pattern/eligible/风控不改；盘中只用已完成日K；scan_trend后续自动标注) /
              research_online_60f(v21每月只训练已结束历史标签/指数相对排序/532入场风险2.5%，2026-01-01—11-12样本内+8.69%/回撤2.76%，双倍滑点+7.14%但压力单股尾损-11.68%；预热持币/当前名单偏差/不改默认；领域online_priority在skills/quant) /
              research_market_context(指数环境/分批节奏/相对排序/软退出耐心四轮88组，均未达标；只离线研究，不改默认；market_context与signal_priority在skills/quant) /
@@ -197,7 +197,7 @@ vision=qwen3.8-flash（deepseek 不收图片）。**思考开关由 `llm.enable_
 | 安全 | [docs/ops/security.md](docs/ops/security.md) | 分层防护/事件审计/加固清单 |
 | 结构优化方案 | [docs/ops/module_boundaries.md](docs/ops/module_boundaries.md) | 模块化单体/仓储收敛/DDL与Agent拆分/旧入口兼容；DDL/路由/执行/认证及财务查询已首轮收敛；遗留依赖登记并阻止新增 |
 | 行情与新闻选型 | [docs/ops/data_sources.md](docs/ops/data_sources.md) | 五组指数成分池/免费盘后分钟与付费实时/新闻快照；含价格/探测记录；2026年60F五指数并集已入库，新闻待接入 |
-| 每日图文邮件 | [docs/ops/market_digest.md](docs/ops/market_digest.md) | 后端每日18点/无需Codex/启动补漏/评分≥60/入场与观察分组/日K与60F/SMTP与去重 |
+| 每日图文邮件 | [docs/ops/market_digest.md](docs/ops/market_digest.md) | 后端每日18点/无需Codex/启动补漏/评分大于75/入场与观察分组/日K与60F/SMTP与去重 |
 | 日线定时采集 | [docs/ops/daily_sync.md](docs/ops/daily_sync.md) | 交易日上海时间17:00/日K→60F→看板/启动补漏/5交易日重叠回补/逐股审计与失败重试 |
 | 数据处理 | [docs/ops/data_process.md](docs/ops/data_process.md) | 历史：同步全流程 |
 | 爬虫 | [docs/ops/spider.md](docs/ops/spider.md) | 历史：反检测设计 |

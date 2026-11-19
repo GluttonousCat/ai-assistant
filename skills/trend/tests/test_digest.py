@@ -11,9 +11,10 @@ def row(code, score=65, *, eligible=False, fresh=True, name="示例股票"):
 
 
 def test_threshold_and_candidate_scope_match_dashboard_without_promoting_observations():
-    rows = [row("a", 60), row("b", 59.9), row("c", 90, fresh=False),
-            row("d", 70, name="*ST示例"), row("e", math.nan),
-            row("f", 60, eligible=True, fresh=False)]
+    rows = [row("a", 75.1), row("b", 74.9), row("c", 90, fresh=False),
+            row("d", 80, name="*ST示例"), row("e", math.nan),
+            row("f", 76, eligible=True, fresh=False),
+            row("g", 75, eligible=True), row("h", 75)]
     snapshot = {"metadata": {"config": {"fresh_reversal": True}}, "data": rows}
     selected = select_stocks(snapshot)
     assert [r["ts_code"] for r in selected] == ["f", "a"]
@@ -32,6 +33,7 @@ def test_html_groups_observations_and_entries_and_escapes_provider_text():
     cards = [{"row": r, "cid": f"stock-{n}", "png": b"png"} for n, r in enumerate(rows)]
     html = render_html({"as_of": "2026-11-13 15:00:00"}, cards, date(2026, 11, 15))
     assert "入场候选 · 1只" in html and "观察候选 · 1只" in html
+    assert "&gt; 75" in html
     assert "休市日报" in html and "2026-11-13 15:00" in html
     assert '<img src=x onerror=' not in html and '&lt;img src=x' in html
     assert 'src="cid:stock-0"' in html

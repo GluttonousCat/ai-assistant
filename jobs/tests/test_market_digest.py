@@ -36,6 +36,7 @@ def test_send_is_once_per_local_day_and_accepts_utc_clock(delivery, monkeypatch)
     assert job.deliver_once(utc)["status"] == "sent"
     assert job.deliver_once(utc)["already_processed"]
     assert len(calls) == 1 and calls[0]["To"] == "reader@example.com"
+    assert ">60分候选 1只" in str(calls[0]["Subject"])
 
 
 def test_before_18_does_not_send_or_load_credentials(monkeypatch):

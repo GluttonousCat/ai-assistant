@@ -22,7 +22,7 @@ from zoneinfo import ZoneInfo
 from core.config import get_config
 from core.local_state import file_lock, read_json, write_json
 from core.logger import get_logger
-from skills.trend.digest import export_csv, render_html, select_stocks, stock_cards
+from skills.trend.digest import DEFAULT_MIN_SCORE, export_csv, render_html, select_stocks, stock_cards
 from tools.market.refresh_clock import expected_date
 from tools.market.refresh_state import read_state as market_state
 from tools.market.trend_data import load_dashboard, scan_cutoffs
@@ -35,7 +35,7 @@ MAX_MESSAGE_BYTES = 8 * 1024 * 1024
 
 def options():
     cfg = get_config()
-    minimum = float(cfg.env("MARKET_DIGEST_MIN_SCORE", cfg.get("email_digest.min_score", 60)))
+    minimum = float(cfg.env("MARKET_DIGEST_MIN_SCORE", cfg.get("email_digest.min_score", DEFAULT_MIN_SCORE)))
     if not 0 <= minimum <= 100:
         raise ValueError("邮件评分门槛必须为0~100")
     observations = str(cfg.env("MARKET_DIGEST_OBSERVATIONS", cfg.get("email_digest.observations", True))).lower() in ("true", "1", "yes")
@@ -83,7 +83,7 @@ def _messages(snapshot, cards, report_day, minimum, recipient, sender, *, previe
     run = snapshot["run_id"] if snapshot else "none"
     message_id = f"<afr.{kind}.{report_day}.{profile}.{run}.1@{sender.split('@')[1]}>"
     subject = ("[测试] " if test else "[预览] " if preview else "") + f"Alpha Finance Radar | {report_day} | "
-    subject += "行情更新延迟" if delayed else f"≥{minimum:g}分候选 {len(cards)}只"
+    subject += "行情更新延迟" if delayed else f">{minimum:g}分候选 {len(cards)}只"
     text = f"{subject}\n数据截止: {snapshot['as_of'] if snapshot else '暂无'}（上海时间）\n"
     text += "观察不代表入场，评分不代表胜率。正文按入场/观察分组，每股展示日K和60F图片。\n"
     text += "\n".join(f"{c['row']['ts_code']} {c['row']['name']} {c['row']['score']}分 · {c['row']['state']}" for c in cards)

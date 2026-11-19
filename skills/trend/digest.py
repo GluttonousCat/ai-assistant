@@ -9,6 +9,7 @@ from skills.trend.chart_history import stock_chart as stock_detail
 from tools.market.chart_image import render_pair
 from tools.market.universe import risk_name
 
+DEFAULT_MIN_SCORE = 75
 TYPES = {"trend_pullback": ("↑ 趋势回调", "#80b8ff"), "base_rebound": ("■ 底部反转", "#c6a0f6")}
 
 
@@ -24,7 +25,7 @@ def opportunity(row):
     return TYPES.get(kind, ("· 待识别", "#aaa294"))
 
 
-def select_stocks(snapshot, minimum=60., observations=True):
+def select_stocks(snapshot, minimum=DEFAULT_MIN_SCORE, observations=True):
     cfg = snapshot["metadata"]["config"]
     selected = []
     for row in snapshot["data"]:
@@ -32,7 +33,7 @@ def select_stocks(snapshot, minimum=60., observations=True):
             score = float(row.get("score", 0))
         except (ValueError, TypeError):
             continue
-        if not math.isfinite(score) or score < minimum or risk_name(row.get("name")):
+        if not math.isfinite(score) or score <= minimum or risk_name(row.get("name")):
             continue
         # Same candidate view as StockDashboard; mature/rejected structures do
         # not become digest candidates merely because a stale score is high.
@@ -67,7 +68,7 @@ def _value(value, suffix=""):
     return "—" if value is None else f"{float(value):.2f}{suffix}"
 
 
-def render_html(snapshot, cards, report_day: date, minimum=60., *, preview=False, delayed=False, test=False):
+def render_html(snapshot, cards, report_day: date, minimum=DEFAULT_MIN_SCORE, *, preview=False, delayed=False, test=False):
     e = lambda value: escape(str(value if value is not None else "—"))
     count = len(cards)
     cutoff = str(snapshot["as_of"]).replace("T", " ")[:16] if snapshot else "暂无"
@@ -116,7 +117,7 @@ def render_html(snapshot, cards, report_day: date, minimum=60., *, preview=False
     return f'''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Alpha Finance Radar · {report_day}</title></head>
 <body style="margin:0;padding:0;background:#0c0b09;color:#d8cbbb;font-family:'Microsoft YaHei',Arial,sans-serif"><a id="digest-top" name="digest-top"></a><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#0c0b09;table-layout:fixed"><tr><td align="center" style="padding:28px 12px"><table role="presentation" width="820" cellpadding="0" cellspacing="0" style="width:100%;max-width:820px;table-layout:fixed;word-wrap:break-word"><tr><td>
 <p style="color:#b79b70;font-size:11px;letter-spacing:3px;margin:0 0 16px">ALPHA FINANCE RADAR / DAILY DIGEST</p><h1 style="font-size:31px;color:#f2e8d9;font-weight:500;margin:0 0 10px">盘后趋势雷达</h1><p style="font-size:13px;color:#b39f80;margin:0 0 22px">{e(alert)} · 上海时间 {report_day}</p>
-<table role="presentation" width="100%" cellpadding="12" cellspacing="0" style="border:1px solid #453824;background:#1d1811;table-layout:fixed"><tr><td width="27%"><span style="font-size:12px;color:#ac9b82">评分门槛</span><br><strong style="font-size:27px;color:#dfb671">≥ {minimum:g}</strong></td><td width="27%"><span style="font-size:12px;color:#ac9b82">符合条件</span><br><strong style="font-size:27px;color:#f2e8d9">{count} 只</strong></td><td><span style="font-size:12px;color:#ac9b82">行情 / 策略截止</span><br><strong style="font-size:15px;color:#f2e8d9">{e(cutoff)}</strong></td></tr></table>
+<table role="presentation" width="100%" cellpadding="12" cellspacing="0" style="border:1px solid #453824;background:#1d1811;table-layout:fixed"><tr><td width="27%"><span style="font-size:12px;color:#ac9b82">评分门槛</span><br><strong style="font-size:27px;color:#dfb671">&gt; {minimum:g}</strong></td><td width="27%"><span style="font-size:12px;color:#ac9b82">符合条件</span><br><strong style="font-size:27px;color:#f2e8d9">{count} 只</strong></td><td><span style="font-size:12px;color:#ac9b82">行情 / 策略截止</span><br><strong style="font-size:15px;color:#f2e8d9">{e(cutoff)}</strong></td></tr></table>
 <table role="presentation" width="100%" cellpadding="12" cellspacing="0" style="background:#171410;font-size:13px"><tr><td style="color:#b4a793">{entry_summary}　{observation_summary}<br><span style="color:#80b8ff;line-height:2">↑ 趋势回调 {pullbacks}</span>　<span style="color:#c6a0f6">■ 底部反转 {reversals}</span></td></tr></table>
 <p style="font-size:12px;color:#958a79;line-height:1.9">60F判断趋势，日K用于日级执行。观察候选与入场候选分开展示；评分用于排序，不是胜率或收益承诺。K线与前端使用同一快照、相同真实因子前复权和M8/13/21。</p>
 {empty}{''.join(directory)}{''.join(sections)}
