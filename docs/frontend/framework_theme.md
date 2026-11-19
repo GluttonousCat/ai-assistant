@@ -16,12 +16,12 @@ web/src/
 ├── Root.jsx            # 登录态判定: 有 token → Platform, 无 → Login
 ├── Login.jsx           # 登录/注册页 (../frontend/login.md)
 ├── Platform.jsx        # 主框架: 侧边导航 + 用户区 + hash 路由(Agent/产业链/研报中心/实时监控/用户管理)
-├── AgentChat.jsx       # Agent 问答 (chat.md)
+├── chat/AgentChat.jsx       # Agent 问答 (chat.md)
 ├── Reports.jsx         # 研报中心 (reports.md)
 ├── ChainView.jsx       # 产业链页
 ├── market/             # 股票看板/60F图表/局部样式 (stock_dashboard.md)
 ├── UserAdmin.jsx       # 用户管理 (仅超级管理员)
-├── Monitor.jsx         # 实时监控 (adminOnly)
+├── monitor/Monitor.jsx         # 实时监控 (adminOnly)
 ├── platformApi.js      # 平台 API 客户端 (JWT + SSE)
 └── index.css           # 全局主题 (CSS 变量体系)
 ```

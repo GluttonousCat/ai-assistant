@@ -146,8 +146,8 @@ def _extract_sql(text: str) -> Optional[str]:
 def _alias_digest(limit: int = 34) -> str:
     """Metric Chinese-alias -> field mapping digest (goes into the prompt; length-capped)."""
     try:
-        from skills.fin_query.skill import METRIC_ALIAS_FULL
-        items = list(METRIC_ALIAS_FULL.items())[:limit]
+        from tools.finance.metrics import QUERY_METRICS
+        items = list(QUERY_METRICS.items())[:limit]
         return "; ".join(f"{k}={v['field']}" for k, v in items)
     except Exception:  # noqa: BLE001
         return ""

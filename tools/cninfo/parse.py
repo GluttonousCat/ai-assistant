@@ -62,7 +62,7 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from core.logger import get_logger
-from tools.pdf.text import extract_text as _extract_text
+from tools.pdf.markdown import to_markdown as pdf_to_markdown
 
 from .downloader import DOWNLOAD_ROOT
 from .filters import normalize_ts_code
@@ -75,31 +75,11 @@ MD_ROOT = Path("output/cninfo/md")
 
 
 def to_markdown(path: str) -> str:
-    """PDF → MD. pymupdf4llm main path (margins strip headers/footers); on
-    failure/over-short output fall back to the plain text layer + page
-    markers (keeps chapters locatable)."""
+    """Require over 100 Markdown characters before locating annual-report sections."""
     try:
-        import pymupdf4llm
-
-        md = pymupdf4llm.to_markdown(
-            doc=path, margins=(45, 45, 0, 0), write_images=False
-        )
-        if isinstance(md, str) and len(md.strip()) > 100:
-            return md
-        logger.warning(f"MD 转换结果过短, 走文本降级: {path}")
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"MD 转换失败降级纯文本 {path}: {e}")
-
-    text = _extract_text(path)
-    if not text:
+        return pdf_to_markdown(path, min_text_length=101)
+    except FileNotFoundError:
         return ""
-    out, n = [], 0
-    for i, line in enumerate(text.splitlines()):
-        if i and i % 40 == 0:
-            n += 1
-            out.append(f"\n\n----- [第{n}页段] -----\n\n")
-        out.append(line)
-    return "".join(out)
 
 
 # ---------------- ① location & ② boundaries ----------------

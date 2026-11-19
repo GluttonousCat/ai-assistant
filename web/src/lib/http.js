@@ -1,4 +1,4 @@
-import { createEventParser } from '../sse.js'
+import { createEventParser } from './sse.js'
 
 // Platform API client (JWT-authenticated)
 const TOKEN_KEY = 'aiass_token'

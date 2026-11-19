@@ -14,18 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 import yaml
-
-
-def _find_project_root() -> Path:
-    """Walk upward to locate the project root containing config.yaml"""
-    current = Path(__file__).resolve().parent
-    for _ in range(6):
-        if (current / "config.yaml").exists():
-            return current
-        if current.parent == current:
-            break
-        current = current.parent
-    return Path(__file__).resolve().parent.parent
+from core.paths import project_root as _find_project_root
 
 
 def _load_dotenv(path: Path) -> None:

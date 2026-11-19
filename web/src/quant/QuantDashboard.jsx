@@ -5,7 +5,7 @@ import TrancheFills from './TrancheFills'
 import StrategyWorkspace from './StrategyWorkspace'
 import { describeRule } from './ruleVocabulary'
 import { summarizeDraft } from './workspaceRules'
-import OpportunityBadge from '../OpportunityBadge'
+import OpportunityBadge from '../market/OpportunityBadge'
 import { preferredRun, marketResearchLabel, marketPolicyText } from './researchPolicy'
 import './quant.css'
 

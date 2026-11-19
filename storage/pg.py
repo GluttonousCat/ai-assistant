@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import os
 import threading
+import time
 from uuid import uuid4
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -25,6 +26,18 @@ _CONN_KW = dict(
     # retried by upper layers
     keepalives=1, keepalives_idle=30, keepalives_interval=10, keepalives_count=3,
 )
+
+
+def retry_on_disconnect(action):
+    """Repeat one idempotent database work unit after a transient disconnect."""
+    for attempt in range(3):
+        try:
+            return action()
+        except (psycopg2.OperationalError, psycopg2.InterfaceError):
+            if attempt == 2:
+                raise
+            logger.warning("数据库连接中断，重试当前工作单元 %s/3", attempt + 1)
+            time.sleep(attempt + 1)
 
 
 def pg_config() -> Dict[str, Any]:

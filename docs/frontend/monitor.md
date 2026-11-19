@@ -9,7 +9,7 @@
 - `storage/repositories/observability.py` 读取任务记录、已有回测队列、盘后行情/盘中60F/邮件回执；回测只返回进度摘要，不暴露用户标识、完整策略和请求。页面保留当前任务及最近60条结束记录；观察文件不参与任务调度、断点或交易决策。
 - `tools/monitoring.py` 组合本地观测和 PG 状态。PG 最多一个后台探测线程，结果缓存10秒；阻塞探测不会阻塞本地状态推送或不断新增探测线程。鉴权仍按真实数据库角色校验。
 - `api/monitor_api.py`：`GET /api/monitor/state`、`POST /api/monitor/stream`（每2秒）和 `GET /api/monitor/logs`，整组 `require_admin`。文件读取放线程池，不在事件循环中同步读盘。
-- `web/src/Monitor.jsx` 保留 Agent 指标；`web/src/monitor/BackgroundMonitor.jsx` 展示后台任务及日志。侧边栏入口及原有权限不变。
+- `web/src/monitor/Monitor.jsx` 保留 Agent 指标；`web/src/monitor/BackgroundMonitor.jsx` 展示后台任务及日志。侧边栏入口及原有权限不变。
 
 ## 需求优化
 

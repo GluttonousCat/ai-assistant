@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from jobs.lifecycle import lifespan
+from workflows.runtime.lifecycle import lifespan
 from api.middleware import AuthMiddleware
 from api import router
 from api.finance import fin_router
@@ -50,16 +50,13 @@ _WEB_DIST = Path(__file__).parent / "web" / "dist"
 if _WEB_DIST.exists():
     app.mount("/assets", StaticFiles(directory=_WEB_DIST / "assets"), name="assets")
 
+    @app.get("/login", name="login_page", include_in_schema=False)
     @app.get("/", include_in_schema=False)
     async def index():
         """Platform index (login + console, React SPA)"""
         return FileResponse(_WEB_DIST / "index.html")
 
-    @app.get("/login", include_in_schema=False)
-    async def login_page():
-        return FileResponse(_WEB_DIST / "index.html")
-
-
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8208)
+    from run_server import main
+
+    main(app)

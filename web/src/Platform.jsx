@@ -1,11 +1,11 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 
 import FeatureBoundary from './components/FeatureBoundary'
-const AgentChat = lazy(() => import('./AgentChat'))
+const AgentChat = lazy(() => import('./chat/AgentChat'))
 const Reports = lazy(() => import('./Reports'))
 const ChainView = lazy(() => import('./ChainView'))
 const UserAdmin = lazy(() => import('./UserAdmin'))
-const Monitor = lazy(() => import('./Monitor'))
+const Monitor = lazy(() => import('./monitor/Monitor'))
 const StockDashboard = lazy(() => import('./market/StockDashboard'))
 const QuantDashboard = lazy(() => import('./quant/QuantDashboard'))
 

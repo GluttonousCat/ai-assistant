@@ -37,7 +37,7 @@ docs/
 | 快速理解整个项目 | [AGENTS.md](../AGENTS.md) |
 | 查看技术审核、修复与后续工作 | [ops/technical_review.md](ops/technical_review.md) |
 | 数据库命名与兼容迁移 | [ops/schema_naming.md](ops/schema_naming.md) |
-| 规范重构、模块边界、批量写入与 SQL 性能验证 | [ops/module_boundaries.md](ops/module_boundaries.md) |
+| 工程目录、后台工作流、旧命令兼容、回归与 SQL 性能验证 | [ops/module_boundaries.md](ops/module_boundaries.md) |
 | 分钟行情、非ST扩池补齐、新闻快照和指数成分股池 | [ops/data_sources.md](ops/data_sources.md) |
 | 后端每天18:00趋势选股图文邮件（无需Codex） | [ops/market_digest.md](ops/market_digest.md) |
 | 查看后台采集进度、运行日志和Agent监控 | [frontend/monitor.md](frontend/monitor.md) |

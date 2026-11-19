@@ -49,7 +49,7 @@ tools/list → tools/call, 校验:
 3. 真实调用 `resolve_stock` 返回 `ok=true` 信封
 4. stdout 纯净性:非 JSON-RPC 行直接报错(server 已把模块 print 重定向 stderr)
 
-实测通过(本机 PG 可用时);进程内协议行为另见 `harness/mcp/tests/test_server.py`。
+实测通过(本机 PG 可用时);进程内协议行为另见 `tests/harness/mcp/test_server.py`。
 
 ## 四、边界与后续
 

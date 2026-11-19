@@ -73,7 +73,7 @@ AgentChat.jsx (session_id 每页生成一次, 全程携带)
 | `harness/session.py` | 会话（对话历史完整轮配对注入，6 轮/6000 字符双限截断 + 股票槽位继承） |
 | `harness/llm.py` | 新增 `invoke_with_tools`（function-calling，返回完整 message） |
 | `api/finance.py` | 新端点 `POST /api/v1/agent/stream`（旧 `/query/stream` 已移除） |
-| `web/src/AgentChat.jsx` | 切换到 agentStream + session_id + 🤖 徽章 + 工具步骤元信息 |
+| `web/src/chat/AgentChat.jsx` | 切换到 agentStream + session_id + 🤖 徽章 + 工具步骤元信息 |
 | `harness/mcp/server.py` | stdio MCP 服务默认只读模式（`ALPHA_MCP_READ_ONLY=1`） |
 
 ## 二、需求与设计决策
@@ -113,7 +113,7 @@ AgentChat.jsx (session_id 每页生成一次, 全程携带)
 | 2026-09-08 | 快车道（零 LLM 版）延迟实测：简单查询 0.4~1.9s（Agent 循环 ~12s，带 LLM 解读版 28~40s）；同轮并行执行单测验证（3 调用 0.3s 并行 < 0.8s 断言）；复合问题全栈验证 resolve_stock→(query_financials ∥ valuation_percentile) 双数据完整作答 | ✅ |
 | 2026-09-07 | 工具记录泄漏修复后复测：T1「中际旭创的券商盈利预测怎么看」（5 连工具，含 1 次失败）回答无 `[本轮工具调用]` 块；T2「那它的估值现在贵不贵」继承标的、仅 1 次估值工具、无泄漏 | ✅ |
 | 2026-09-07 | **E2E 用户原例**（单进程双轮，真实 LLM+PG）：T1「中际旭创2025年报净利润」→ "107.97 亿（累计口径）"；T2「环比竟然下降了，数据对吗？」（零线索）→ 继承标的+指标 → 重新取数拆单季 → "单季逐季抬升，没有环比下降，是累计口径假象；同比 +109%" | ✅ |
-| 2026-09-07 | pytest `harness/tests` + `harness/mcp/tests`（提示词知识/历史配对截断/TTL/沙盒参数/只读清单/表格提取） | 31 passed |
+| 2026-09-07 | pytest `tests/harness` + `tests/harness/mcp`（提示词知识/历史配对截断/TTL/沙盒参数/只读清单/表格提取） | 31 passed |
 | 2026-09-07 | E2E T2 耗时 14s / 工具 1 次（history 生效省掉 resolve_stock） | ✅ |
 | 2026-09-07 | `npm run build` 前端构建 | ✅ |
 

@@ -6,7 +6,7 @@
 
 页面已升级为策略创作工作台（workspace v2，保留v1模板）：在表单制定60F底背离反转/上涨回调规则，或通过自然语言生成可编辑的参数草稿；预览后保存不可变版本、提交后台回测，再查看净值及逐笔/分批成交。组合模式通过声明式条件树自由组合60F/日K指标、比较、交叉、全部/任一条件及嵌套分组；模板模式保留原v8形态与442/532。日K指标只有用户明确添加时才参与条件；所有订单仍在次日开盘执行，不生成任意Python代码。
 
-分层：`api.quant_api → skills.quant.workspace/workspace_models → tools.market.quant_workspace → storage.repositories.quant_workspace`；应用启停由`jobs.lifecycle`启动`jobs.quant_worker`，后者以OS锁串行监督独立进程，调用`workspace_runner → prepare_swing或rule_prepare → engine/tranche_engine`。单任务默认15分钟超时，配置`quant.workspace_timeout_seconds`（10—3600秒）；超时或关闭服务会终止该任务进程树并释放队列。HTTP只保存配置、入队及读取状态/报告，不抓供应商行情、不在请求中运行回测。
+分层：`api.quant_api → skills.quant.workspace/workspace_models → tools.market.quant_workspace → storage.repositories.quant_workspace`；应用启停由`workflows.runtime.lifecycle`启动`workflows.quant.worker`，后者以OS锁串行监督独立进程，调用`workspace_runner → prepare_swing或rule_prepare → engine/tranche_engine`。单任务默认15分钟超时，配置`quant.workspace_timeout_seconds`（10—3600秒）；超时或关闭服务会终止该任务进程树并释放队列。HTTP只保存配置、入队及读取状态/报告，不抓供应商行情、不在请求中运行回测。
 
 工作台按JWT用户隔离，策略版本、任务及结果原子保存于`output/quant/workspace/{drafts,tasks,results}`。每次保存产生新版本，每次任务冻结配置和区间；修改或复制不会改旧成绩。队列请求编号幂等，同编号不同参数拒绝；单用户最多3个未完成任务、全局最多20个。启动遇到上次running任务，已有完整结果则恢复完成，否则标为中断，不悄悄重复运行。此版本是单机文件持久化，迁移部署需要同时备份output目录；不是分布式任务系统。
 

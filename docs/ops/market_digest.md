@@ -1,13 +1,13 @@
 # 盘后趋势图文邮件
 
-> 更新：2026-11-19。入口 `jobs/send_market_digest.py`；领域 `skills/trend/digest.py`；绘图 `tools/market/chart_image.py`；传输 `tools/notifications/email.py`。
+> 更新：2026-11-19。入口 `workflows/market/send_close_digest.py`；领域 `skills/trend/digest.py`；绘图 `tools/market/chart_image.py`；传输 `tools/notifications/email.py`。
 
 ## 一、系统设计
 
-每天上海时间18:00，由后端`jobs/market_digest_scheduler.py`调度，FastAPI lifespan负责启停。
+每天上海时间18:00，由后端`workflows/market/digest_scheduler.py`调度，FastAPI lifespan负责启停。
 交易日上海时间 11:55 另有一封午间简报。只读取当天 11:30 的已发布盘中快照；该轮未完成时每分钟检查一次，
 最晚等待至 13:30。午间独立保存发送回执，重启仅在当天窗口内补漏；收盘日报继续沿用自己的回执和评分门槛。
-生命周期入口沿用`jobs.scheduler.get_digest_scheduler()`，没有增加core/API到新任务模块的跨层导入。
+生命周期入口沿用`workflows.market.daily_scheduler.get_digest_scheduler()`，没有增加core/API到新任务模块的跨层导入。
 邮件调用已有`deliver_once()`，数据库、绘图与SMTP放到`asyncio.to_thread`，等待/重试使用asyncio事件，保持HTTP可响应。
 
 17点行情和18点邮件各自持有独立后台task；财务同步即使拖到18点后也不会阻塞发信。
@@ -24,10 +24,10 @@
 沿用原有实时管理员权限校验，不新增公开接口。手动CLI仍保留作离线排查：
 
 ```powershell
-.venv/Scripts/python.exe -m jobs.send_market_digest --send --wait
+.venv/Scripts/python.exe -m workflows.market.send_close_digest --send --wait
 ```
 
-普通调用不发信：`.venv/Scripts/python.exe -m jobs.send_market_digest`生成HTML/EML/PNG本地预览。
+普通调用不发信：`.venv/Scripts/python.exe -m workflows.market.send_close_digest`生成HTML/EML/PNG本地预览。
 实际发送正式日报必须显式带`--send`，18点前返回not_due。没有SMTP配置返回blocked，不能将预览成功当作发送成功。
 用户显式要求测试时使用`--test-send`：任意时刻可用最近已发布快照，主题及正文标“测试”，清楚标注实际截止日，
 发送记录放在独立`test/`目录，不占正式日报名额。不确定回执默认不重发；用户核对未收到后可显式使用
@@ -42,7 +42,7 @@
 
 - 午间邮件先写历史标的的变化，再写截至 11:30 仍符合条件的当日新观察。历史跟踪沿用看板最近 20 个交易日归档口径，同一股票使用最近一轮；变动正文优先，完整跟踪名单附 CSV。
 - 跌破历史参考位按真实复权因子换算到同一价格基准。观察进出、结构起点、机会类型变化比较相邻已发布轮次。数据不足或旧轮无逐股状态时单独标注。
-- `MIDDAY_DIGEST_ENABLED=false` 可单独关闭午间邮件。`.venv/Scripts/python.exe -m jobs.send_intraday_digest --day YYYY-MM-DD` 生成本地预览；管理员调度状态包含 `midday_digest`。
+- `MIDDAY_DIGEST_ENABLED=false` 可单独关闭午间邮件。`.venv/Scripts/python.exe -m workflows.market.send_midday_digest --day YYYY-MM-DD` 生成本地预览；管理员调度状态包含 `midday_digest`。
 
 - 每股先展示标的概况、走势解读、信号与风险。申万二级行业来自股票主数据，涨跌幅、总市值、PE TTM 和 PB 读取快照对应交易日。母趋势、量比、信号与参考止损来自已发布快照，缺少的指标省略。
 - 一封 HTML 日报按入场和观察分组。每只标的先放浅底文字点评，下方紧接该股的日 K 和 60F 图，再进入下一只标的。图表竖排，桌面最大 960px，窄屏随宽度缩放。

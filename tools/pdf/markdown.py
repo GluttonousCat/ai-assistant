@@ -6,8 +6,6 @@ import json
 from pathlib import Path
 from typing import List, Optional, Union
 
-import pymupdf4llm
-
 from core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -17,7 +15,9 @@ def to_markdown(path: str,
                 output_md_path: Optional[str] = None,
                 pages: Optional[Union[List[int], range]] = None,
                 ignore_header_footer: bool = True,
-                save_as_chunks: bool = False) -> Union[str, List[dict]]:
+                save_as_chunks: bool = False,
+                *, min_text_length: int = 0) -> Union[str, List[dict]]:
+    """Convert a PDF, optionally requiring enough Markdown text for section parsing."""
 
     pdf_file = Path(path)
     if not pdf_file.exists():
@@ -27,17 +27,15 @@ def to_markdown(path: str,
     page_list = list(pages) if pages is not None else None
 
     try:
-        result: Union[str, List[dict]]
-        if save_as_chunks:
-            result = pymupdf4llm.to_markdown(
-                doc=str(pdf_file), pages=page_list, margins=margins,
-                page_chunks=True, write_images=False)
-        else:
-            result = pymupdf4llm.to_markdown(
-                doc=str(pdf_file), pages=page_list, margins=margins,
-                write_images=False)
+        import pymupdf4llm
 
-        if (isinstance(result, str) and len(result.strip()) > 100) or result:
+        result = pymupdf4llm.to_markdown(
+            doc=str(pdf_file), pages=page_list, margins=margins,
+            page_chunks=save_as_chunks, write_images=False)
+        if result and (
+            save_as_chunks or not min_text_length
+            or isinstance(result, str) and len(result.strip()) >= min_text_length
+        ):
             if output_md_path:
                 _write(Path(output_md_path), result)
             return result

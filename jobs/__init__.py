@@ -1,3 +1,7 @@
-"""
-Job layer (jobs): scheduled tasks (Tushare 17:00 Shanghai / report crawl 00:00 & 12:00) + pipeline entry scripts.
-"""
+"""Historical research programs and backwards-compatible workflow commands."""
+import sys
+
+from jobs._compat import WorkflowAliases
+
+if WorkflowAliases not in sys.meta_path:
+    sys.meta_path.append(WorkflowAliases)

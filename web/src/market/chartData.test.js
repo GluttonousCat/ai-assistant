@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { boundedCache, captureView, chartRows, restoreView, seriesUpdate, signalMarkers } from './chartData.js'
-import { opportunityFor } from '../opportunities.js'
+import { opportunityFor } from './opportunities.js'
 
 const bar = (time, close = 10) => ({ time, open: 10, high: 12, low: 9, close, volume: 100, ma13: 10, ma21: null })
 

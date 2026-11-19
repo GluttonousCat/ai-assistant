@@ -1,6 +1,6 @@
 # 股票行情与60F/日K趋势策略
 
-> 更新于 2026-11-19。对应 `web/src/market/`、`skills/trend/`、`jobs/scan_trend.py`。
+> 更新于 2026-11-19。对应 `web/src/market/`、`skills/trend/`、`workflows/market/scan_trend.py`。
 
 ## 一、系统设计
 
@@ -14,7 +14,7 @@
 只按上海时间15点界限读取完整日K，不调用外部供应商、LLM或订单服务；重IO在线程运行。
 每个入选日采用最后一次发布快照，返回原版本与实际发布时间；回填快照不表示当日已能取得该信号。
 
-`parent_context.py`新增独立的日K母趋势标注（daily-parent-wave-context-v1），将母趋势与局部触发分开：同一个60F止跌反转，在保留上涨结构的日K波段里可解释为回调再起。原始pattern、eligible、分数、检查和止损字段保留，派生context_pattern用于展示，不把新分类冒充旧策略的新入场信号。双周期单股图复用已有原生日K，离线扫描及`jobs.annotate_trend_context`为列表增加相同背景；没有新增行情供应商请求或DDL。
+`parent_context.py`新增独立的日K母趋势标注（daily-parent-wave-context-v1），将母趋势与局部触发分开：同一个60F止跌反转，在保留上涨结构的日K波段里可解释为回调再起。原始pattern、eligible、分数、检查和止损字段保留，派生context_pattern用于展示，不把新分类冒充旧策略的新入场信号。双周期单股图复用已有原生日K，离线扫描及`workflows.market.annotate_trend_context`为列表增加相同背景；没有新增行情供应商请求或DDL。
 
 v9有序结构仅在量化研究页发布固定对照：60F启动—推进—缩量回调—再转强、低点测试反转，附已确认支撑的结构持有；不覆盖本页旧快照或把未重算的历史信号改名。量化成交可查看推进起点、高点及第几次回调，主方案仍需由回测证据评估。
 
@@ -24,7 +24,7 @@ v9有序结构仅在量化研究页发布固定对照：60F启动—推进—缩
 HTTP只读取已发布快照和单股本地K线，不在请求期间扫描全市场或调用行情供应商。
 
 ```text
-jobs.scan_trend → skills/trend/strategy（纯计算）
+workflows.market.scan_trend → skills/trend/strategy（纯计算）
                → tools/market/trend_data → storage/repositories/trend
 api/market_api → skills/trend/service → tools/market/trend_data → storage
 web/src/market/StockDashboard → platformApi → /api/v1/market/dashboard
@@ -68,7 +68,7 @@ web/src/market/StockDashboard → platformApi → /api/v1/market/dashboard
 
 - 显示“日K母趋势背景＋局部触发”，如“日K上涨结构内回调 · 局部止跌反转”。日K MA13/21用于确认此前的上升结构，调整期间保留波段锚点，支持20余根日K的回调；局部MA走弱或局部反转不自动等于日K底部反转。观察与入场状态仍分开。
 - 趋势回调使用蓝色↑，底部反转使用紫色■：股票列表、详情标题、K线图例/标记及量化成交/未平仓统一展示。确认标记分别为箭头/方块，观察仍为圆点，灰色起势背景保持非交易语义。底部反转是机会分类，不等于已确认长期底部。
-- `web/src/opportunities.js`集中展示映射，`OpportunityBadge.jsx`复用标签；优先后端pattern/family，仅在缺失时用明确的旧再起/反转观察字段兼容。未分类不默认当作反转。机会筛选使用同一映射，CSV新增“机会分类”，保留原有细分类型。此改动不重算信号或改写历史筛选规则。
+- `web/src/market/opportunities.js`集中展示映射，`OpportunityBadge.jsx`复用标签；优先后端pattern/family，仅在缺失时用明确的旧再起/反转观察字段兼容。未分类不默认当作反转。机会筛选使用同一映射，CSV新增“机会分类”，保留原有细分类型。此改动不重算信号或改写历史筛选规则。
 - 五指数筛选、名称/代码搜索、日K入场候选/观察/自选/全部视图；旧v4另保留首阳/再起视图。
 - K线图内提供日K/60F切换，默认显示日K；切换只改变图表。当前列表/统计/解释/CSV固定为“60F趋势→日K入场”，
   60F图只展示趋势背景，日K图标注入场；日K初始止损可在同尺度60F图参考，明确标注周期。旧v4仍保持原60F列表口径。
@@ -149,7 +149,7 @@ python -c "from core.config import get_config; get_config(); from storage.schema
 后续增加`GET /api/v1/market/tracking/episodes?view=active|archive`，静态路由置于`tracking/{code}`之前。
 仓储在两次读取中取得每天最后发布的候选及空扫描日，先以分数做候选超集缩减，再由原领域筛选复核。
 轮次ID由代码、策略配置、60F起点及首见日期生成，追加重复日不改变ID。观察/确认升级保留为一轮，首次状态仍冻结。
-历史日K因子用`python -m jobs.repair_trend_factors --daily --start 2021-09-01 --end 2026-11-16`离线补缺，不推进日线同步水位线，HTTP不访问供应商。
+历史日K因子用`python -m workflows.market.repair_factors --daily --start 2021-09-01 --end 2026-11-16`离线补缺，不推进日线同步水位线，HTTP不访问供应商。
 
 `GET /api/v1/market/tracking?signal_date=YYYY-MM-DD`返回最近最多120个已有快照日期、所选冻结候选及前向统计；不存在日期返回404，不扫描历史全池补造名单。
 `GET /api/v1/market/tracking/{code}?run_id=<uuid>&timeframe=1D|60F`校验原候选归属，延伸展示本地行情，原名单与新行情范围分开。
@@ -164,7 +164,7 @@ python -c "from core.config import get_config; get_config(); from storage.schema
 
 盘中用merge_asof向后匹配已完成日K，10:30不能使用当天15:00的日K结果；旧双周期独立截止时取母趋势截止与信号截止的较早者，复权也在截断后进行。缺少日K/真实因子时不编造背景，不沿用旧派生分类。
 
-`python -m jobs.annotate_trend_context`读取已有快照、本地原生日K并按股票/日期配对，生成新的派生快照，保留原version/config/as_of及全部信号字段，元数据独立记录parent_context_version/config/source_run_id；原快照不覆盖。结果先落`output/trend/parent_context_v1/snapshot.json`，`--publish-only`可幂等补发布。后续`scan_trend`会自动加入母趋势标注。这个分类层不改变原入场检查或既有量化回测数值，若用作新的买卖条件须另做研究验证。
+`python -m workflows.market.annotate_trend_context`读取已有快照、本地原生日K并按股票/日期配对，生成新的派生快照，保留原version/config/as_of及全部信号字段，元数据独立记录parent_context_version/config/source_run_id；原快照不覆盖。结果先落`output/trend/parent_context_v1/snapshot.json`，`--publish-only`可幂等补发布。后续`scan_trend`会自动加入母趋势标注。这个分类层不改变原入场检查或既有量化回测数值，若用作新的买卖条件须另做研究验证。
 
 ### 2026-11-16 机会类型标注
 
@@ -217,7 +217,7 @@ M8/M13/M21均为收盘价简单移动平均；“机构线”是所用周期的�
 图表按截止日期前复权，回测按首个真实因子归一；均线价差/斜率用ATR×1e-8容差处理理论相等的情况，
 防止不同价格基准因舍入翻转信号。这是数值精度处理，不是为了保留某只股票调整经济门槛。
 退出方案与2026年分段对照见[量化策略与回测](../agents/quant_backtesting.md)。
-`python -m jobs.scan_trend`默认扫描此版本；`--config`传入旧TrendConfig可显式重放v4。
+`python -m workflows.market.scan_trend`默认扫描此版本；`--config`传入旧TrendConfig可显式重放v4。
 
 ### 4.1 v4.1两类机会与走势背景（历史兼容）
 
@@ -356,16 +356,16 @@ v2质量排序采用条件通过程度、本段效率、2→3→4的时效分与
 
 ```powershell
 # 仅修复已导入60F所需的因子，不推进日线同步水位线
-.venv/Scripts/python.exe -m jobs.repair_trend_factors --start 2026-01-01 --end 2026-11-12
+.venv/Scripts/python.exe -m workflows.market.repair_factors --start 2026-01-01 --end 2026-11-12
 
 # 默认使用行情与因子共有的最新已结束K线
-.venv/Scripts/python.exe -m jobs.scan_trend
+.venv/Scripts/python.exe -m workflows.market.scan_trend
 
 # 默认2个批次并行读取/计算，最多4个；按代码排序后仍一次性发布
-.venv/Scripts/python.exe -m jobs.scan_trend --workers 2
+.venv/Scripts/python.exe -m workflows.market.scan_trend --workers 2
 
 # 指定收盘日与参数；config.json只包含TrendConfig的字段
-.venv/Scripts/python.exe -m jobs.scan_trend --as-of 2026-11-12 --config output/market/trend/config.json
+.venv/Scripts/python.exe -m workflows.market.scan_trend --as-of 2026-11-12 --config output/market/trend/config.json
 
 # 前端变更后构建
 cd web
@@ -459,7 +459,7 @@ A股回测执行的下一根模型价、T+1、真实涨跌停、停牌、费用�
 
 
 2026-11-13（v5.1双周期重构）：按最后补充采用“60F趋势→日K入场”，M8/M13/M21均为简单均线。
-中国核电601985.SH的原生样本保存于`skills/trend/tests/fixtures/cnnc_20260824.csv`：8月24日15:00满足止跌修复与日K反包；
+中国核电601985.SH的原生样本保存于`tests/skills/trend/fixtures/cnnc_20260824.csv`：8月24日15:00满足止跌修复与日K反包；
 8月25/26日不重复报单，未收齐当日60F不放行。逐段前缀与三种复权换基准测试通过。
 全池快照`e5fc95df-e4e7-4d20-aa28-2d79045ffa9b`截止11月12日15:00：3800只中日K入场候选5只、
 60F趋势就绪1216只（含5只候选），等待日K确认1211只；3只停牌末根滞后待补。
@@ -482,7 +482,7 @@ Ruff、分层检查通过；前端9项校验与构建通过，lint保留6项既�
 接口证据`output/market/trend/ma13_21_live_verification.json`，截图`ma13_21_verified.jpg`。
 
 2026-11-13（v4.1走势阶段修复）：真实回归样本为九洲药业603456.SH，截到11月12日收盘的
-480根原生60F与120根原生日K，已按该日复权，保存于`skills/trend/tests/fixtures/jiuzhou_20261112.csv`。
+480根原生60F与120根原生日K，已按该日复权，保存于`tests/skills/trend/fixtures/jiuzhou_20261112.csv`。
 11月4日日K开15.05、收16.21；60F当日14:00已有结构转强。
 旧v4在11月6日局部回撤后清段，11月12日15:00重新报“首阳观察”；v4.1保留11月4日14:00背景，
 将11月10日A分支与11月12日B分支均识别为回调再起，后者显示“回调再起观察”。

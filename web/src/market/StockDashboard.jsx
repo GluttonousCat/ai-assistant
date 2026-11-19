@@ -4,10 +4,10 @@ import { startPolling } from '../lib/polling'
 import TrendChart from './TrendChart'
 import MarketFreshness from './MarketFreshness'
 import useStockChart from './useStockChart'
-import OpportunityBadge from '../OpportunityBadge'
+import OpportunityBadge from './OpportunityBadge'
 import IndustryLabel from './IndustryLabel'
 import { stockSearchText, meetsDisplayScore, MIN_DISPLAY_SCORE } from './stockList'
-import { opportunityFor } from '../opportunities'
+import { opportunityFor } from './opportunities'
 import './dashboard.css'
 
 const INDICES = { '000016.SH': '上证50', '000300.SH': '沪深300', '000905.SH': '中证500', '000852.SH': '中证1000', '932000.CSI': '中证2000' }

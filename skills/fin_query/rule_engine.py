@@ -22,31 +22,6 @@ from typing import Dict, List, Optional, Tuple
 from tools.finance.stock_kb import get_stock_kb, parse_time_phrase
 from tools.finance.sql_builder import build_single_query, build_compare_query
 
-# Action words (stripped uniformly)
-_ACTION_WORDS = [
-    "帮我查一下", "帮我查询", "帮我查", "请问", "查一下", "查一查",
-    "查询", "看看", "查看", "请查", "帮我", "请", "查", "看",
-    "的", "、", "和", "与", "哪个", "谁", "更高", "更高", "对比", "比较",
-    "最近", "最新", "近",
-]
-# Time words (stripped uniformly)
-_TIME_WORDS = [
-    "最近一年", "最近两年", "最近三年", "近一年", "近两年", "近三年",
-    "今年以来", "去年", "今年", "上季度", "本季度",
-]
-
-
-def _clean_entity_text(text: str) -> str:
-    """Strip action/connective/time words from the text"""
-    t = text
-    for w in _ACTION_WORDS:
-        t = t.replace(w, "")
-    for w in _TIME_WORDS:
-        t = t.replace(w, "")
-    t = re.sub(r"(19|20)\d{2}\s*年", "", t)
-    return t.strip()
-
-
 # Ranking/filtering patterns (whole market or industry)
 _TOP_N_PAT = re.compile(
     r"最高的?\s*(\d{1,3})\s*[家只个股]?\s*$|排名前\s*(\d{1,3})|前\s*(\d{1,3})\s*名|top\s*(\d{1,3})",

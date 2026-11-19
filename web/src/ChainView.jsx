@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { platformApi } from './platformApi'
-import Markdownish from './Markdownish'
+import Markdownish from './components/Markdownish'
 
 // New-chain modal: dual channels — LLM-generated draft (editable) / hand-written YAML; server validates before saving
 function ForgeModal({ onClose, onCreated }) {

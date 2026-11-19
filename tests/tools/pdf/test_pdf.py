@@ -1,0 +1,194 @@
+# -*- encoding: utf-8 -*-
+"""tools/pdf unit tests: fitz-synthesized fixtures (no external files, no LLM calls)"""
+from __future__ import annotations
+
+import pytest
+
+fitz = pytest.importorskip("fitz")
+
+from tools.pdf import (extract_text, extract_tables, is_image_pdf,
+                       is_pdf_file, render_pages_png)
+
+
+# ---------- fixture factories ----------
+
+def _make_text_pdf(path, pages=2):
+    doc = fitz.open()
+    for i in range(pages):
+        page = doc.new_page()
+        page.insert_text((72, 96), f"第{i + 1}页: 管理层讨论与分析测试文本 ALPHA-{i}", fontname="china-s")
+    doc.save(str(path))
+    doc.close()
+
+
+def _make_image_pdf(path, pages=2):
+    doc = fitz.open()
+    pix = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 120, 80))
+    for _ in range(pages):
+        page = doc.new_page()
+        page.insert_image(page.rect, pixmap=pix)   # insert an image, write no text
+    doc.save(str(path))
+    doc.close()
+
+
+def _make_table_pdf(path):
+    doc = fitz.open()
+    page = doc.new_page()
+    # 3x3 ruled table: draw grid lines + fill cell text (detectable by
+    # pdfplumber's lines strategy)
+    x0, y0, cw, rh = 72, 72, 100, 20
+    for r in range(4):
+        page.draw_line((x0, y0 + r * rh), (x0 + 3 * cw, y0 + r * rh))
+    for c in range(4):
+        page.draw_line((x0 + c * cw, y0), (x0 + c * cw, y0 + 3 * rh))
+    for r in range(3):
+        for c in range(3):
+            page.insert_text((x0 + c * cw + 4, y0 + r * rh + 14),
+                             f"单元格{r}{c}", fontname="china-s")
+    doc.save(str(path))
+    doc.close()
+
+
+# ---------- text ----------
+
+def test_extract_text_text_layer(tmp_path):
+    p = tmp_path / "t.pdf"
+    _make_text_pdf(p)
+    text = extract_text(str(p))
+    assert "管理层讨论与分析测试文本" in text
+    assert "ALPHA-1" in text          # multi-page concatenation
+
+
+def test_is_pdf_file(tmp_path):
+    p = tmp_path / "t.pdf"
+    _make_text_pdf(p)
+    assert is_pdf_file(str(p)) is True
+    fake = tmp_path / "fake.pdf"
+    fake.write_text("<html>error page</html>")
+    assert is_pdf_file(str(fake)) is False
+    assert is_pdf_file(str(tmp_path / "nope.pdf")) is False
+
+
+# ---------- render ----------
+
+def test_is_image_pdf_true(tmp_path):
+    p = tmp_path / "img.pdf"
+    _make_image_pdf(p)
+    assert is_image_pdf(str(p)) is True
+
+
+def test_is_image_pdf_false_for_text(tmp_path):
+    p = tmp_path / "t.pdf"
+    _make_text_pdf(p)
+    assert is_image_pdf(str(p)) is False
+
+
+def test_render_pages_png(tmp_path):
+    p = tmp_path / "t.pdf"
+    _make_text_pdf(p, pages=3)
+    pages = render_pages_png(str(p), max_pages=2, dpi=72)
+    assert [no for no, _ in pages] == [1, 2]
+    assert all(len(b64) > 100 for _, b64 in pages)
+
+
+# ---------- tables ----------
+
+def test_extract_tables(tmp_path):
+    p = tmp_path / "tab.pdf"
+    _make_table_pdf(p)
+    tables = extract_tables(str(p))
+    assert len(tables) >= 1
+    assert tables[0]["page"] == 1
+    assert len(tables[0]["rows"]) >= 3      # 3 data rows (possibly incl. a header row)
+    flat = "".join("".join(r) for r in tables[0]["rows"])
+    assert "单元格" in flat
+
+
+def test_extract_tables_text_pdf_empty(tmp_path):
+    p = tmp_path / "t.pdf"
+    _make_text_pdf(p)
+    assert extract_tables(str(p)) == []
+
+
+def test_layout_text_preserves_table_rows_and_empty_pages(tmp_path):
+    from tools.pdf.text import extract_text_pages
+
+    p = tmp_path / "tab.pdf"
+    _make_table_pdf(p)
+    with fitz.open(p) as doc:
+        doc.new_page()
+        doc.saveIncr()
+    first, second = extract_text_pages(str(p), layout=True)
+    assert "单元格00 | 单元格01 | 单元格02" in first
+    assert second == ""
+
+
+# ---------- markdown ----------
+
+def test_to_markdown(tmp_path):
+    pytest.importorskip("pymupdf4llm")
+    from tools.pdf import to_markdown
+    p = tmp_path / "t.pdf"
+    _make_text_pdf(p)
+    md = to_markdown(str(p))
+    assert "管理层讨论与分析测试文本" in md
+
+
+def test_annual_report_keeps_its_markdown_threshold_and_text_fallback(tmp_path, monkeypatch):
+    import sys
+    from types import SimpleNamespace
+    from tools.cninfo import parse
+    from tools.pdf import to_markdown
+
+    path = tmp_path / "annual.pdf"
+    assert parse.to_markdown(str(path)) == ""
+    with pytest.raises(FileNotFoundError):
+        to_markdown(str(path))
+
+    _make_text_pdf(path)
+    provider = SimpleNamespace(to_markdown=lambda **kwargs: "x" * 100)
+    monkeypatch.setitem(sys.modules, "pymupdf4llm", provider)
+    assert to_markdown(str(path)) == "x" * 100
+    assert "ALPHA-1" in parse.to_markdown(str(path))
+    provider.to_markdown = lambda **kwargs: "x" * 101
+    assert parse.to_markdown(str(path)) == "x" * 101
+
+
+# ---------- ocr (fake vision client injected, no real LLM calls) ----------
+
+class _FakeVisionLLM:
+    """Injection contract for tools/pdf.ocr: .invoke(messages) -> str"""
+
+    def __init__(self):
+        self.calls = []
+
+    def invoke(self, messages):
+        self.calls.append(messages)
+        return "假OCR识别文本"
+
+
+def test_ocr_page_png_injects_prompt_and_image():
+    from tools.pdf import ocr_page_png
+    fake = _FakeVisionLLM()
+    out = ocr_page_png("QUJD", prompt="版式prompt", vision_llm=fake)
+    assert out == "假OCR识别文本"
+    (system, user), = fake.calls
+    assert system == {"role": "system", "content": "版式prompt"}
+    img, txt = user["content"]
+    assert img["image_url"]["url"] == "data:image/png;base64,QUJD"
+    assert txt["text"] == "提取这一页的全部内容。"
+
+
+def test_ocr_pdf_with_fake_vision_llm(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr("core.config.get_config",
+                        lambda: SimpleNamespace(openai_api_key="test-key"))
+    from tools.pdf import ocr_pdf
+    p = tmp_path / "img.pdf"
+    _make_image_pdf(p, pages=2)
+    fake = _FakeVisionLLM()
+    text = ocr_pdf(str(p), prompt="p", vision_llm=fake, dpi=72)
+    assert text == "假OCR识别文本\n假OCR识别文本"   # per-page recognition then concatenation
+    assert len(fake.calls) == 2
+    marked = ocr_pdf(str(p), prompt="p", vision_llm=fake, dpi=72, page_markers=True)
+    assert marked == "[[PDF_PAGE:1]]\n假OCR识别文本\n[[PDF_PAGE:2]]\n假OCR识别文本"

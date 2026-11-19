@@ -5,7 +5,7 @@
 ## 1. 系统设计
 
 ```
-企微用户 @机器人 ──wss──> jobs/wecom_bot.py (本机主动外拨, 无需公网)
+企微用户 @机器人 ──wss──> workflows/runtime/wecom_bot.py (本机主动外拨, 无需公网)
     │ aibot_msg_callback (text.content)
     ▼
 harness.loop.run_agent_stream(text, session_id)   ← 进程内直调, 与 web 端同一条问答链路
@@ -51,7 +51,7 @@ aibot_respond_msg (msgtype=stream, 内容刷新式) ──wss──> 企微同�
 WECOM_BOT_ID=aib...
 WECOM_BOT_SECRET=...
 
-.venv/Scripts/python.exe -m jobs.wecom_bot    # 前台常驻, Ctrl+C 退出; 日志 logs/jobs.log
+.venv/Scripts/python.exe -m workflows.runtime.wecom_bot    # 前台常驻, Ctrl+C 退出; 日志 logs/jobs.log
 ```
 
 在企微里找到该机器人（单聊或拉群 @它）发文本即问即答；图片/语音等暂回复"仅支持文本"。

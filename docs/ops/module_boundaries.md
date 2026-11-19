@@ -4,7 +4,7 @@
 
 ## 一、系统设计
 
-当前后端结构（2026-11-18）：
+当前后端结构（2026-11-19）：
 
 ```mermaid
 flowchart TD
@@ -13,7 +13,7 @@ flowchart TD
   domain --> capabilities
   capabilities --> repositories[storage.repositories：查询与事务]
   repositories --> schemas[storage.schema：物理结构与独立DDL]
-  lifecycle[jobs.lifecycle / operations：应用组合与任务注入] --> entry
+  lifecycle[workflows.runtime.lifecycle / operations：应用组合与任务注入] --> entry
 ```
 
 core提供配置、日志与JSON解析；应用启停不再放在core，HTTP通过操作接口使用后台任务。
@@ -33,10 +33,17 @@ core提供配置、日志与JSON解析；应用启停不再放在core，HTTP通�
 保留既有研究结论、冻结参数、交易信号与历史快照。文件按职责拆分，避免仅以行数或合并数量衡量整洁。
 
 新增指数成分股池、5/15/30/60 分钟行情、新闻快照前，先稳定数据访问边界。
-领域编排继续归 skills；采集调度归 jobs；外部数据接口归 tools；所有 SQL 与连接归 storage。
+领域编排归 skills，采集调度归 workflows，外部数据接口归 tools，SQL 与连接归 storage。
 MCP 与 HTTP 只做协议、校验、鉴权和结果转换，不能成为另一套查询实现。
 
 ## 三、问题
+
+| 工程整理中发现的问题 | 处理 |
+|---|---|
+| 生产调度、一次性研究和回测共用平铺的 jobs 目录 | 25 个运行模块归入 workflows 的 market、reports、quant 和 runtime 四个包。旧导入和模块命令共用同一实现及调度实例。历史声明依赖的源码保留在原处 |
+| 测试散落在生产包，默认发现规则漏掉 MCP 测试 | Python 用例和数据样本集中到 tests，统一发现。原来收集的 887 项全部保留，另外收集到 49 项原有 MCP 用例 |
+| CLI 入口误指向 ASGI 实例，配置、日志与报告存储各自寻找项目根目录 | Windows 启动脚本与安装后的控制台命令共用 run_server.main。三个基础设施模块共用项目根定位 |
+| 两份财务指标映射和一套旧 SQL 生成器增加维护成本 | 共用指标词表，删除现有查询流程无法到达的生成器。已核对 75 个规则别名与 38 个有序指标标签 |
 
 | 本轮问题 | 根因 | 处理 |
 |---|---|---|
@@ -59,7 +66,7 @@ MCP 与 HTTP 只做协议、校验、鉴权和结果转换，不能成为另一�
 | 两套向量集合重复维护生命周期 | 领域模块各自创建、重建、删除 | 共用ChunkCollection，字段保留各自schema，首次创建加锁合并 |
 | 多处模型JSON解析逐渐漂移 | 6处重复解码/代码围栏/对象提取 | 统一core.json_response，旧调用名及围栏处理差异保留 |
 | 研报入口职责过多、OCR/扫描件重复回写 | 规范化、排队及正文SQL混在Skill中 | normalization、ocr、report_text分离，共用正文写入 |
-| API知道调度器内部状态，core负责任务编排 | 缺少应用组合与操作接口 | 启动迁到jobs.lifecycle，API经依赖注入访问operations，调度器提供status |
+| API知道调度器内部状态，core负责任务编排 | 缺少应用组合与操作接口 | 启动迁到workflows.runtime.lifecycle，API经依赖注入访问operations，调度器提供status |
 | 拆分OCR时遗漏续跑门槛（回归发现） | SQL所在with内还包含正文与rowcount分支 | 仅替换存储调用并保留控制流，覆盖正常、空正文、失败、删除后停止 |
 | MCP日志污染协议输出（集成发现） | 仓储提前导入后，logger提前绑定stdout | 协议保留独立输出流，现有/后续诊断均导向stderr，增加真实stdio验收 |
 
@@ -100,7 +107,7 @@ MCP 与 HTTP 只做协议、校验、鉴权和结果转换，不能成为另一�
 - `skills/report/normalization.py`统一字段处理，`ocr.py`负责队列与续接；OCR/扫描件/翻译共用`tools/finance/report_text.py`。
 - 报告与年报向量schema归`storage/schema/vector_chunks.py`，生命周期归`storage/repositories/vector_chunks.py`，旧collection入口保留兼容。
 - 产业链DDL归`storage/schema/industry.py`，独立连接执行；旧`skills.beta_alpha.schema`调用名兼容，传入业务连接也不会提交该连接。
-- `jobs/lifecycle.py`是应用启动组合根，`jobs/operations.py`提供后台操作，API只依赖`api.deps`声明的接口；内部旧core.lifespan导入已更新。
+- `workflows/runtime/lifecycle.py`是应用启动组合根，`workflows/runtime/operations.py`提供后台操作，API只依赖`api.deps`声明的接口；内部旧core.lifespan导入已更新。
 
 保留策略、筛选口径、物理集合字段和现有HTTP/MCP协议；移除重复章节横幅、过时入口说明及搬迁后无效注释，保留事务、复权和数据口径说明。
 
@@ -147,6 +154,8 @@ pytest默认发现范围固定在项目测试目录，排除产物与依赖目�
 
 ## 五、验证记录
 
+2026-11-19 工程目录迁移后，939 项离线 Python 回归、3 项真实库用例及 36 项前端用例通过。与迁移前的提交对照，60 个 HTTP 路径和 61 个操作的 OpenAPI 定义一致。另在临时目录构建并安装 wheel，校验 Windows 控制台入口、行业模板和评测数据均可用。正式服务已返回首页、登录页与前端资源，启动后接续了当日盘后行情任务。
+
 2026-11-19 使用相同的 30,000 行、8 列输入比较批量写入的参数准备阶段。驱动替身按每页 5,000 行消费参数，两版行摘要相同。tracemalloc 测得 Python 峰值从 14,666,624 字节降到 5,069,632 字节。真实 PG 会话临时表另行覆盖重复主键、纯主键 UPSERT、普通 INSERT 约束失败回滚、带引号列名、缺失值和时间间隔。
 
 指数成分并集的新旧查询返回相同的 3,800 个有序代码。在 3,850 行成分快照上，旧计划的最新日期子计划运行 3,850 次，新计划一次分组得到 5 组日期。行情筛选与历史跟踪的实测见[股票看板](../frontend/stock_dashboard.md)。
@@ -192,7 +201,7 @@ pytest与ruff缓存移到output目录；用户原有未跟踪资料目录保留�
 - `jobs/check_boundaries.py` + 自动测试阻止新增跨层导入；现存50个历史导入逐项登记（具体边及次数以JSON为准），不是已消除全部债务。前端按功能目录迁移及其余研报仓储迁移仍待实施。
 - 新增 `query_intraday` 只读工具，全部工具33个，其中30个只读；分钟请求绕过日线快车道。
 
-无调用引用的Vite模板文件和原有未跟踪目录未删除；不把他人临时文件混入本轮提交。
+2026-11-19 清理了无引用的 Vite 模板资源。正式站点图标随前端构建发布，聊天和监控源文件归入对应功能目录。
 完整数据入库验收见 [数据源记录](data_sources.md)。
 
 验收：382项Python测试通过，分层检查无新增违规；真实MCP stdio握手、30只读工具清单和BJ分钟查询通过。
@@ -200,7 +209,7 @@ pytest与ruff缓存移到output目录；用户原有未跟踪资料目录保留�
 
 2026-11-12股票看板：新增 `web/src/market/` 功能目录，局部图表/样式与页面拆分；
 `skills/trend` 只负责纯策略与领域组合，`tools/market/trend_data` 隔离仓储，
-`jobs.scan_trend` 离线发布快照，HTTP只读取。新增DDL归 `storage/schema/trend.py`。
+`workflows.market.scan_trend` 离线发布快照，HTTP只读取。新增DDL归 `storage/schema/trend.py`。
 分层检查仍无新增违规，既有50项依赖债务未扩大。详情见 [股票看板](../frontend/stock_dashboard.md)。
 
 2026-11-13：根目录`pip-*`目录0个、旧pytest临时目录已移出；依赖加载与API健康正常。

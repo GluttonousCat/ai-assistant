@@ -2,7 +2,7 @@
 
 > 本文件是给 AI Agent（及新成员）的**项目第一入口**。读完本文件即可建立全局认知，
 > 再按需深入 `docs/` 对应模块文档。人类同事请从 [docs/README.md](docs/README.md) 进。
-> 更新：2026-11-18
+> 更新：2026-11-19
 
 ## 1. 项目是什么
 
@@ -31,30 +31,21 @@ skills/      领域技能 (每技能一目录, 专业知识放 prompt):
              quant(workspace自由组合规则/自然语言条件树/模板兼容/冻结任务；rule_models·rule_indicators·rule_prepare负责有界规则/多周期因果计算，RuleExecutionConfig实际买价止损/显式离场；workspace_runner分派规则或v8模板；v10 tranches/tranche_engine/tranche_prepare:442/532分批、逐批T+1/FIFO、完整周期胜率及部分已实现盈亏；v9结构持有/固定对照；v8参数研究/盘后触发次日执行; 见 docs/agents/quant_backtesting.md) /
              trend(episodes.py连续入选合轮/升级不重开/20交易日归档；chart_history.py独立5年日K展示不改冻结信号；tracking.py历史名单前向跟踪/T+1·3·5·10/真实因子/交易日/缺失分离；parent_context.py独立日K母趋势标注，局部60F反转可属上涨回调，保留原信号与入场条件；structure.py V9有序结构；swing.py V8底背离/回调；V7及更早快照兼容; M8/M13/M21; 见 docs/frontend/stock_dashboard.md) /
              fin_query(Text-to-SQL) / report(skill无SQL编排/normalization纯规范化/ocr后台队列/analysis短事务及提交后续接/collection兼容出口) / scanned_report(OCR) /
-             beta_alpha(产业链Beta+个股Alpha: chains种子链/analysis/tests) /
+             beta_alpha(产业链Beta+个股Alpha: chains种子链/analysis；回归在tests/skills/beta_alpha) /
              content(内容资产管线: 画像/公众号文章/PPT/年报解读) /
              research(研究生产线: 证据→十章草稿→成稿, 任务分派见 docs/research/tasks/)
-jobs/        quant_worker(个人工作台持久队列/OS锁串行/独立任务进程/默认15分钟超时) /
-             lifecycle(应用启停组合根，原core.lifespan职责迁入)/operations(向API注入后台操作接口；API不导入jobs或读调度器私有状态) /
-             market_digest_scheduler(后端每日18点及交易日11:55/独立回执/当日启动补漏/Codex任务已暂停) /
-             intraday_scheduler(交易日10:32/11:32/14:02/15:02，收盘120秒后采集/扫描；当天固定来源与池/串行OS锁/回执/启动只补最新到期轮次) /
-             cache_intraday_prefix(当天已完成60F前缀/小窗口/断点续传/不推进完整日状态) / scan_intraday_watch(已发布60F规则复用/盘中80分观察/此前完整日K/独立原子归档，PNG可选导出，不覆盖正式快照) /
-             send_market_digest(后端定时或CLI调用;大于75分入场/观察分组;日K+60F同源前复权PNG/CSV;SMTP TLS/逐部分回执/延迟至20点;缺授权码不发) /
-             annotate_trend_context(离线派生母趋势/局部触发快照，原始pattern/eligible/风控不改；盘中只用已完成日K；scan_trend后续自动标注) /
-             research_online_60f(v21每月只训练已结束历史标签/指数相对排序/532入场风险2.5%，2026-01-01—11-12样本内+8.69%/回撤2.76%，双倍滑点+7.14%但压力单股尾损-11.68%；预热持币/当前名单偏差/不改默认；领域online_priority在skills/quant) /
-             research_market_context(指数环境/分批节奏/相对排序/软退出耐心四轮88组，均未达标；只离线研究，不改默认；market_context与signal_priority在skills/quant) /
-             sync_remaining_market(沪深三板非ST剩余60F+原生日K/真实因子补齐,独立上市名单快照) / backtest_reversal(原池v6固定退出对照) /
-             research_tranches(442/532固定资金方案，冻结v8/v9信号，单买单卖/仅买/仅卖/双向对照，不自动设默认) /
-             research_ordered_60f(v9有序结构/结构持有7组固定对照，未通过验证；rejected不自动成为量化默认，无参数搜索或全年赢家选择) /
-             cache_mainboard_minutes(显式离线同源分钟缓存，不改库) / research_mainboard_60f(首轮36组) / research_mainboard_regime(次轮24组60F广度/恢复过滤，盘后与预挂条件单分开；两轮60组仅开发段选参，均未达5%目标，不作交易推荐) /
-             sync_intraday(2026年60F入库/五指数成分并集/断点续传) / check_boundaries(分层检查) /
-             backtest_mtf(双周期日K入场/三退出方案开发段选择与分段验证) / backtest_quant(旧v4两周期三策略对照) / sync_backtest_inputs(原生日K查缺/真实限价/基准,不推水位线) /
-             scan_trend(全池离线筛票/原子发布) / repair_trend_factors(精确补缺真实复权因子,不推进日线水位线) /
-             refresh_market(日K/因子→60F逐股审计→沿用参数重算快照,同池重叠回补/OS锁/持久进度) /
-             任务层一体: scheduler(17:00 Asia/Shanghai,交易日;启动补漏/逐指数日K查缺,失败30分钟重试最多3次) / zsxq_scheduler(爬虫 00:00/12:00) /
-             管线入口(daily_fetch_zxsq, sync_zxsq_to_pg, merge_report_duplicates, smoke) /
-             health_sentinel(独立心跳哨兵: API探活+WS广播+自动拉起, 8209) /
-             wecom_bot(企微智能机器人 wss 长连接桥接→本地Agent, 见 docs/agents/wecom_bot.md)
+workflows/   常驻服务与数据流程，按职责分包
+             runtime/：lifecycle 组合依赖、operations 注入后台接口、scheduled_task 统一启停，另有独立哨兵和企微桥接
+             market/：daily_scheduler 交易日17点增量与失败重试；intraday_scheduler 四轮收盘120秒后采集；
+                     refresh/collect_intraday/scan_intraday/scan_trend 负责回补、逐股审计与原子发布；
+                     digest_scheduler 调度 11:55 午间和18:00盘后两类邮件，分别保留回执
+             reports/：scheduler 每日00:00及12:00触发 fetch，逐篇通过 sync 和 deduplicate 入库及去重
+             quant/：worker 持久队列、OS锁串行、独立回测进程、默认15分钟超时
+jobs/        冻结研究、回测和自检命令。已发布研究按历史源文件指纹续跑，保留原始路径。
+             旧版 jobs 模块及 python -m 调用通过兼容入口转到对应 workflows 模块。
+             各版本实验口径、样本区间和验证结果见 docs/agents/quant_backtesting.md
+tests/       Python 回归按 api、core、harness/mcp、workflows、skills、tools、storage 分组；
+             test_boundaries.py 检查生产代码依赖，真实数据库用例标记 integration
 tools/       pdf(通用PDF工具: 文本/渲染/OCR/表格) / zsxq爬虫 / market行情同步 /
              cninfo巨潮定期报告(获取+解析, 自包含) / langgraph(LangGraph原子封装: 建图/记忆) / finance(SQL guard, KB, 研报文件提取器)
              auth/users(账户服务与空表种子)；finance/data·report_text·report_analysis·industry_data·vector_collections(具体数据能力出口，不暴露PG连接给MCP/领域层)
@@ -161,10 +152,10 @@ vision=qwen3.8-flash（deepseek 不收图片）。**思考开关由 `llm.enable_
 4. **加前端页**：`web/src/` 下新组件 + `Platform.jsx` NAV 注册（注意 adminOnly/superOnly）；
    改完必须 `npm run build`（后端托管 dist，不构建不生效）
 5. **验证**：默认 `python -m pytest` 为离线回归；真实DB用例显式 `python -m pytest -m integration`，禁止通过按函数名排除隐藏依赖。改研报链路后跑 `python -m tools.finance.report_meta_analysis` 单篇验证；
-   改 beta_alpha 跑 `pytest skills/beta_alpha/tests`
+   改 beta_alpha 跑 `pytest tests/skills/beta_alpha`
    （改链模板另跑 `python -m skills.beta_alpha.analysis.chain_analysis <chain_id>`）；
    改完 git commit（消息带日期与模块）
-6. **分层验证**：提交前运行 `python -m jobs.check_boundaries` 与 `pytest harness/tests/test_boundaries.py`。
+6. **分层验证**：提交前运行 `python -m jobs.check_boundaries` 与 `pytest tests/test_boundaries.py`。
    禁止新增跨层依赖；历史债务精确登记于 `docs/ops/dependency_baseline.json`，迁移后减少基线，不能整目录豁免。
    新API/Agent通过tools访问仓储，禁止直接写SQL或在HTTP请求里拉取外部分钟行情。
 7. **日志**：一律 `get_logger(__name__)`（core/logger 按顶层包聚合落
@@ -187,7 +178,7 @@ vision=qwen3.8-flash（deepseek 不收图片）。**思考开关由 `llm.enable_
 | 模型体系 | [docs/agents/llm_models.md](docs/agents/llm_models.md) | 用途路由/两个模型的坑 |
 | 扫描件 Agent | [docs/agents/scanned_report_agent.md](docs/agents/scanned_report_agent.md) | PDF→PNG→视觉OCR 解耦设计 |
 | MCP 工具层 | [harness/mcp/README.md](harness/mcp/README.md) | 33 工具(30 只读)/ToolSpec 规范/中文description约定/stdio 服务(默认只读) |
-| 企微机器人桥接 | [docs/agents/wecom_bot.md](docs/agents/wecom_bot.md) | wss外拨收消息/流式回复/会话映射; python -m jobs.wecom_bot |
+| 企微机器人桥接 | [docs/agents/wecom_bot.md](docs/agents/wecom_bot.md) | wss外拨收消息/流式回复/会话映射; python -m workflows.runtime.wecom_bot |
 | Agent 对话循环 | [docs/agents/agent_loop.md](docs/agents/agent_loop.md) | LLM 自主决策+工具循环/多轮追问/累计口径知识/沙盒；新入口 `/api/v1/agent/stream`；沙盒参数与五域定义在 config.yaml `agent:` 段，全量轨迹落 logs/trajectories/ |
 | dsh 客户端接入 | [docs/agents/dsh_client.md](docs/agents/dsh_client.md) | 外部 harness(dsh/Claude Desktop)连 MCP server；stdio 握手冒烟 jobs/smoke_mcp_stdio.py |
 | 研究生产线 | [docs/research/tasks/T00_总纲_契约与分工.md](docs/research/tasks/T00_总纲_契约与分工.md) | 三Agent流水线(证据→草稿→成稿)/并行任务分派/契约 skills/research/contracts.py；方法论源 docs/research/company_industry_guide.md |

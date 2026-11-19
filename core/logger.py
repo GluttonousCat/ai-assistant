@@ -26,18 +26,10 @@ import threading
 from functools import lru_cache
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
+from core.paths import project_root as _project_root
 
 _FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 _DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
-
-
-def _project_root() -> Path:
-    """Walk up for config.yaml to locate the project root (same rule as core.config._find_project_root)"""
-    p = Path(__file__).resolve()
-    for cand in (p.parents[1], *p.parents[2:7]):
-        if (cand / "config.yaml").exists():
-            return cand
-    return p.parents[1]
 
 
 @lru_cache(maxsize=1)
@@ -75,6 +67,10 @@ class _LogManager:
 
     @classmethod
     def setup(cls, name: str) -> logging.Logger:
+        # Both legacy commands and reorganized workflows must share one handler
+        # and rotation schedule for the jobs.log file consumed by the monitor.
+        if name.partition(".")[0] == "workflows":
+            name = "jobs" + name[len("workflows"):]
         bucket = _bucket(name)
         with cls._lock:
             if bucket not in cls._buckets:

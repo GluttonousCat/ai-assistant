@@ -37,8 +37,8 @@
 
 | 文件 | 职责 |
 |------|------|
-| `web/src/AgentChat.jsx` | 对话 UI：消息流、类型徽章、阶段气泡、结果呈现路由（图表/表格）、示例问题 |
-| `web/src/ResultChart.jsx` | 结果可视化：`buildChartSpec` 形态识别 + 折线图(lightweight-charts)/柱状图(SVG)；共享展示工具（COL_LABELS/parseNum/compactNum/fmtDateCol） |
+| `web/src/chat/AgentChat.jsx` | 对话 UI：消息流、类型徽章、阶段气泡、结果呈现路由（图表/表格）、示例问题 |
+| `web/src/chat/ResultChart.jsx` | 结果可视化：`buildChartSpec` 形态识别 + 折线图(lightweight-charts)/柱状图(SVG)；共享展示工具（COL_LABELS/parseNum/compactNum/fmtDateCol） |
 | `web/src/platformApi.js agentStream()` | SSE 客户端：fetch + ReadableStream 手动解析 `event:`/`data:` 行 |
 | `api/agent_api.py /agent/stream` | SSE 服务端（决策轮非流式；最终回答按块下发） |
 | `harness/loop.py` | Agent 主循环：快车道 → 域子Agent → 全工具循环 + 沙盒（详见 docs/agents/agent_loop.md） |

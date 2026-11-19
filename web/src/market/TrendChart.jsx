@@ -1,8 +1,8 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { CandlestickSeries, CrosshairMode, HistogramSeries, LineSeries, createChart, createSeriesMarkers } from 'lightweight-charts'
 import { boundedCache, captureView, chartRows, restoreView, seriesUpdate, signalMarkers } from './chartData'
-import OpportunityBadge from '../OpportunityBadge'
-import { opportunityFor } from '../opportunities'
+import OpportunityBadge from './OpportunityBadge'
+import { opportunityFor } from './opportunities'
 
 const dateFormat = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' })
 const minuteFormat = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })

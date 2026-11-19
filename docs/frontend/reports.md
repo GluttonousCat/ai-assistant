@@ -13,14 +13,14 @@
 ### 1.1 数据流水线
 
 ```
-知识星球 (每日 00:00/12:00 调度, jobs/zsxq_scheduler.py)
+知识星球 (每日 00:00/12:00 调度, workflows/reports/scheduler.py)
    │ 爬话题 + 逐个下载 PDF 附件 (反检测限速 60-120s/个)
    │ ※ 中文翻译版 (文件名「中文版-」等, utils.helpers.is_chinese_translated)
    │    下载层标 skipped 不下载 + sync 层不入库 —— 只保留英文原版
    ▼
-★ 逐篇流水 (jobs/daily_fetch_zxsq.py:_process_one_report,
+★ 逐篇流水 (workflows/reports/fetch.py:_process_one_report,
    每下载完 1 个文件立即执行, 不等整批 —— 下载完即"已分析", 前端立即可用):
-   1. 增量同步 PG (jobs/sync_zxsq_to_pg.py, 返回本次新入库 report_id)
+   1. 增量同步 PG (workflows/reports/sync.py, 返回本次新入库 report_id)
       → fin.report_meta (本地文本层抽取正文, 有文本层即 content_chars>0)
    2. 对新入库的 PDF/docx 逐篇:
       ① LLM Analysis 轻量元数据 (tools/finance/report_meta_analysis.py,
@@ -28,7 +28,7 @@
       ② 深度提取 (skills/report/skill.py 单篇 extract:
          按页/段提取 → 汇总券商观点、假设、风险和估值 → 核对预测及研究依据的原文出处)
       (话题 txt 条目跳过, 由 merge 归并进同话题 PDF, 不浪费 LLM)
-   3. 去重合并 (jobs/merge_report_duplicates.py)
+   3. 去重合并 (workflows/reports/deduplicate.py)
 
 图片型 PDF (无文本层, content_chars=0): 深度提取时转后台 qwen 视觉 OCR
   (状态 pending_ocr, 前端隐藏) → OCR 完成 → ★自动接续单篇深度提取
@@ -55,7 +55,7 @@
 
 `fin.report_forecast`：盈利预测（report_id 关联，A 股用 ts_code、非 A 股用 symbol+market）。
 
-### 1.3 去重合并规则（jobs/merge_report_duplicates.py）
+### 1.3 去重合并规则（workflows/reports/deduplicate.py）
 
 同一知识星球话题常产生多条记录（PDF 原文 / txt 中文解读 / mp3 音频）：
 
@@ -239,7 +239,7 @@ setQuery后读取旧状态、慢请求覆盖新页面 → 显式搜索参数、A
 | 空预测结果没有清除旧记录 | 每次分析原子替换整组预测，包括空集合；插入失败整体回滚 | 空预测删除、异常回滚和删除后不再插入用例 |
 | OCR排队/JSON失败被算作成功 | 分别返回processed、failed、queued_ocr、discarded；调用方按结果计数 | 混合批次、非法JSON与数组输出测试 |
 
-验证：15组旧/新元数据与摘要一致；真实单篇元数据验证事务回滚，不改生产字段。旧`jobs/selfcheck_report_stream.py`的场景转入`skills/report/tests/test_extraction_pipeline.py`，包含连接与续接时机检查。
+验证：15组旧/新元数据与摘要一致；真实单篇元数据验证事务回滚，不改生产字段。旧`jobs/selfcheck_report_stream.py`的场景转入`tests/skills/report/test_extraction_pipeline.py`，包含连接与续接时机检查。
 
 2026-11-19 验证记录：
 

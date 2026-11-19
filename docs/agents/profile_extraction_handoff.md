@@ -33,7 +33,7 @@ tools/cninfo/parse.py   单模块两层 (本任务全部落点):
   编排   build_items(--audit 出审计) / build_for_index / main
 skills/content/article.py        interpret 成文语料块已接 items+sections
 样例产物: output/cninfo/md/{688008,600028,601166}.SH/2025_ndbg_items.json
-单测: tools/cninfo/tests/test_parse.py (16例) + tools/pdf/tests
+此前交接记录提到 16 个 cninfo 解析用例，当前仓库可执行的 PDF 回归位于 tests/tools/pdf。
 ```
 
 ## 3. 提取规则（用户已拍板，勿改）
@@ -147,7 +147,7 @@ skills/content/article.py        interpret 成文语料块已接 items+sections
 - 用户逐行审代码：每个函数带实证注释（哪只股票哪一行踩的坑）
 - 提交规范：`feat/fix/refactor(日期): 模块 — 一句话`，用户审完才 push
 - 全部产物先文件后 SQL；LLM 定性层保持封存（等用户定用法）
-- 测试先行：改完跑 `pytest tools/cninfo/tests tools/pdf/tests`
+- 测试先行：改完跑 `pytest tests/tools/pdf`
 
 ## 8. 入口与验证
 
@@ -157,7 +157,7 @@ skills/content/article.py        interpret 成文语料块已接 items+sections
 # 指数批量
 .venv/Scripts/python.exe -m tools.cninfo.parse --index 000016.SH
 # 测试
-.venv/Scripts/python.exe -m pytest tools/cninfo/tests tools/pdf/tests -q
+.venv/Scripts/python.exe -m pytest tests/tools/pdf -q
 ```
 
 三方言样本（PDF 与 MD 均在盘）：澜起 688008.SH 准则式 / 中石化 600028.SH 主题式 /

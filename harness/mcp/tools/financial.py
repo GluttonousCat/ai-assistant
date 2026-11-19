@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from tools.finance import data as finance_data
+from tools.finance.metrics import QUERY_METRICS
 from typing import Any, Dict, List, Optional
 
 from harness.mcp.registry import REGISTRY
@@ -11,26 +12,18 @@ from harness.mcp.spec import ToolError, obj_schema, param
 from harness.mcp.tools._common import df_payload, resolve_one
 
 
-# Metric name -> sql_builder's (field, prefix) mapping reuses FinQuerySkill's alias table directly
-def _metric_alias() -> Dict[str, Dict[str, str]]:
-    from skills.fin_query.skill import METRIC_ALIAS_FULL
-
-    return METRIC_ALIAS_FULL
-
-
 def _resolve_metric(metric: str):
     """Chinese metric -> (bare field name, table prefix); sql_builder needs {prefix}.{bare_field}."""
-    alias = _metric_alias()
-    m = alias.get(metric) or alias.get(metric.strip())
+    m = QUERY_METRICS.get(metric) or QUERY_METRICS.get(metric.strip())
     if not m:
         # Tolerance: retry with common suffixes stripped/added
         for key in (metric.replace("率", ""), metric + "率"):
-            if key in alias:
-                m = alias[key]
+            if key in QUERY_METRICS:
+                m = QUERY_METRICS[key]
                 break
     if not m:
         raise ToolError(
-            f"不支持的指标: 「{metric}」。支持: " + "、".join(sorted(alias)[:40])
+            f"不支持的指标: 「{metric}」。支持: " + "、".join(sorted(QUERY_METRICS)[:40])
         )
     dotted = m["field"]  # e.g. 'i.revenue' / 'db.pe_ttm'
     prefix, _, bare = dotted.partition(".")

@@ -17,7 +17,7 @@ beta_alpha/
 ├── prompts.py            全部提示词 (JSON 花括号 {{}} 转义)
 ├── schema.py             fin.chain_extract DDL (模块内 ensure)
 ├── streaming.py          SSE 编排 (stream_chain/stream_alpha, api 薄包装消费)
-└── tests/                pytest (无 DB 依赖: 模板结构/分档规则/单位归一)
+    单测位于项目根目录的 tests/skills/beta_alpha/
 ```
 
 ## 对外入口（平台接线点只认这些）
@@ -33,7 +33,7 @@ beta_alpha/
 ## 验证
 
 ```bash
-pytest beta_alpha/tests                                  # 结构与规则
+pytest tests/skills/beta_alpha                                  # 结构与规则
 python -m skills.beta_alpha.analysis.chain_analysis ai_compute   # 改链模板后必跑
 python -m skills.beta_alpha.skills.beta "AI算力产业链有哪些环节"  # 端到端(含LLM)
 python -m skills.beta_alpha.skills.alpha "中际旭创的预期差"

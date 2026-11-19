@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 import random
 import time
 from pathlib import Path
@@ -10,7 +9,10 @@ from typing import Dict, List, Optional, Tuple
 
 import requests
 
-logger = logging.getLogger(__name__)
+from core.logger import get_logger
+from tools.pdf.text import is_pdf_file
+
+logger = get_logger(__name__)
 
 SEARCH_URL = "http://www.cninfo.com.cn/new/information/topSearch/query"
 QUERY_URL = "http://www.cninfo.com.cn/new/hisAnnouncement/query"
@@ -23,16 +25,6 @@ _HEADERS = {
     "Referer": "http://www.cninfo.com.cn/",
     "Accept": "application/json, text/plain, */*",
 }
-
-
-def is_pdf_file(path) -> bool:
-    """%PDF magic-number check (guards against error pages/HTML saved as fake
-    PDFs; verify after writing to disk)."""
-    try:
-        with open(path, "rb") as f:
-            return f.read(4) == b"%PDF"
-    except OSError:
-        return False
 
 
 class CninfoClient:

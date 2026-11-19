@@ -1,16 +1,14 @@
-# React + Vite
+# Alpha Finance Radar web
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+The React application serves the market dashboard, research reports, strategy workspace, chat and administration pages. FastAPI serves the production bundle from `web/dist`.
 
-Currently, two official plugins are available:
+Run the following commands from `web/`. Install dependencies with `npm ci`.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+| Command | Purpose |
+| --- | --- |
+| `npm run dev` | Start Vite for local development. The development server forwards `/api` requests to the running backend. |
+| `npm test` | Run the frontend regression suite with Node's test runner. |
+| `npm run lint` | Check frontend code with Oxlint. |
+| `npm run build` | Build the production bundle after changing the UI. |
 
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
+The [project documentation](../docs/README.md) describes individual pages, roles and data sources.

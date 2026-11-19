@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import { platformApi } from '../platformApi'
 import { startPolling } from '../lib/polling'
-import OpportunityBadge from '../OpportunityBadge'
+import OpportunityBadge from './OpportunityBadge'
 import IndustryLabel from './IndustryLabel'
 import IntradayFollowUp from './IntradayFollowUp'
 import { compareStockScores, stockSearchText, meetsDisplayScore, MIN_DISPLAY_SCORE } from './stockList'
-import { opportunityFor } from '../opportunities'
+import { opportunityFor } from './opportunities'
 import TrendChart from './TrendChart'
 import './intraday.css'
 

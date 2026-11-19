@@ -1,4 +1,4 @@
-import { opportunityFor } from '../opportunities.js'
+import { opportunityFor } from './opportunities.js'
 
 // Only choose incremental updates when historical prices are unchanged.
 // A corrected/adjusted historical candle must replace the full series.

@@ -56,7 +56,7 @@
 初轮日K补取120只触发300次/分钟限频；增加按公共缺失日期批量补齐与共享单股限速后，重跑传输/API失败0、引用缺口0。
 审计与两股重抓证据在本地`output/market/remaining/`。
 
-`python -m jobs.sync_remaining_market --end 2026-11-12 --refresh-universe`：
+`python -m workflows.market.sync_remaining --end 2026-11-12 --refresh-universe`：
 以[Tushare上市名单](https://tushare.pro/document/2?doc_id=25)的`market/name/list_date`取得沪深主板、创业板、科创板及原有北交所成员，过滤当前ST家族与退市简称。
 独立`stock.listed_universe_snapshot`保存名单日期与真实抓取时间，不伪造成指数成员；原五指数快照保持原意。
 只抓尚未完成该区间检查点的原生60F，之后按每股分钟对应日期补真实日K、复权因子；不推进主日线水位线。
@@ -158,7 +158,7 @@ BaoStock分钟不含指数；新浪文档支持股票或指数，但本轮只实
 | 新浪部分版本复权查询失败后直接返回原始数据 | 项目新浪适配器只允许不复权，避免错误标记为前/后复权 | 复权拒绝回归通过 |
 | BaoStock分页中途失败可能留下部分行 | 检查最终error_code，失败不返回成功数据 | 分页错误回归通过 |
 
-新增只读入口：`tools/market/minute_history.py`（适配与规范化）、`jobs/fetch_minute_history.py`（超时与CSV导出）。
+新增只读入口：`tools/market/minute_history.py`（适配与规范化）、`workflows/market/fetch_minute_history.py`（超时与CSV导出）。
 新代码不建表、不写SQL、不启动调度器。先拉取原生30/60，无需先下载5分钟再合成。
 BaoStock已加入`pyproject.toml`的可选依赖`market`组；AKShare沿用项目现有依赖。
 本轮全目录Python测试372项通过，保留1条依赖弃用告警。
@@ -167,16 +167,16 @@ BaoStock已加入`pyproject.toml`的可选依赖`market`组；AKShare沿用项�
 
 ```powershell
 # 默认新浪源，导出当前可取的30/60分钟窗口
-.venv/Scripts/python.exe -m jobs.fetch_minute_history --code 600000.SH --periods 30 60
+.venv/Scripts/python.exe -m workflows.market.fetch_minute_history --code 600000.SH --periods 30 60
 
 # 日期是对当前可得窗口的过滤，不表示能补齐所请求历史
-.venv/Scripts/python.exe -m jobs.fetch_minute_history --code 600000.SH --periods 30 60 --start 2026-01-01 --end 2026-11-11
+.venv/Scripts/python.exe -m workflows.market.fetch_minute_history --code 600000.SH --periods 30 60 --start 2026-01-01 --end 2026-11-11
 
 # 东财：6位代码由适配器转换；支持none/forward/backward
-.venv/Scripts/python.exe -m jobs.fetch_minute_history --source akshare-em --code 600000.SH --periods 30 60 --start 2026-11-01
+.venv/Scripts/python.exe -m workflows.market.fetch_minute_history --source akshare-em --code 600000.SH --periods 30 60 --start 2026-11-01
 
 # BaoStock：start必填；none/forward/backward映射为3/2/1
-.venv/Scripts/python.exe -m jobs.fetch_minute_history --source baostock --code 600000.SH --periods 30 60 --start 2025-01-01 --end 2026-11-11 --timeout 30
+.venv/Scripts/python.exe -m workflows.market.fetch_minute_history --source baostock --code 600000.SH --periods 30 60 --start 2025-01-01 --end 2026-11-11 --timeout 30
 ```
 
 结果输出到 `output/market/minute_history/<本次运行时间>/`，每周期独立CSV，manifest保存参数、实际返回时间范围、耗时、完成时间及失败原因。
@@ -213,10 +213,10 @@ BaoStock已加入`pyproject.toml`的可选依赖`market`组；AKShare沿用项�
 
 ```powershell
 # 在项目根目录运行，已完成的同区间股票会跳过
-.venv/Scripts/python.exe -m jobs.sync_intraday --start 2026-01-01 --end 2026-11-12
+.venv/Scripts/python.exe -m workflows.market.sync_intraday --start 2026-01-01 --end 2026-11-12
 
 # 需要重新获取成分时显式指定，不会抹除旧成分快照
-.venv/Scripts/python.exe -m jobs.sync_intraday --refresh-universe
+.venv/Scripts/python.exe -m workflows.market.sync_intraday --refresh-universe
 
 # 分层检查
 .venv/Scripts/python.exe -m jobs.check_boundaries
@@ -233,7 +233,7 @@ BaoStock已加入`pyproject.toml`的可选依赖`market`组；AKShare沿用项�
 
 分钟数据保持原始价格；趋势计算按交易日精确匹配 `stock.adj_factor` 后复权，不能只检查因子最大日期。
 本次真实检查发现旧库9月11个交易日的公共缺口以及BJ覆盖缺失；
-`python -m jobs.repair_trend_factors` 从Tushare真实补入74852条因子，已导入分钟对应的缺失股票数降至0。
+`python -m workflows.market.repair_factors` 从Tushare真实补入74852条因子，已导入分钟对应的缺失股票数降至0。
 修复任务不推进日线同步水位线，不推定除权日、也不填充因子。
 随后真实扫描3800只，策略截止2026-11-12收盘，5只回踩候选、36只观察；结果是横截面筛选，非收益回测。
 看板/公式/边界与验证见 [股票看板与60F策略](../frontend/stock_dashboard.md)。
@@ -243,7 +243,7 @@ BaoStock已加入`pyproject.toml`的可选依赖`market`组；AKShare沿用项�
 已核对[AKShare官方行情文档](https://akshare.akfamily.xyz/data/stock/stock_quote.html)：新浪/东财分钟接口支持60分钟，免费网页源需控制调用频率，不作为逐笔推送或有SLA的实时订阅。
 当前SDK1.18.44的stock_zh_a_minute实测可取当天数据；官方新版新浪名称stock_zh_a_hist_min_sina，本次未升级依赖。
 适配器同源请求limit=8并校验已完成的10:30/11:30；5070只池中5066只通过，10132根入库，晚于截止的桶剔除。原始价入库，Tushare当天真实因子匹配，不沿用昨日因子，也不推进完整日同步状态。
-依次运行`python -m jobs.cache_intraday_prefix --day 2026-11-17 --cutoff 11:30`及`python -m jobs.scan_intraday_watch --day 2026-11-17 --cutoff 11:30`。
+依次运行`python -m workflows.market.collect_intraday --day 2026-11-17 --cutoff 11:30`及`python -m workflows.market.scan_intraday --day 2026-11-17 --cutoff 11:30`。
 扫描CLI的--wait最多等待采集30分钟。结果独立发布，HTTP不抓行情；本轮33观察/6新起点，不替代17点完整刷新与18点邮件。
 
 同日增加后端四时点调度：10:32/11:32/14:02/15:02开始更新对应刚收盘的原生60F，

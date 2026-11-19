@@ -6,13 +6,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
 from datetime import datetime
 import json
-import time
+import time as time  # Legacy callers patch time.sleep for retry tests.
 from pathlib import Path
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
-from psycopg2 import OperationalError, InterfaceError
 from core.config import get_config
 from core.logger import get_logger
 from skills.trend.strategy import TrendConfig, VERSION
@@ -23,21 +22,10 @@ from skills.quant.report import write_result, write_summary
 from tools.market.trend_data import scan_universe, scan_cutoffs
 from tools.market.backtest_data import quotes, benchmarks, observed_dates
 from storage.repositories.backtest import publish, input_dates
+from storage.pg import retry_on_disconnect as _database_unit
 from storage.schema.quant import ensure_quant_schema
 
 logger = get_logger(__name__)
-
-
-def _database_unit(action):
-    """Retry a bounded batch/run; a server restart must not discard hours of work."""
-    for attempt in range(3):
-        try:
-            return action()
-        except (OperationalError, InterfaceError):
-            if attempt == 2:
-                raise
-            logger.warning("回测数据库工作单元重连重试 %s/3", attempt + 1)
-            time.sleep(attempt + 1)
 
 
 def _prepare_batch(members, start, end, timeframe):

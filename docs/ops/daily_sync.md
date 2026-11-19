@@ -1,6 +1,6 @@
 # 行情定时更新
 
-> 更新：2026-11-19。盘后调度 `jobs/scheduler.py`，盘中调度 `jobs/intraday_scheduler.py`。
+> 更新：2026-11-19。盘后调度 `workflows/market/daily_scheduler.py`，盘中调度 `workflows/market/intraday_scheduler.py`。
 
 ## 一、系统设计
 
@@ -63,7 +63,7 @@ Tushare说明日线通常在15–16点入库，日度指标在15–17点更新�
 
 ## 四、处理方案
 
-盘中扫描、午间邮件和盘后邮件共用 `jobs/scheduled_task.py` 管理启动、停止及可中断的等待，各自维护执行窗口和重试规则。行情任务通过 `tools/market/refresh_clock.py` 统一换算上海时间。
+盘中扫描、午间邮件和盘后邮件共用 `workflows/runtime/scheduled_task.py` 管理启动、停止及可中断的等待，各自维护执行窗口和重试规则。行情任务通过 `tools/market/refresh_clock.py` 统一换算上海时间。
 
 盘中配置：`intraday_watch.enabled`默认true、`workers`默认4（1—4）；
 环境变量`INTRADAY_WATCH_ENABLED=false`可单独关闭，修改后重启生效。
@@ -85,7 +85,7 @@ Tushare说明日线通常在15–16点入库，日度指标在15–17点更新�
 `POST /admin/sync-today`返回queued或busy，沿用DB实时管理员校验。
 普通行情页通过`GET /api/v1/market/freshness`读取进度，仍需JWT，不返回内部异常与部署信息。
 
-手动补漏：`.venv/Scripts/python.exe -m jobs.refresh_market --end 2026-11-13`。
+手动补漏：`.venv/Scripts/python.exe -m workflows.market.refresh --end 2026-11-13`。
 `--skip-quotes`只用于日K与因子已核验入库的分钟补漏，仍会核验实际完整性。
 服务常驻才能按时触发，离线期间靠下次启动补漏；采集或计算期间继续提供上一版可用快照。
 

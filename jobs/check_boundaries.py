@@ -14,12 +14,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 BASELINE = ROOT / "docs" / "ops" / "dependency_baseline.json"
 FORBIDDEN = {
-    "core": {"api", "harness", "skills", "tools", "storage", "jobs"},
-    "storage": {"api", "harness", "skills", "tools", "jobs"},
-    "tools": {"api", "harness", "skills", "jobs"},
-    "harness": {"api", "storage", "jobs"},
-    "skills": {"api", "storage", "jobs"},
-    "api": {"storage", "jobs"},
+    "core": {"api", "harness", "skills", "tools", "storage", "jobs", "workflows"},
+    "storage": {"api", "harness", "skills", "tools", "jobs", "workflows"},
+    "tools": {"api", "harness", "skills", "jobs", "workflows"},
+    "harness": {"api", "storage", "jobs", "workflows"},
+    "skills": {"api", "storage", "jobs", "workflows"},
+    "api": {"storage", "jobs", "workflows"},
 }
 
 
