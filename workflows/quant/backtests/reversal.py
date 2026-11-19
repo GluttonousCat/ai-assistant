@@ -12,7 +12,7 @@ from uuid import uuid4
 import pandas as pd
 
 from core.config import get_config
-from jobs.backtest_mtf import prepare, window_series, WINDOWS, PROFILES, START, END
+from workflows.quant.backtests.mtf import prepare, window_series, WINDOWS, PROFILES, START, END
 from skills.quant.engine import simulate
 from skills.quant.report import write_result
 from skills.trend.mtf import FRESH_VERSION, MtfConfig

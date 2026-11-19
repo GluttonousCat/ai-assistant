@@ -4,15 +4,14 @@ import argparse
 from pathlib import Path
 
 from core.config import get_config
-from jobs.backtest_mtf import WINDOWS
-from jobs.research_quality_60f import (
+from workflows.quant.studies.provenance import digest, freeze, source_hashes
+from workflows.quant.backtests.mtf import WINDOWS
+from workflows.quant.studies.quality_60f import (
     BASELINE,
     STRESS,
     ORIGINAL,
     RANKED,
     MINIMUM_QUALITY,
-    digest,
-    freeze,
     read_report,
     run,
 )
@@ -33,8 +32,8 @@ def main():
     baseline_path, baseline = read_report(root / BASELINE)
     stress_path, stress = read_report(root / STRESS)
     sources = [
-        "jobs/research_online_market_gate.py",
-        "jobs/research_quality_60f.py",
+        "workflows/quant/studies/online_market_gate.py",
+        "workflows/quant/studies/quality_60f.py",
         "skills/quant/market_context.py",
         "skills/quant/candidate_quality.py",
         "skills/quant/tranche_engine.py",
@@ -42,8 +41,8 @@ def main():
         "skills/quant/tranches.py",
         "skills/quant/models.py",
         "skills/quant/metrics.py",
-        "jobs/backtest_mtf.py",
-        "jobs/research_mainboard_60f.py",
+        "workflows/quant/backtests/mtf.py",
+        "workflows/quant/studies/mainboard_60f.py",
         "skills/quant/report.py",
     ]
     declared = freeze(
@@ -59,7 +58,7 @@ def main():
                 )
                 for p in [ORIGINAL, RANKED, baseline_path, stress_path]
             },
-            code_sha256={p: digest(root / p) for p in sources},
+            code_sha256=source_hashes(root, sources),
             selection="Six fixed cases; Jan-Jun normal AND stressed positive/PF>1/>=30 campaigns/MDD<=8%/worst>=-8%; maximize minimum return/max(MDD,1). Freeze before later windows.",
             target="Full funded net return>=8%; both costs MDD<=8%, worst>=-8%, >=30 campaigns and stressed return>0.",
             warnings=[
@@ -70,12 +69,8 @@ def main():
                 "No preplaced intraday stops, leverage, future membership, live orders or automatic default changes. Gap/limit losses may exceed planned risk.",
             ],
         ),
+        source_root=root,
     )
-    for rel in sources:
-        target = folder / "source" / rel
-        if not target.exists():
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes((root / rel).read_bytes())
     if args.declare_only:
         print("Declared5 fixed index gates and after-close control.")
         return

@@ -19,14 +19,16 @@ harness/     Agent 意图、循环、会话、模型路由与 MCP
 skills/      行情、量化、财务查询、研报与研究方法
 tools/       行情及文档数据源、查询和解析工具
 storage/     PostgreSQL、SQLite、仓储查询与 DDL
-workflows/   后台流程，按 market、reports、quant、runtime 分包
-jobs/        历史回测与研究、自检、旧版任务入口
+workflows/   market 行情、reports 研报、runtime 服务、quant 量化、diagnostics 自检
+jobs/        旧版命令兼容入口
 tests/       Python 离线回归与真实库集成测试
 evals/       Agent 评测语料、基准和评测命令
 web/         React 前端及其 Node 测试
 ```
 
 分层调用：`api → harness(引擎)+skills(领域) → tools → storage`。新 Agent 请先读 [AGENTS.md](AGENTS.md)。
+
+量化命令在 [workflows/quant](workflows/quant)。`inputs` 准备数据，`backtests` 运行固定回测，`studies` 保存各项研究的独立入口，威科夫系列归在 `studies/wyckoff`。例如，`python -m workflows.quant.backtests.mtf --help` 可查看多周期回测参数。旧版 `python -m jobs.*` 命令仍可使用。
 
 ## 快速开始
 

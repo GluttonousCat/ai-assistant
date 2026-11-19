@@ -7,16 +7,15 @@ import pickle
 
 from core.config import get_config
 from core.logger import get_logger
-from jobs.backtest_mtf import WINDOWS
-from jobs.research_mainboard_60f import write_json
-from jobs.research_market_context import load_indices, REFERENCE
-from jobs.research_quality_60f import (
+from workflows.quant.studies.provenance import digest, freeze, source_hashes
+from workflows.quant.backtests.mtf import WINDOWS
+from workflows.quant.studies.mainboard_60f import write_json
+from workflows.quant.studies.market_context import load_indices, REFERENCE
+from workflows.quant.studies.quality_60f import (
     BASELINE,
     STRESS,
     ORIGINAL,
     RANKED,
-    digest,
-    freeze,
     read_report,
     run,
 )
@@ -53,8 +52,8 @@ def main():
     stress_path, stress = read_report(root / STRESS)
     frames, calendar, index_audit = load_indices(root / "output/quant/market_v11", root)
     sources = [
-        "jobs/research_label_alignment_60f.py",
-        "jobs/research_quality_60f.py",
+        "workflows/quant/studies/label_alignment_60f.py",
+        "workflows/quant/studies/quality_60f.py",
         "skills/quant/label_research.py",
         "skills/quant/online_priority.py",
         "skills/quant/candidate_quality.py",
@@ -66,9 +65,9 @@ def main():
         "skills/quant/stop_orders.py",
         "skills/quant/support_protection.py",
         "skills/quant/report.py",
-        "jobs/backtest_mtf.py",
-        "jobs/research_mainboard_60f.py",
-        "jobs/research_market_context.py",
+        "workflows/quant/backtests/mtf.py",
+        "workflows/quant/studies/mainboard_60f.py",
+        "workflows/quant/studies/market_context.py",
     ]
     inputs = [ORIGINAL, RANKED, baseline_path, stress_path, REFERENCE]
     declared = freeze(
@@ -83,7 +82,7 @@ def main():
                 )
                 for p in inputs
             },
-            code_sha256={p: digest(root / p) for p in sources},
+            code_sha256=source_hashes(root, sources),
             indices=index_audit,
             selection="Seven new fixed models and baseline. Select on Jan-Jun normal AND double-slippage positive/PF>1/>=30 campaigns/MDD<=8%/worst>=-8%; maximize minimum return/max(MDD,1), freeze before known later windows.",
             target="Full funded net>=8%; both costs MDD<=8%,worst>=-8%,>=30 campaigns, stressed return>0.",
@@ -98,12 +97,8 @@ def main():
                 "All cost stresses replay the whole portfolio using the same previously fitted model. Planned risk does not guarantee gap losses; no leverage, orders, external fetching or automatic defaults.",
             ],
         ),
+        source_root=root,
     )
-    for rel in sources:
-        dest = folder / "source" / rel
-        if not dest.exists():
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_bytes((root / rel).read_bytes())
     if args.declare_only:
         print("Declared7 label/warmup alternatives and frozen baseline.")
         return

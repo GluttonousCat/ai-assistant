@@ -7,18 +7,16 @@ from pathlib import Path
 import pickle
 from uuid import uuid4
 
-import numpy as np
 import pandas as pd
 
 from core.config import get_config
 from core.logger import get_logger
-from jobs.research_mainboard_60f import ENTRY_PROFILES, write_json
-from jobs.research_market_context import load_indices
-from jobs.research_quality_60f import (
+from workflows.quant.studies.provenance import digest, freeze, source_hashes
+from workflows.quant.studies.mainboard_60f import ENTRY_PROFILES, write_json
+from workflows.quant.studies.market_context import load_indices
+from workflows.quant.studies.quality_60f import (
     BASELINE,
     configuration,
-    digest,
-    freeze,
     read_report,
 )
 from skills.quant.candidate_quality import attach_signal_quality
@@ -222,7 +220,7 @@ def main():
         *(path for path, _ in prefixes.values()),
     ]
     code = [
-        "jobs/research_wyckoff_forward_60f.py",
+        "workflows/quant/studies/wyckoff/forward.py",
         "skills/quant/forward_replay.py",
         "skills/quant/wyckoff.py",
         "skills/trend/wyckoff.py",
@@ -240,8 +238,8 @@ def main():
         "skills/quant/models.py",
         "skills/quant/report.py",
         "skills/quant/metrics.py",
-        "jobs/research_mainboard_60f.py",
-        "jobs/research_quality_60f.py",
+        "workflows/quant/studies/mainboard_60f.py",
+        "workflows/quant/studies/quality_60f.py",
     ]
     declared = freeze(
         folder / "declaration.json",
@@ -254,7 +252,7 @@ def main():
             november_model=model,
             volume_config=prior["config"],
             protection=prior["protection"],
-            code_sha256={name: digest(root / name) for name in code},
+            code_sha256=source_hashes(root, code),
             inputs={str(p.relative_to(root)): digest(p) for p in source_paths},
             index_prefix=audit,
             forward_quotes=coverage["sha256"],
@@ -264,6 +262,7 @@ def main():
                 "Frozen historical fixed-universe membership bias remains. Benchmarks extend from their last frozen point using official new closes on the native index scale.",
             ],
         ),
+        source_root=root,
     )
     cache = folder / "prepared.pkl"
     if args.resume:

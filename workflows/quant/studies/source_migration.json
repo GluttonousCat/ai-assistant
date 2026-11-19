@@ -1,0 +1,66 @@
+{
+  "backtest_mtf": [
+    "1321debbdfcd4a2450fef20e4efd3d1b3be40987b5ef864b55b9f6ddad8aba17",
+    "9159534ec050095e927e213da25766512d981ff8abca3d7c243c7f62391b4cca"
+  ],
+  "research_dual_forecast_60f": [
+    "a9d4ff6a14a7b36ec1378640a5df280f3582f104e477a53b056d6913d3563a73",
+    "9321bbcf8de5afac0c93d313b11c8e941dbc0d8e28179fc6e3cc7ac45915000b"
+  ],
+  "research_intraday_protection_60f": [
+    "b54004f5cb8b841b123f864b3008a766494444f2baa6315033709fabde410f62",
+    "a172a38fe81da8676a20474d92c1d37bb83700e6689bb5f6a62c7c0eaea88f83"
+  ],
+  "research_label_alignment_60f": [
+    "4885b343b4947644fc226082e9b107fcb56a307b339fe1f7b1444fb8a7f047e7",
+    "8db198e9d7f5cbb183bbdcb23fbd33b220181470b1811ac22b2ef2b5ca47452d"
+  ],
+  "research_mainboard_60f": [
+    "cfc6b20fffc62073d707704fd1ce3f0506378cc887200f455092a92541b1b533",
+    "9288f0af0f6804adb322ee6c9ca3972e84851a3526f5d4996e153c65825a3969"
+  ],
+  "research_market_context": [
+    "87b9974401dd80b75394377b91c3737bf3bd95b14c75e61837caf50299f2912a",
+    "1091da1bdf940230c3aed6af6beb06f9e697e8db9b766c460aa646d6c4d37c21"
+  ],
+  "research_online_60f": [
+    "825537dd06fd6b63c9411869ab2554ea1f2f62178f20781cecd19a9e6cfc4d04",
+    "e757a84e83c11d193949f56de582be10e52bdf096a2218bd07b28f3cbbe70780"
+  ],
+  "research_online_market_gate": [
+    "583e84d62dfb0483c0cabfd1e3571fdff6853ed1074ab82cabef6631af85608a",
+    "89539e5fbeb05b178d78c4ac02a97f8ee210f2e5e6f411f744771ed269dacc25"
+  ],
+  "research_quality_60f": [
+    "c5905487e14794bfb19d6556e1fc8a0ca162705f7c0317d7864412598829243e",
+    "625e446b46e29331fa68bf333b1bdcc42cd513908688a46a42fb5fa0c74185b6"
+  ],
+  "research_stop_orders_60f": [
+    "a40fd9458d680fe9f001479b7c32cb4015c8cbc979222f291e783dcb64ce4c23",
+    "81ad132e7156f62779b45df0bcc8b2ccb9b6d3bc6eada92dfac718ae23277661"
+  ],
+  "research_support_tranches_60f": [
+    "408879deebfd3e4626de17f18d25b52f3f6ed11ce91ad418d90cff5f8e093d6c",
+    "8f220eae73ffc8c8e146526d90c8d2e0a92ec8d3b7646d70699a302afc35fd78"
+  ],
+  "research_wyckoff_60f": [
+    "0aa2d7dde189816b9fafdcfded9dcb0f671b1b6c71dd9feb23cb87cc7966ad04",
+    "45127cb51038ff3f650e75611c3157fe7f7e01ac0927f4c6ea3cce28f4433363"
+  ],
+  "research_wyckoff_family_60f": [
+    "f6c275c5c6416b2129f23aa2a0dc7ac5ffcaf06fd2214eba998ce7d6e3eb4cbc",
+    "2e99d0a5cc9192165bb1f730fb8824b17eaf261032656d2cb4fb8adc2cddb928"
+  ],
+  "research_wyckoff_family_review": [
+    "ad323655c2ee25041236437c4a2e75e11cce9291625dcfe99725380b335da069",
+    "1bd96533dc2ced9da68244fdb07ed7a160e4496005a109efd2b6adb3bc55d353"
+  ],
+  "research_wyckoff_forward_60f": [
+    "ac7cc13739aa07b084939f5f87681455a03bf04e6351739dfbcb4a5137a48f53",
+    "96648da16f4b053505e5461943211027412521220998437a16144bba2526d0cb"
+  ],
+  "research_wyckoff_hybrid_60f": [
+    "59013733b391c7c3d1f7f946ff62874689422df6bb026ca9dee306a298ce22d2",
+    "b7a2c3ca2875437900c6df912f7afd6eff63bde0ee4b41ffdef450b582d0b64f"
+  ]
+}

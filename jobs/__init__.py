@@ -1,4 +1,4 @@
-"""Historical research programs and backwards-compatible workflow commands."""
+"""Compatibility namespace for commands now organized under workflows."""
 import sys
 
 from jobs._compat import WorkflowAliases

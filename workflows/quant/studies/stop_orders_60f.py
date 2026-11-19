@@ -9,17 +9,16 @@ import pandas as pd
 
 from core.config import get_config
 from core.logger import get_logger
-from jobs.backtest_mtf import WINDOWS
-from jobs.research_mainboard_60f import write_json
-from jobs.research_quality_60f import (
+from workflows.quant.studies.provenance import digest, freeze, source_hashes
+from workflows.quant.backtests.mtf import WINDOWS
+from workflows.quant.studies.mainboard_60f import write_json
+from workflows.quant.studies.quality_60f import (
     BASELINE,
     STRESS,
     ORIGINAL,
     RANKED,
     MINIMUM_QUALITY,
     configuration,
-    digest,
-    freeze,
     read_report,
     run,
 )
@@ -62,8 +61,8 @@ def execute_study(
     }
     files = [ORIGINAL, RANKED, baseline_path, stress_path, *minute_files.values()]
     sources = [
-        "jobs/research_stop_orders_60f.py",
-        "jobs/research_quality_60f.py",
+        "workflows/quant/studies/stop_orders_60f.py",
+        "workflows/quant/studies/quality_60f.py",
         "skills/quant/candidate_quality.py",
         "skills/quant/stop_orders.py",
         "skills/quant/tranche_engine.py",
@@ -72,8 +71,8 @@ def execute_study(
         "skills/quant/market_context.py",
         "skills/quant/report.py",
         "skills/quant/metrics.py",
-        "jobs/backtest_mtf.py",
-        "jobs/research_mainboard_60f.py",
+        "workflows/quant/backtests/mtf.py",
+        "workflows/quant/studies/mainboard_60f.py",
         "skills/quant/support_protection.py",
         *extra_sources,
     ]
@@ -90,7 +89,7 @@ def execute_study(
                 )
                 for p in files
             },
-            code_sha256={p: digest(root / p) for p in sources},
+            code_sha256=source_hashes(root, sources),
             base_plan=asdict(configuration(baseline)),
             selection="Jan-Jun only, both costs: positive/PF>1/>=30 campaigns/MDD<=8%/worst>=-8%; maximize minimum return/max(MDD,1). Freeze before later known windows.",
             target="Full funded net return>=8%; both costs MDD<=8%, worst>=-8%, >=30 campaigns; stressed return>0.",
@@ -108,12 +107,8 @@ def execute_study(
                 *extra_warnings,
             ],
         ),
+        source_root=root,
     )
-    for rel in sources:
-        target = folder / "source" / rel
-        if not target.exists():
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes((root / rel).read_bytes())
     if declare_only:
         print(f"Declared {len(cases)} fixed execution cases.")
         return

@@ -15,7 +15,7 @@ def test_no_snapshot_returns_actionable_unavailable_without_ddl(monkeypatch):
     monkeypatch.setattr("api.market_api.dashboard", lambda **kw: None)
     response = client().get("/api/v1/market/dashboard")
     assert response.status_code == 503
-    assert "jobs.scan_trend" in response.json()["detail"]
+    assert "python -m workflows.market.scan_trend" in response.json()["detail"]
 
 
 def test_dashboard_filter_is_optional_and_validated_before_read(monkeypatch):

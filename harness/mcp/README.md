@@ -32,7 +32,7 @@ harness/mcp/
     content.py        2 个: 内容资产 (挂 report 域)
   server.py     stdio MCP 服务 (零依赖手写 JSON-RPC)
   bridge.py     OpenAI function-calling 桥 (内部 Agent Loop 用)
-../../jobs/smoke_mcp_tools.py      全量冒烟 (fast/heavy 两档)
+../../workflows/diagnostics/smoke_mcp_tools.py      全量冒烟 (fast/heavy 两档)
 ```
 
 ## 二、工具清单 (30 只读 + 3 写类 = 32)

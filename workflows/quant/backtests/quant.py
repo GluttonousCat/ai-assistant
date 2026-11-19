@@ -71,7 +71,7 @@ def run(start, end, periods, workers=2, max_stocks=None):
     days, limit_days, _ = input_dates(start, end)
     if set(days) - limit_days:
         raise ValueError(
-            "缺少真实涨跌停日期；先运行 python -m jobs.sync_backtest_inputs"
+            "缺少真实涨跌停日期；先运行 python -m workflows.quant.inputs.sync_backtest_inputs"
         )
     base = benchmarks(start, end)
     indexed = {
@@ -156,7 +156,7 @@ def run(start, end, periods, workers=2, max_stocks=None):
                     "v9",
                     "rules",
                 ):
-                    continue  # v5 needs both timeframes; use jobs.backtest_mtf.
+                    continue  # v5 needs both timeframes; use workflows.quant.backtests.mtf.
                 result = simulate(series, timeline, strategy_id, timeframe, mode)
                 result.update(
                     run_id=str(uuid4()),

@@ -10,8 +10,8 @@ from uuid import uuid4
 import pandas as pd
 
 from core.config import get_config
-from jobs.backtest_quant import _database_unit
-from jobs.backtest_mtf import PROFILES, WINDOWS, window_series, START, END
+from storage.pg import retry_on_disconnect as _database_unit
+from workflows.quant.backtests.mtf import PROFILES, WINDOWS, window_series, START, END
 from skills.quant.engine import simulate
 from skills.quant.report import write_result
 from storage.repositories.backtest import input_dates, publish

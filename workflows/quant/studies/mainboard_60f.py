@@ -7,7 +7,6 @@ claim. Failure to reach the target is a valid, permanently recorded result.
 
 import argparse
 from dataclasses import asdict, replace
-import hashlib
 import json
 from pathlib import Path
 import pickle
@@ -17,8 +16,9 @@ import pandas as pd
 
 from core.config import get_config
 from core.logger import get_logger
-from jobs.cache_mainboard_minutes import is_mainboard
-from jobs.backtest_mtf import window_series, WINDOWS, START, END
+from workflows.quant.studies.provenance import digest, freeze
+from workflows.quant.inputs.cache_mainboard_minutes import is_mainboard
+from workflows.quant.backtests.mtf import window_series, WINDOWS, START, END
 from skills.quant.engine import simulate
 from skills.quant.models import BacktestConfig
 from skills.quant.prepare import prepare_swing
@@ -85,7 +85,7 @@ def preregister(folder, source):
         version=VERSION,
         start=START,
         end=END,
-        source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+        source_sha256=digest(source),
         entry_profiles={k: asdict(v) for k, v in ENTRY_PROFILES.items()},
         exit_profiles={k: asdict(v) for k, v in EXIT_PROFILES.items()},
         strategies=STRATEGIES,
@@ -103,18 +103,10 @@ def preregister(folder, source):
             "Minute data refreshed from same Sina source; daily execution/factors/limits frozen from warehouse.",
         ],
     )
-    # JSON round-trips tuples (the frozen windows) as lists. Compare canonical
-    # values so a resume cannot spuriously reject an unchanged declaration.
-    declaration = json.loads(json.dumps(declaration))
-    path = folder / "declaration.json"
-    if path.exists():
-        if json.loads(path.read_text(encoding="utf-8")) != declaration:
-            raise ValueError(
-                "Frozen declaration differs; create a new explicitly versioned experiment"
-            )
-    else:
-        write_json(path, declaration)
-    return declaration
+    return freeze(
+        folder / "declaration.json", declaration,
+        mismatch="Frozen declaration differs; create a new explicitly versioned experiment",
+    )
 
 
 def prepare(folder, payload):
@@ -148,7 +140,7 @@ def prepare(folder, payload):
                 code=s.code,
                 minute_rows=len(minute),
                 daily_rows=len(s.times),
-                source_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+                source_sha256=digest(path),
                 close_deviations_over_half_pct=int(deviations),
                 minute_days=minute.bar_end.dt.normalize().nunique(),
             )
@@ -408,7 +400,7 @@ def main():
     if args.report_only or args.publish_only:
         write_research_summary(folder)
         if args.publish_only:
-            from jobs.backtest_quant import _database_unit
+            from workflows.quant.backtests.quant import _database_unit
             from storage.repositories.backtest import publish, annotate_diagnostics
             from storage.schema.quant import ensure_quant_schema
 

@@ -4,7 +4,7 @@ import argparse
 from pathlib import Path
 
 from core.config import get_config
-from jobs.research_stop_orders_60f import execute_study
+from workflows.quant.studies.stop_orders_60f import execute_study
 
 VERSION = "quality72-completed60f-protection-v28"
 FOLDER = "quality72_intraday_protection_v28"
@@ -33,7 +33,7 @@ def main():
         VERSION,
         CASES,
         args.declare_only,
-        extra_sources=("jobs/research_intraday_protection_60f.py",),
+        extra_sources=("workflows/quant/studies/intraday_protection_60f.py",),
         extra_warnings=(
             "Explicit automated60F protective-order scenario, not manual after-work execution. No actual broker integration or orders.",
             "At a completed native60F close, after .5/.75/1R AND1/1.5% profit, raise stop to fee/slippage-adjusted cost floor. It can first trigger in the NEXT bar; today's high cannot retroactively cause a fill.",

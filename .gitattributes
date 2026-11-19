@@ -1,0 +1,4 @@
+# Frozen studies hash individual working-tree files, including their line endings.
+workflows/quant/studies/**/*.py text eol=lf
+workflows/quant/studies/*.py text eol=lf
+workflows/quant/backtests/mtf.py text eol=lf

@@ -1,1 +1,1 @@
-"""Execution of queued portfolio backtests."""
+"""Portfolio backtest workers, research inputs, fixed backtests and studies."""

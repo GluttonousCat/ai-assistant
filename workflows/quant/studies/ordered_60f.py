@@ -6,7 +6,6 @@ Old artifacts remain intact. All new outputs live under one versioned folder.
 
 import argparse
 from dataclasses import asdict, replace
-import hashlib
 import json
 from pathlib import Path
 import pickle
@@ -16,8 +15,9 @@ import pandas as pd
 
 from core.config import get_config
 from core.logger import get_logger
-from jobs.backtest_mtf import window_series, WINDOWS
-from jobs.research_mainboard_60f import (
+from workflows.quant.studies.provenance import digest, freeze, source_hashes
+from workflows.quant.backtests.mtf import window_series, WINDOWS
+from workflows.quant.studies.mainboard_60f import (
     ENTRY_PROFILES,
     EXIT_PROFILES,
     qualified,
@@ -67,42 +67,31 @@ def declare(folder, source, root):
         "skills/quant/prepare.py",
         "skills/quant/engine.py",
     ]
-    value = json.loads(
-        json.dumps(
-            dict(
-                version=VERSION,
-                source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
-                code_sha256={
-                    name: hashlib.sha256((root / name).read_bytes()).hexdigest()
-                    for name in code_files
-                },
-                entry=asdict(ENTRY),
-                old_entry=asdict(ENTRY_PROFILES["balanced"]),
-                variants={
-                    name: dict(entry=e, strategy=s, execution=asdict(c))
-                    for name, (e, s, c) in VARIANTS.items()
-                },
-                primary=PRIMARY,
-                windows=WINDOWS,
-                selection="No optimization or winner selection; fixed primary and explanatory controls.",
-                limitations=[
-                    "2026 data and examples were already inspected: all results are in-sample research.",
-                    "2333 current non-ST mainboard constituents of the fixed five-index union, with survivorship/lookahead bias.",
-                    "Daily bars are execution prices only. All entry and support evidence comes from completed native 60F.",
-                    "After-close thresholds execute next session; precommitted control requires broker conditions and is separate.",
-                    "Planned distance 4% and account risk .35% cannot guarantee realized loss limits.",
-                ],
-            )
-        )
+    value = dict(
+        version=VERSION,
+        source_sha256=digest(source),
+        code_sha256=source_hashes(root, code_files),
+        entry=asdict(ENTRY),
+        old_entry=asdict(ENTRY_PROFILES["balanced"]),
+        variants={
+            name: dict(entry=e, strategy=s, execution=asdict(c))
+            for name, (e, s, c) in VARIANTS.items()
+        },
+        primary=PRIMARY,
+        windows=WINDOWS,
+        selection="No optimization or winner selection; fixed primary and explanatory controls.",
+        limitations=[
+            "2026 data and examples were already inspected: all results are in-sample research.",
+            "2333 current non-ST mainboard constituents of the fixed five-index union, with survivorship/lookahead bias.",
+            "Daily bars are execution prices only. All entry and support evidence comes from completed native 60F.",
+            "After-close thresholds execute next session; precommitted control requires broker conditions and is separate.",
+            "Planned distance 4% and account risk .35% cannot guarantee realized loss limits.",
+        ],
     )
-    path = folder / "declaration.json"
-    if path.exists() and json.loads(path.read_text(encoding="utf-8")) != value:
-        raise ValueError(
-            "Frozen entry/exit/code declaration changed; use a new explicit experiment"
-        )
-    if not path.exists():
-        write_json(path, value)
-    return value
+    return freeze(
+        folder / "declaration.json", value, source_root=root,
+        mismatch="Frozen entry/exit/code declaration changed; use a new explicit experiment",
+    )
 
 
 def prepare(folder, source):
@@ -326,7 +315,7 @@ def main():
         print("Frozen 7 fixed controls; no parameter search or winner selection.")
         return
     if args.publish_only:
-        from jobs.backtest_quant import _database_unit
+        from workflows.quant.backtests.quant import _database_unit
         from storage.repositories.backtest import publish, annotate_diagnostics
         from storage.schema.quant import ensure_quant_schema
 

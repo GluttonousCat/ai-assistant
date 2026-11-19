@@ -6,7 +6,6 @@ external fetching, default-strategy changes or broker orders occur here.
 
 import argparse
 from dataclasses import asdict, replace
-import hashlib
 import json
 from pathlib import Path
 import pickle
@@ -16,9 +15,10 @@ import pandas as pd
 
 from core.config import get_config
 from core.logger import get_logger
-from jobs.backtest_mtf import WINDOWS, window_series
-from jobs.research_mainboard_60f import ENTRY_PROFILES, qualified, score, write_json
-from jobs.research_market_context import PLAN, REFERENCE, load_indices
+from workflows.quant.studies.provenance import digest, freeze, source_hashes
+from workflows.quant.backtests.mtf import WINDOWS, window_series
+from workflows.quant.studies.mainboard_60f import ENTRY_PROFILES, qualified, score, write_json
+from workflows.quant.studies.market_context import PLAN, REFERENCE, load_indices
 from skills.quant.market_context import MarketPolicy, apply_policy
 from skills.quant.online_priority import (
     OnlineConfig,
@@ -52,50 +52,37 @@ def declare(root, folder, index_audit):
         "skills/quant/tranche_engine.py",
         "skills/quant/tranches.py",
         "skills/quant/market_context.py",
-        "jobs/research_online_60f.py",
+        "workflows/quant/studies/online_60f.py",
     ]
     source = root / "output/quant/market_priority_v13/prepared.pkl"
-    value = json.loads(
-        json.dumps(
-            dict(
-                version=VERSION,
-                model_config=asdict(MODEL_CFG),
-                features=FEATURES,
-                cases=CASES,
-                windows=WINDOWS,
-                indices=index_audit,
-                source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
-                code_sha256={
-                    p: hashlib.sha256((root / p).read_bytes()).hexdigest()
-                    for p in paths
-                },
-                entry_config=asdict(ENTRY_PROFILES["balanced"]),
-                model="Monthly expanding ridge100 on known beta-adjusted auxiliary outcomes; >=500 historical outcomes, cash until ready. Every label exit precedes training month; no current label eligibility influences prediction. Standardization/clipping use training rows only.",
-                selection="Jan-Jun only, positive return/PF>1/>=30 campaigns/MDD<=8%/worst>=-8%; maximize return/max(MDD,1). Known-failed3% control excluded. All2026 already seen; not independent validation.",
-                target="Full2026>=5%, MDD<=8%, >=30 campaigns, worst normal campaign>=-8%, doubled-slippage positive. Stress tail loss is reported separately, not silently bounded to8%.",
-                history="v11-v14 88 cases all failed. v15-v17 causal models failed. v18 full6.39% and v19 full8.05% failed worst-campaign gate. v20 only tightened entry/add cap to<=2.5%, kept .35% account risk/10% stock limit; v21 is a parity-checked formal implementation, no new hyperparameters.",
-                warnings=[
-                    "All2026, including later windows and known examples, informed repeated research. Historical threshold success is not independent validation or a live recommendation.",
-                    "2333 current non-ST mainboard constituents of a fixed five-index union; current membership/survivorship bias remains.",
-                    "Cash during model warmup is included in the full Jan1-Nov12 portfolio. At least500 overlapping historical labels do not mean500 independent observations.",
-                    "Individual shapes and predictors use60F only; daily bars supply execution/outcome prices and liquidity. No daily candle-shape entry gate.",
-                    "Auxiliary labels use one-entry10-session close triggers, next legal open and proportional fees. Actual532 portfolio uses real limits, T+1, minimum fees, staged exits and fixed original stops.",
-                    "Planned2.5% entry/add distance and .35% account risk are not guaranteed loss caps. Overnight gaps/limits can produce larger losses, including in cost stress.",
-                    "Factor-share approximation does not reconstruct a cash corporate-action ledger; exit splitting/market impact is not fully modeled.",
-                ],
-            )
-        )
+    value = dict(
+        version=VERSION,
+        model_config=asdict(MODEL_CFG),
+        features=FEATURES,
+        cases=CASES,
+        windows=WINDOWS,
+        indices=index_audit,
+        source_sha256=digest(source),
+        code_sha256=source_hashes(root, paths),
+        entry_config=asdict(ENTRY_PROFILES["balanced"]),
+        model="Monthly expanding ridge100 on known beta-adjusted auxiliary outcomes; >=500 historical outcomes, cash until ready. Every label exit precedes training month; no current label eligibility influences prediction. Standardization/clipping use training rows only.",
+        selection="Jan-Jun only, positive return/PF>1/>=30 campaigns/MDD<=8%/worst>=-8%; maximize return/max(MDD,1). Known-failed3% control excluded. All2026 already seen; not independent validation.",
+        target="Full2026>=5%, MDD<=8%, >=30 campaigns, worst normal campaign>=-8%, doubled-slippage positive. Stress tail loss is reported separately, not silently bounded to8%.",
+        history="v11-v14 88 cases all failed. v15-v17 causal models failed. v18 full6.39% and v19 full8.05% failed worst-campaign gate. v20 only tightened entry/add cap to<=2.5%, kept .35% account risk/10% stock limit; v21 is a parity-checked formal implementation, no new hyperparameters.",
+        warnings=[
+            "All2026, including later windows and known examples, informed repeated research. Historical threshold success is not independent validation or a live recommendation.",
+            "2333 current non-ST mainboard constituents of a fixed five-index union; current membership/survivorship bias remains.",
+            "Cash during model warmup is included in the full Jan1-Nov12 portfolio. At least500 overlapping historical labels do not mean500 independent observations.",
+            "Individual shapes and predictors use60F only; daily bars supply execution/outcome prices and liquidity. No daily candle-shape entry gate.",
+            "Auxiliary labels use one-entry10-session close triggers, next legal open and proportional fees. Actual532 portfolio uses real limits, T+1, minimum fees, staged exits and fixed original stops.",
+            "Planned2.5% entry/add distance and .35% account risk are not guaranteed loss caps. Overnight gaps/limits can produce larger losses, including in cost stress.",
+            "Factor-share approximation does not reconstruct a cash corporate-action ledger; exit splitting/market impact is not fully modeled.",
+        ],
     )
-    path = folder / "declaration.json"
-    if path.exists() and json.loads(path.read_text(encoding="utf-8")) != value:
-        raise ValueError("Frozen online experiment changed; use a new explicit version")
-    if not path.exists():
-        write_json(path, value)
-        for p in paths:
-            target = folder / "source" / p
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes((root / p).read_bytes())
-    return value
+    return freeze(
+        folder / "declaration.json", value, source_root=root,
+        mismatch="Frozen online experiment changed; use a new explicit version",
+    )
 
 
 def prepare(root, folder, frames, calendar):
@@ -313,7 +300,7 @@ def main():
     folder = root / "output/quant" / FOLDER
     folder.mkdir(parents=True, exist_ok=True)
     if args.publish_only:
-        from jobs.backtest_quant import _database_unit
+        from workflows.quant.backtests.quant import _database_unit
         from storage.repositories.backtest import publish
         from storage.schema.quant import ensure_quant_schema
 

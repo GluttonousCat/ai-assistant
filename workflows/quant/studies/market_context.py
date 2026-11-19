@@ -6,7 +6,6 @@ segments were already seen in earlier work, so none is independent OOS evidence.
 
 import argparse
 from dataclasses import asdict, replace
-import hashlib
 import json
 from pathlib import Path
 import pickle
@@ -17,9 +16,10 @@ import pandas as pd
 
 from core.config import get_config
 from core.logger import get_logger
-from jobs.backtest_mtf import window_series, WINDOWS
-from jobs.research_mainboard_60f import ENTRY_PROFILES, qualified, score, write_json
-from jobs.research_tranches import PLANS
+from workflows.quant.studies.provenance import digest, freeze, source_hashes
+from workflows.quant.backtests.mtf import window_series, WINDOWS
+from workflows.quant.studies.mainboard_60f import ENTRY_PROFILES, qualified, score, write_json
+from workflows.quant.studies.tranches import PLANS
 from skills.quant.market_context import (
     MarketPolicy,
     index_context,
@@ -179,7 +179,7 @@ def load_indices(folder, root):
         frames[code] = frame
         audit[code] = dict(
             rows=len(frame),
-            sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+            sha256=digest(path),
             max_daily_relative_error=error,
             first=str(frame.bar_end.min()),
             last=str(frame.bar_end.max()),
@@ -195,32 +195,25 @@ def declare(folder, root, audit, cases=None, study="context"):
         "skills/quant/tranche_engine.py",
         "skills/quant/tranches.py",
     ]
-    value = json.loads(
-        json.dumps(
-            dict(
-                version=VERSION,
-                indices=audit,
-                source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
-                code_sha256={
-                    f: hashlib.sha256((root / f).read_bytes()).hexdigest()
-                    for f in files
-                },
-                entry_config=asdict(ENTRY_PROFILES["balanced"]),
-                plan=asdict(PLAN),
-                policies={k: asdict(v) if v else None for k, v in POLICIES.items()},
-                windows=WINDOWS,
-                selection="Jan-Jun only: >=30 closed campaigns, positive return, PF>1, MDD<=8%, worst>=-8%; maximize return/max(MDD,1). No qualifying policy means keep baseline and continue research.",
-                relative_evidence="stock last4 native60F return minus lagged 60-bar beta times equal-weight index return; beta uses >=40 prior samples, clipped [0,3], no fabricated beta fallback.",
-                systemic_panic="Both indices negative over 4 native bars, mean return<=-1.5%; only soft M21 failure can receive one additional observation session if stock residual>=0 and price within 1ATR of M21. Stops, timeout and failed rebounds do not receive relief.",
-                target="Full 2026 portfolio>=5%, MDD<=8%, >=30 campaigns, worst campaign>=-8%, doubled slippage positive, same universe/cost/risk constraints.",
-                limitations=[
-                    "All 2026 segments were already inspected; not independent unseen validation.",
-                    "Fixed current membership/current non-ST and factor-share approximation retain previous biases.",
-                    "Index daily trend is macro context, never a stock daily-candle gate; missing index context blocks entries/adds and never grants delayed exits.",
-                    "4% planned stop and .35% account risk are not guaranteed losses under next-open gaps/price limits.",
-                ],
-            )
-        )
+    value = dict(
+        version=VERSION,
+        indices=audit,
+        source_sha256=digest(source),
+        code_sha256=source_hashes(root, files),
+        entry_config=asdict(ENTRY_PROFILES["balanced"]),
+        plan=asdict(PLAN),
+        policies={k: asdict(v) if v else None for k, v in POLICIES.items()},
+        windows=WINDOWS,
+        selection="Jan-Jun only: >=30 closed campaigns, positive return, PF>1, MDD<=8%, worst>=-8%; maximize return/max(MDD,1). No qualifying policy means keep baseline and continue research.",
+        relative_evidence="stock last4 native60F return minus lagged 60-bar beta times equal-weight index return; beta uses >=40 prior samples, clipped [0,3], no fabricated beta fallback.",
+        systemic_panic="Both indices negative over 4 native bars, mean return<=-1.5%; only soft M21 failure can receive one additional observation session if stock residual>=0 and price within 1ATR of M21. Stops, timeout and failed rebounds do not receive relief.",
+        target="Full 2026 portfolio>=5%, MDD<=8%, >=30 campaigns, worst campaign>=-8%, doubled slippage positive, same universe/cost/risk constraints.",
+        limitations=[
+            "All 2026 segments were already inspected; not independent unseen validation.",
+            "Fixed current membership/current non-ST and factor-share approximation retain previous biases.",
+            "Index daily trend is macro context, never a stock daily-candle gate; missing index context blocks entries/adds and never grants delayed exits.",
+            "4% planned stop and .35% account risk are not guaranteed losses under next-open gaps/price limits.",
+        ],
     )
     if cases is not None:
         is_priority = any("priority" in v for v in cases.values())
@@ -248,29 +241,21 @@ def declare(folder, root, audit, cases=None, study="context"):
             value["followup"] = (
                 "13 declared cases: original control plus support/relative20/blended ranking x max M13 extension 1/2.5ATR x close retention. Fixed original 442, 5/8% exits and stops. No calendar/code filters and no changed capital risk."
             )
-        for f in ["skills/quant/tranche_prepare.py", "jobs/research_market_context.py"]:
-            value["code_sha256"][f] = hashlib.sha256(
-                (root / f).read_bytes()
-            ).hexdigest()
+        extra = ["skills/quant/tranche_prepare.py", "workflows/quant/studies/market_context.py"]
         if is_priority:
-            f = "skills/quant/signal_priority.py"
-            value["code_sha256"][f] = hashlib.sha256(
-                (root / f).read_bytes()
-            ).hexdigest()
-        value = json.loads(json.dumps(value))
+            extra.append("skills/quant/signal_priority.py")
+        value["code_sha256"].update(source_hashes(root, extra))
     if study == "patience":
         value["version"] = "fixed-stop-structural-exit-patience-v14"
         value["followup"] = (
             "13 cases: control plus soft structural exit disabled/held at least8/12 sessions x timeout20/40 x profit5/8 or8/13. Original price stop, 5% cost protection, 442 adds, .35% risk and 4% entry distance unchanged. No blanket relaxation of price stops."
         )
         f = "skills/quant/report.py"
-        value["code_sha256"][f] = hashlib.sha256((root / f).read_bytes()).hexdigest()
-    path = folder / "declaration.json"
-    if path.exists() and json.loads(path.read_text(encoding="utf-8")) != value:
-        raise ValueError("Frozen market experiment changed")
-    if not path.exists():
-        write_json(path, value)
-    return value
+        value["code_sha256"][f] = digest(root / f)
+    return freeze(
+        folder / "declaration.json", value, source_root=root,
+        mismatch="Frozen market experiment changed",
+    )
 
 
 def prepare(folder, root, frames):
@@ -519,7 +504,7 @@ def main():
     if args.publish_only:
         # Publish frozen artifacts independently from current experiment code:
         # later CLI/report additions must not invalidate a completed experiment.
-        from jobs.backtest_quant import _database_unit
+        from workflows.quant.backtests.quant import _database_unit
         from storage.repositories.backtest import publish
         from storage.schema.quant import ensure_quant_schema
 

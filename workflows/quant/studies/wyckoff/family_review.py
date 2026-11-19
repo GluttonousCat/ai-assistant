@@ -10,9 +10,10 @@ import pandas as pd
 
 from core.config import get_config
 from core.logger import get_logger
-from jobs.backtest_mtf import WINDOWS, window_series
-from jobs.research_mainboard_60f import write_json
-from jobs.research_quality_60f import configuration, digest, freeze, read_report
+from workflows.quant.studies.provenance import digest, freeze, source_hashes
+from workflows.quant.backtests.mtf import WINDOWS, window_series
+from workflows.quant.studies.mainboard_60f import write_json
+from workflows.quant.studies.quality_60f import configuration, read_report
 from skills.quant.market_context import MarketPolicy
 from skills.quant.report import with_benchmarks, write_result
 from skills.quant.support_protection import SupportProtection
@@ -46,9 +47,9 @@ def main():
         "full": (normal["start"], normal["end"]),
     }
     code = [
-        "jobs/research_wyckoff_family_review.py",
-        "jobs/backtest_mtf.py",
-        "jobs/research_quality_60f.py",
+        "workflows/quant/studies/wyckoff/family_review.py",
+        "workflows/quant/backtests/mtf.py",
+        "workflows/quant/studies/quality_60f.py",
         "skills/quant/tranche_engine.py",
         "skills/quant/tranches.py",
         "skills/quant/models.py",
@@ -70,19 +71,15 @@ def main():
                 str(p.relative_to(root)): digest(p)
                 for p in (cache, manifest, normal_path, stress_path)
             },
-            code_sha256={name: digest(root / name) for name in code},
+            code_sha256=source_hashes(root, code),
             warnings=[
                 "Fixed comparison motivated by losses observed in 2026. Every window is previously inspected; the last four days are now diagnostic, not fresh validation for this change.",
                 "Stock candidates, model, price stops, 532 trims, reversal rules, index safeguards, risk budget, fees and total position limit follow v40. Compare the minimum trend-structure holding period and maximum simultaneous reversal slots as isolated changes.",
                 "A structural reaction remains a close decision plus next legal open. T+1, actual limits and fees apply.",
             ],
         ),
+        source_root=root,
     )
-    for name in code:
-        path = folder / "source" / name
-        if not path.exists():
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes((root / name).read_bytes())
     with cache.open("rb") as stream:
         stocks = pickle.load(stream)["hybrid"]
     calendar = pd.DatetimeIndex(

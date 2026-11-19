@@ -1,8 +1,4 @@
-"""Resolve former flat jobs.* imports and module commands on demand.
-
-The historical research sources in this package also run checksums on their
-original paths. They remain normal files and use Python's normal importer.
-"""
+"""Resolve former jobs.* imports, module commands and supported script paths."""
 from importlib import import_module
 from importlib.abc import Loader
 from importlib.util import spec_from_loader
@@ -10,10 +6,24 @@ from pathlib import Path
 from runpy import run_module
 import sys
 
+# A direct jobs/<script>.py launch imports _compat from the script directory.
+if not __package__:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from workflows.quant.studies.provenance import STUDY_MODULES  # noqa: E402
+
 
 _MOVED = {
+    **{f"jobs.{old}": current for old, current in STUDY_MODULES.items()},
+    "jobs.agent_trace_demo": "workflows.diagnostics.agent_trace",
     "jobs.annotate_trend_context": "workflows.market.annotate_trend_context",
+    "jobs.backtest_mtf": "workflows.quant.backtests.mtf",
+    "jobs.backtest_quant": "workflows.quant.backtests.quant",
+    "jobs.backtest_reversal": "workflows.quant.backtests.reversal",
+    "jobs.backtest_reversal_exits": "workflows.quant.backtests.reversal_exits",
     "jobs.cache_intraday_prefix": "workflows.market.collect_intraday",
+    "jobs.cache_mainboard_minutes": "workflows.quant.inputs.cache_mainboard_minutes",
+    "jobs.check_boundaries": "workflows.diagnostics.check_boundaries",
     "jobs.daily_digest": "workflows.reports.digest",
     "jobs.daily_fetch_zxsq": "workflows.reports.fetch",
     "jobs.fetch_minute_history": "workflows.market.fetch_minute_history",
@@ -32,6 +42,9 @@ _MOVED = {
     "jobs.scheduler": "workflows.market.daily_scheduler",
     "jobs.send_intraday_digest": "workflows.market.send_midday_digest",
     "jobs.send_market_digest": "workflows.market.send_close_digest",
+    "jobs.smoke_mcp_stdio": "workflows.diagnostics.smoke_mcp_stdio",
+    "jobs.smoke_mcp_tools": "workflows.diagnostics.smoke_mcp_tools",
+    "jobs.sync_backtest_inputs": "workflows.quant.inputs.sync_backtest_inputs",
     "jobs.sync_intraday": "workflows.market.sync_intraday",
     "jobs.sync_remaining_market": "workflows.market.sync_remaining",
     "jobs.sync_zxsq_to_pg": "workflows.reports.sync",
@@ -44,8 +57,6 @@ def forward(legacy_name, execution_name):
     """Support the historical module name and explicitly supported script paths."""
     destination = _MOVED[legacy_name]
     if execution_name == "__main__":
-        if not __package__:  # A direct jobs/<script>.py launch imported _compat locally.
-            sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
         run_module(destination, run_name="__main__", alter_sys=True)
     else:
         sys.modules[execution_name] = import_module(destination)

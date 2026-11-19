@@ -10,14 +10,13 @@ import pandas as pd
 
 from core.config import get_config
 from core.logger import get_logger
-from jobs.backtest_mtf import WINDOWS, window_series
-from jobs.research_mainboard_60f import write_json
-from jobs.research_quality_60f import (
+from workflows.quant.studies.provenance import digest, freeze, source_hashes
+from workflows.quant.backtests.mtf import WINDOWS, window_series
+from workflows.quant.studies.mainboard_60f import write_json
+from workflows.quant.studies.quality_60f import (
     BASELINE,
     STRESS,
     configuration,
-    digest,
-    freeze,
     read_report,
 )
 from skills.quant.market_context import MarketPolicy
@@ -57,9 +56,9 @@ def main():
     ):
         raise ValueError("首日风险复核的分钟行情与冻结准备输入不一致")
     code = [
-        "jobs/research_wyckoff_family_60f.py",
-        "jobs/backtest_mtf.py",
-        "jobs/research_quality_60f.py",
+        "workflows/quant/studies/wyckoff/family.py",
+        "workflows/quant/backtests/mtf.py",
+        "workflows/quant/studies/quality_60f.py",
         "skills/quant/wyckoff_hybrid.py",
         "skills/quant/tranche_engine.py",
         "skills/quant/tranche_prepare.py",
@@ -96,7 +95,7 @@ def main():
                     for p in (source, manifest, baseline_path, stress_path)
                 },
             },
-            code_sha256={name: digest(root / name) for name in code},
+            code_sha256=source_hashes(root, code),
             warnings=[
                 "Fixed 2026 mainboard universe, previously inspected history with membership/survivorship bias.",
                 "Trend pullbacks retain existing MA, volume and model priorities with existing position management. The hybrid replaces only the reversal candidates and their position management with v33 price-volume rules.",
@@ -108,12 +107,8 @@ def main():
                 "Both families use existing index safeguards, completed 60F after-close decisions, next legal open, 532 and original cash, fees, limits, settlement, and risk caps.",
             ],
         ),
+        source_root=root,
     )
-    for name in code:
-        target = folder / "source" / name
-        if not target.exists():
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes((root / name).read_bytes())
     hybrid = combine_families(ranked, prepared["price_volume_primary"])
     reviewed = [
         attach_entry_session_low(pd.read_pickle(minute_paths[stock.code]), stock)

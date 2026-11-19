@@ -17,6 +17,7 @@ from skills.trend.intraday import dashboard as intraday_dashboard, chart as intr
 
 market_router = APIRouter(prefix="/api/v1/market", tags=["market"])
 logger = get_logger(__name__)
+_MISSING_SNAPSHOT = "尚未生成趋势快照，请运行 python -m workflows.market.scan_trend"
 
 
 def _validate_stock_code(code: str):
@@ -82,7 +83,7 @@ async def trend_dashboard(min_numeric_score: int | None = Query(
     started = perf_counter()
     result = await asyncio.to_thread(dashboard, min_numeric_score=min_numeric_score)
     if result is None:
-        raise HTTPException(503, "尚未生成趋势快照，请运行 python -m jobs.scan_trend")
+        raise HTTPException(503, _MISSING_SNAPSHOT)
     logger.info("行情看板快照读取 min_score=%s rows=%d elapsed_ms=%.1f",
                 min_numeric_score, len(result["data"]), (perf_counter() - started) * 1000)
     return result
@@ -97,7 +98,7 @@ async def trend_stock(
         dashboard, str(run_id) if run_id else None, False
     )
     if snapshot is None:
-        raise HTTPException(503, "尚未生成趋势快照，请运行 python -m jobs.scan_trend")
+        raise HTTPException(503, _MISSING_SNAPSHOT)
     if timeframe == "1D" and "1D" not in snapshot["metadata"].get("timeframes", {}):
         raise HTTPException(404, "该历史快照尚未计算日K策略")
     cutoff = (
