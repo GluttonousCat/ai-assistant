@@ -66,11 +66,13 @@ build-backend = "setuptools.build_meta"
 py-modules = ["app", "run_server"]
 
 [tool.setuptools.packages.find]
-include = ["api*", "core*", "harness*", "skills*", "tools*", "storage*", "workflows*", "jobs*", "evals*"]
+include = ["api*", "core*", "harness*", "skills*", "tools*", "storage*", "workflows*", "jobs*", "evals*", "docs.ops"]
 
 [tool.setuptools.package-data]
 "skills.beta_alpha" = ["chains/*.yaml"]
 "evals" = ["datasets/*.json"]
+"workflows.quant.studies" = ["source_migration.json"]
+"docs.ops" = ["dependency_baseline.json"]
 
 [tool.pytest.ini_options]
 cache_dir = "output/.pytest_cache"

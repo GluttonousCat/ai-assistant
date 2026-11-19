@@ -10,16 +10,15 @@ import pandas as pd
 
 from core.config import get_config
 from core.logger import get_logger
-from jobs.backtest_mtf import WINDOWS, window_series
-from jobs.research_mainboard_60f import write_json
-from jobs.research_quality_60f import (
+from workflows.quant.studies.provenance import digest, freeze, source_hashes
+from workflows.quant.backtests.mtf import WINDOWS, window_series
+from workflows.quant.studies.mainboard_60f import write_json
+from workflows.quant.studies.quality_60f import (
     BASELINE,
     configuration,
-    digest,
-    freeze,
     read_report,
 )
-from jobs.research_wyckoff_60f import PROTECTION
+from workflows.quant.studies.wyckoff.price_volume import PROTECTION
 from skills.quant.report import with_benchmarks, write_result
 from skills.quant.tranche_engine import simulate
 from skills.quant.wyckoff_hybrid import filter_pullbacks
@@ -41,7 +40,7 @@ def main():
     if prior["strategy_version"] != "wyckoff-price-volume-60f-v33":
         raise ValueError("量价缓存版本不匹配")
     code = [
-        "jobs/research_wyckoff_hybrid_60f.py",
+        "workflows/quant/studies/wyckoff/hybrid.py",
         "skills/quant/wyckoff_hybrid.py",
         "skills/quant/prepare.py",
         "skills/quant/tranche_engine.py",
@@ -51,9 +50,9 @@ def main():
         "skills/quant/metrics.py",
         "skills/quant/report.py",
         "skills/quant/registry.py",
-        "jobs/backtest_mtf.py",
-        "jobs/research_quality_60f.py",
-        "jobs/research_wyckoff_60f.py",
+        "workflows/quant/backtests/mtf.py",
+        "workflows/quant/studies/quality_60f.py",
+        "workflows/quant/studies/wyckoff/price_volume.py",
     ]
     for name in (
         "skills/quant/prepare.py",
@@ -72,7 +71,7 @@ def main():
                 str(p.relative_to(root)): digest(p)
                 for p in (source, manifest, baseline_path, parent / "comparison.json")
             },
-            code_sha256={name: digest(root / name) for name in code},
+            code_sha256=source_hashes(root, code),
             entry="Spring-test by price and volume. LPS also requires M13 above M21, rising M21 over four bars, rising M8 over two bars and close at or above M8 at the confirmation bar.",
             selection="Fixed hybrid rule, replayed against v33 and v21 on the same windows and cost scenarios. No parameter selection.",
             warnings=[
@@ -81,12 +80,8 @@ def main():
                 "Completed 60F triggers, after-close plans, next legal open, 532, T+1, actual limits and fees. Risk budget and position caps match the frozen control.",
             ],
         ),
+        source_root=root,
     )
-    for name in code:
-        target = folder / "source" / name
-        if not target.exists():
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes((root / name).read_bytes())
     with source.open("rb") as stream:
         originals = pickle.load(stream)["price_volume_primary"]
     stocks = []

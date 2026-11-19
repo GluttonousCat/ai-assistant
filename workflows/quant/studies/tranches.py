@@ -2,7 +2,6 @@
 
 import argparse
 from dataclasses import asdict, replace
-import hashlib
 import json
 from pathlib import Path
 import pickle
@@ -12,8 +11,9 @@ import pandas as pd
 
 from core.config import get_config
 from core.logger import get_logger
-from jobs.backtest_mtf import window_series, WINDOWS
-from jobs.research_mainboard_60f import ENTRY_PROFILES, EXIT_PROFILES, write_json
+from workflows.quant.studies.provenance import digest, freeze, source_hashes
+from workflows.quant.backtests.mtf import window_series, WINDOWS
+from workflows.quant.studies.mainboard_60f import ENTRY_PROFILES, EXIT_PROFILES, write_json
 from skills.quant.engine import simulate as legacy_simulate
 from skills.quant.prepare import MarketSeries
 from skills.quant.report import write_result
@@ -53,38 +53,29 @@ def declaration(folder, source, root):
         "skills/quant/tranche_engine.py",
         "skills/quant/tranche_prepare.py",
     ]
-    value = json.loads(
-        json.dumps(
-            dict(
-                version="tranche-study-v10",
-                source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
-                code_sha256={
-                    f: hashlib.sha256((root / f).read_bytes()).hexdigest()
-                    for f in files
-                },
-                plans={k: asdict(v) for k, v in PLANS.items()},
-                entries=["old", "new"],
-                windows=WINDOWS,
-                primary=PRIMARY,
-                legacy_control=asdict(EXIT_PROFILES["scheduled_reversal"]),
-                selection="Fixed 442 primary; controls only, no winner picking.",
-                semantics="442/532 are fractions of the stock plan. Adds at .5R/1R with completed-60F evidence, only at rising fill prices. Sell accumulated position at +5%/+8%, retain last tail. Hard exits override all tranches.",
-                limitations=[
-                    "All 2026 segments/examples were inspected; in-sample only.",
-                    "2333 current non-ST mainboard stocks of a fixed five-index union; survivor/membership bias.",
-                    "Next-open fills, T+1 per acquisition, actual limits and fees. Planned 4% distance/.35% account risk may be exceeded by gaps.",
-                    "Factor-share approximation, not corporate-action cash accounting. Lot/cash/risk caps can leave a plan partly filled.",
-                    "One completed campaign counts once; open partial realized profits are accounted separately.",
-                ],
-            )
-        )
+    value = dict(
+        version="tranche-study-v10",
+        source_sha256=digest(source),
+        code_sha256=source_hashes(root, files),
+        plans={k: asdict(v) for k, v in PLANS.items()},
+        entries=["old", "new"],
+        windows=WINDOWS,
+        primary=PRIMARY,
+        legacy_control=asdict(EXIT_PROFILES["scheduled_reversal"]),
+        selection="Fixed 442 primary; controls only, no winner picking.",
+        semantics="442/532 are fractions of the stock plan. Adds at .5R/1R with completed-60F evidence, only at rising fill prices. Sell accumulated position at +5%/+8%, retain last tail. Hard exits override all tranches.",
+        limitations=[
+            "All 2026 segments/examples were inspected; in-sample only.",
+            "2333 current non-ST mainboard stocks of a fixed five-index union; survivor/membership bias.",
+            "Next-open fills, T+1 per acquisition, actual limits and fees. Planned 4% distance/.35% account risk may be exceeded by gaps.",
+            "Factor-share approximation, not corporate-action cash accounting. Lot/cash/risk caps can leave a plan partly filled.",
+            "One completed campaign counts once; open partial realized profits are accounted separately.",
+        ],
     )
-    path = folder / "declaration.json"
-    if path.exists() and json.loads(path.read_text(encoding="utf-8")) != value:
-        raise ValueError("Frozen staged experiment changed")
-    if not path.exists():
-        write_json(path, value)
-    return value
+    return freeze(
+        folder / "declaration.json", value, source_root=root,
+        mismatch="Frozen staged experiment changed",
+    )
 
 
 def prepare(folder, source):
@@ -306,7 +297,7 @@ def main():
         print("Frozen 442/532 plans and fixed controls, no winner selection.")
         return
     if args.publish_only:
-        from jobs.backtest_quant import _database_unit
+        from workflows.quant.backtests.quant import _database_unit
         from storage.repositories.backtest import publish
         from storage.schema.quant import ensure_quant_schema
 

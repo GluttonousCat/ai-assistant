@@ -6,7 +6,6 @@ conditions explicitly. Does not inspect or select using the first holdout.
 
 import argparse
 from dataclasses import asdict, replace
-import hashlib
 import json
 from pathlib import Path
 import pickle
@@ -16,8 +15,9 @@ import pandas as pd
 
 from core.config import get_config
 from core.logger import get_logger
-from jobs.backtest_mtf import window_series, WINDOWS
-from jobs.research_mainboard_60f import (
+from workflows.quant.studies.provenance import digest, freeze
+from workflows.quant.backtests.mtf import window_series, WINDOWS
+from workflows.quant.studies.mainboard_60f import (
     ENTRY_PROFILES,
     EXIT_PROFILES,
     LIMITS,
@@ -39,37 +39,31 @@ MODES = ["after_close", "precommitted"]
 
 
 def declaration(folder, source):
-    value = json.loads(
-        json.dumps(
-            dict(
-                version=VERSION,
-                source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
-                prior_experiment="mainboard_60f_v8, 36 candidates, zero development qualification; first holdout not inspected for this design",
-                candidates=24,
-                entries={k: asdict(v) for k, v in ENTRY_PROFILES.items()},
-                breadth_thresholds=THRESHOLDS,
-                execution_modes=MODES,
-                exits={k: asdict(EXIT_PROFILES[k]) for k in EXITS},
-                constraints=LIMITS,
-                windows=WINDOWS,
-                selection="development only, same qualification and Calmar as first experiment; no later-window reselection",
-                stock_checks="60F reversal: close>M13, M8>M13, positive histogram; pullback: close>M13, M8>M13>M21, M21 rises over 8 bars",
-                limitations=[
-                    "Fixed current universe/current non-ST and known 2026 examples; not independent OOS.",
-                    "Second development search after 36 failed candidates; total search count 60.",
-                    "Breadth is the 2333-stock mainboard research pool, not the whole A-share market.",
-                    "Precommitted requires broker conditional orders; it is not after-work discretionary execution.",
-                    "Stops/targets/fills are approximations; overnight gaps and price limits can exceed planned risk.",
-                ],
-            )
-        )
+    value = dict(
+        version=VERSION,
+        source_sha256=digest(source),
+        prior_experiment="mainboard_60f_v8, 36 candidates, zero development qualification; first holdout not inspected for this design",
+        candidates=24,
+        entries={k: asdict(v) for k, v in ENTRY_PROFILES.items()},
+        breadth_thresholds=THRESHOLDS,
+        execution_modes=MODES,
+        exits={k: asdict(EXIT_PROFILES[k]) for k in EXITS},
+        constraints=LIMITS,
+        windows=WINDOWS,
+        selection="development only, same qualification and Calmar as first experiment; no later-window reselection",
+        stock_checks="60F reversal: close>M13, M8>M13, positive histogram; pullback: close>M13, M8>M13>M21, M21 rises over 8 bars",
+        limitations=[
+            "Fixed current universe/current non-ST and known 2026 examples; not independent OOS.",
+            "Second development search after 36 failed candidates; total search count 60.",
+            "Breadth is the 2333-stock mainboard research pool, not the whole A-share market.",
+            "Precommitted requires broker conditional orders; it is not after-work discretionary execution.",
+            "Stops/targets/fills are approximations; overnight gaps and price limits can exceed planned risk.",
+        ],
     )
-    path = folder / "declaration.json"
-    if path.exists() and json.loads(path.read_text(encoding="utf-8")) != value:
-        raise ValueError("Regime experiment declaration changed")
-    if not path.exists():
-        write_json(path, value)
-    return value
+    return freeze(
+        folder / "declaration.json", value,
+        mismatch="Regime experiment declaration changed",
+    )
 
 
 def prepare(folder, source):
@@ -297,7 +291,7 @@ def main():
         )
         return
     if args.publish_only:
-        from jobs.backtest_quant import _database_unit
+        from workflows.quant.backtests.quant import _database_unit
         from storage.repositories.backtest import publish, annotate_diagnostics
         from storage.schema.quant import ensure_quant_schema
 

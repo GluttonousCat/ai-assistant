@@ -153,4 +153,4 @@ AgentChat.jsx (session_id 每页生成一次, 全程携带)
 循环保留在harness/loop.py；专业口径在prompts.py，工具沙盒与并行执行在execution.py。
 新增query_intraday：原生60F、默认2026年、不复权，查询PG、单位股/元；分钟问题必须绕开日线快车道。
 HTTP入口改为api/agent_api.py，api/finance.py仅保留兼容聚合。工具总数33（30只读）。
-现有存储跨层访问按dependency_baseline登记，新增代码由jobs.check_boundaries及测试阻止增加。
+现有存储跨层访问按dependency_baseline登记，新增代码由workflows.diagnostics.check_boundaries及测试阻止增加。

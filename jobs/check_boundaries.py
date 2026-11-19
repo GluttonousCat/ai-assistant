@@ -1,60 +1,10 @@
-"""Dependency ratchet: forbid new upward imports and direct API/Agent SQL access.
+"""Direct-script compatibility for workflows.diagnostics.check_boundaries."""
+if not __package__:
+    import sys
+    from pathlib import Path
 
-Existing debt is recorded per module/import/count, never as a whole-directory
-exemption. Remove or reduce baseline entries when migrating the corresponding
-code. This checker requires no database, config, network or model.
-"""
-from __future__ import annotations
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import ast
-from collections import Counter
-import json
-from pathlib import Path
+from jobs._compat import forward
 
-ROOT = Path(__file__).resolve().parents[1]
-BASELINE = ROOT / "docs" / "ops" / "dependency_baseline.json"
-FORBIDDEN = {
-    "core": {"api", "harness", "skills", "tools", "storage", "jobs", "workflows"},
-    "storage": {"api", "harness", "skills", "tools", "jobs", "workflows"},
-    "tools": {"api", "harness", "skills", "jobs", "workflows"},
-    "harness": {"api", "storage", "jobs", "workflows"},
-    "skills": {"api", "storage", "jobs", "workflows"},
-    "api": {"storage", "jobs", "workflows"},
-}
-
-
-def violations(root: Path = ROOT) -> Counter:
-    found = Counter()
-    for layer, forbidden in FORBIDDEN.items():
-        for path in (root / layer).rglob("*.py"):
-            if "tests" in path.parts:
-                continue
-            tree = ast.parse(path.read_text(encoding="utf-8-sig"), filename=str(path))
-            for node in ast.walk(tree):
-                modules = []
-                if isinstance(node, ast.Import):
-                    modules = [n.name for n in node.names]
-                elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
-                    modules = [node.module]
-                for module in modules:
-                    if module.split(".")[0] in forbidden:
-                        found[f"{path.relative_to(root).as_posix()} -> {module}"] += 1
-    return found
-
-
-def new_violations(root: Path = ROOT) -> Counter:
-    baseline = Counter(json.loads(BASELINE.read_text(encoding="utf-8")))
-    return violations(root) - baseline
-
-
-def main() -> int:
-    new = new_violations()
-    if new:
-        print(json.dumps(dict(new), ensure_ascii=False, indent=2))
-        return 1
-    print(f"No new dependency violations; {sum(violations().values())} legacy imports tracked.")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+forward("jobs.check_boundaries", __name__)

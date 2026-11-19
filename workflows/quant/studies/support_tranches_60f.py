@@ -10,16 +10,15 @@ import pandas as pd
 
 from core.config import get_config
 from core.logger import get_logger
-from jobs.backtest_mtf import WINDOWS
-from jobs.research_mainboard_60f import write_json
-from jobs.research_quality_60f import (
+from workflows.quant.studies.provenance import digest, freeze, source_hashes
+from workflows.quant.backtests.mtf import WINDOWS
+from workflows.quant.studies.mainboard_60f import write_json
+from workflows.quant.studies.quality_60f import (
     BASELINE,
     STRESS,
     ORIGINAL,
     RANKED,
     MINIMUM_QUALITY,
-    digest,
-    freeze,
     read_report,
     run,
 )
@@ -59,8 +58,8 @@ def main():
         for code in codes
     }
     sources = [
-        "jobs/research_support_tranches_60f.py",
-        "jobs/research_quality_60f.py",
+        "workflows/quant/studies/support_tranches_60f.py",
+        "workflows/quant/studies/quality_60f.py",
         "skills/quant/support_protection.py",
         "skills/quant/candidate_quality.py",
         "skills/quant/tranche_engine.py",
@@ -70,8 +69,8 @@ def main():
         "skills/quant/market_context.py",
         "skills/quant/metrics.py",
         "skills/quant/report.py",
-        "jobs/backtest_mtf.py",
-        "jobs/research_mainboard_60f.py",
+        "workflows/quant/backtests/mtf.py",
+        "workflows/quant/studies/mainboard_60f.py",
     ]
     inputs = [ORIGINAL, RANKED, baseline_path, stress_path, *minute_files.values()]
     declared = freeze(
@@ -87,7 +86,7 @@ def main():
                 )
                 for p in inputs
             },
-            code_sha256={p: digest(root / p) for p in sources},
+            code_sha256=source_hashes(root, sources),
             selection="Jan-Jun normal AND doubled slippage positive/PF>1/>=30 campaigns/MDD<=8%/worst>=-8%; maximize minimum return/max(MDD,1). Freeze before later known windows.",
             target="Full funded net>=8%; both costs MDD<=8%,worst>=-8%,>=30 campaigns, stressed net>0.",
             warnings=[
@@ -101,12 +100,8 @@ def main():
                 "No automatic default changes, broker orders or a claim of independently validated returns.",
             ],
         ),
+        source_root=root,
     )
-    for rel in sources:
-        target = folder / "source" / rel
-        if not target.exists():
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes((root / rel).read_bytes())
     if args.declare_only:
         print("Declared8 support-protection cases and frozen after-close control.")
         return

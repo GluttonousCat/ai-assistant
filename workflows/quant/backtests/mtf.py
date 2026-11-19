@@ -18,7 +18,6 @@ import pandas as pd
 
 from core.config import get_config
 from core.logger import get_logger
-from jobs.backtest_quant import _database_unit
 from skills.quant.engine import simulate, EXECUTION_VERSION
 from skills.quant.models import BacktestConfig
 from skills.quant.prepare import MarketSeries, prepare_mtf, prepare_stock
@@ -26,6 +25,7 @@ from skills.quant.report import write_result
 from skills.quant.research_report import write_research_report
 from skills.quant.registry import STRATEGIES
 from skills.trend.mtf import VERSION, version_for, MtfConfig
+from storage.pg import retry_on_disconnect as _database_unit
 from storage.repositories.backtest import input_dates, publish
 from storage.schema.quant import ensure_quant_schema
 from tools.market.backtest_data import benchmarks, observed_dates, quotes

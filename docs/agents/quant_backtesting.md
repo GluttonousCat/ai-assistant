@@ -1,8 +1,10 @@
 # 量化策略与回测
 
-> 更新：2026-11-18。策略入口 `skills/quant/`；离线执行 `jobs/backtest_quant.py`；页面 `#quant`。
+> 更新：2026-11-19。策略入口 `skills/quant/`；离线执行 `workflows/quant/backtests/quant.py`；页面 `#quant`。
 
 ## 一、系统设计
+
+离线命令分布在 `workflows/quant/inputs`（准备输入）、`backtests`（固定回测）和 `studies`（按实验运行）。威科夫系列集中在 `studies/wyckoff`。既有批处理可继续使用旧版 `jobs.*` 模块名。
 
 页面已升级为策略创作工作台（workspace v2，保留v1模板）：在表单制定60F底背离反转/上涨回调规则，或通过自然语言生成可编辑的参数草稿；预览后保存不可变版本、提交后台回测，再查看净值及逐笔/分批成交。组合模式通过声明式条件树自由组合60F/日K指标、比较、交叉、全部/任一条件及嵌套分组；模板模式保留原v8形态与442/532。日K指标只有用户明确添加时才参与条件；所有订单仍在次日开盘执行，不生成任意Python代码。
 
@@ -12,7 +14,7 @@
 
 自然语言使用统一LLM工厂与独立system prompt，只允许解析到严格校验的配置。解释、默认假设与未支持条件随草稿保存；未支持要求即使保存/重新加载后也不能提交。页面要求检查生成规则；若改用表单，需明确移除未实现的要求。禁止任意执行模型代码。`max_holding_bars`在工作台以交易日计，`cooldown_bars`才是60F根数。
 
-`online_priority.py`（v21）把已结束的历史辅助结果用于每月一次的指数相对强弱排序：特征、标签、训练截止、模型标准化及候选应用集中于纯领域模块；`jobs.research_online_60f`仅编排本地输入、冻结声明、资金回放与报告发布。仍复用v8 balanced的60F底背离/上涨回调，不新增日K形态，不把预测分数当作保证收益。正式实现与原型的信号、净值、逐笔和费用对照一致。正常成本全区间历史门槛已通过，实验仍不自动变为默认。
+`online_priority.py`（v21）把已结束的历史辅助结果用于每月一次的指数相对强弱排序：特征、标签、训练截止、模型标准化及候选应用集中于纯领域模块；`workflows.quant.studies.online_60f`仅编排本地输入、冻结声明、资金回放与报告发布。仍复用v8 balanced的60F底背离/上涨回调，不新增日K形态，不把预测分数当作保证收益。正式实现与原型的信号、净值、逐笔和费用对照一致。正常成本全区间历史门槛已通过，实验仍不自动变为默认。
 
 `candidate_quality.py`按股票代码及触发身份从原始冻结信号恢复质量分，保留独立的模型排序分与成交证据。v8原始质量分范围为0—120，与前端既有v7评分定义不同；72分门槛不能套到月度模型约0—3的预测值上。`stop_orders.py`提供可选的预挂保护单研究：严格校验原生60F与日K原价，基础方案只用上日已确定止损；跳空按原生开盘价、逐批T+1和分时成交量约束。数据不一致的日期只有研究脚本明确选择时才使用标注为`1D_fallback`的日K条件单近似，不修写分钟价格。默认仍为盘后判断、次日执行。
 
@@ -24,28 +26,28 @@
 
 `skills/quant/wyckoff_hybrid.py`在量价入场的基础上只给LPS趋势回调增加均线门槛。底部反转沿用Spring低量测试及需求确认。两类持仓都按量价支撑及供应变化管理。
 
-`market_context.py`集中计算沪深300/中证1000的原生60F状态、滞后一根的历史beta与个股相对表现；只提供研究用环境证据，不生成个股买点。`signal_priority.py`隔离相对强弱与结构距离排序，`tranche_prepare.confirm_signal_close`只比较原60F触发价到当日最后60F的保持情况。`jobs.research_market_context`统一编排指数、分批节奏、排序和软退出耐心四轮研究，避免为每轮复制撮合器；HTTP不抓指数或运行研究。所有新方案仍限实验，不自动替换默认。
+`market_context.py`集中计算沪深300/中证1000的原生60F状态、滞后一根的历史beta与个股相对表现；只提供研究用环境证据，不生成个股买点。`signal_priority.py`隔离相对强弱与结构距离排序，`tranche_prepare.confirm_signal_close`只比较原60F触发价到当日最后60F的保持情况。`workflows.quant.studies.market_context`统一编排指数、分批节奏、排序和软退出耐心四轮研究，避免为每轮复制撮合器；HTTP不抓指数或运行研究。所有新方案仍限实验，不自动替换默认。
 
-`v10`分批资金模型独立于旧撮合器：`tranches.py`保存442/532计划及按批次T+1/FIFO成本，`tranche_engine.py`按完整持仓周期回测，`tranche_prepare.py`只接完成60F确认；`jobs.research_tranches`复用冻结v8/v9入场做固定对照。部分已实现收益与剩余浮盈分别入账，分批卖出不重复计胜率；旧引擎和历史成绩不修改。
+`v10`分批资金模型独立于旧撮合器：`tranches.py`保存442/532计划及按批次T+1/FIFO成本，`tranche_engine.py`按完整持仓周期回测，`tranche_prepare.py`只接完成60F确认；`workflows.quant.studies.tranches`复用冻结v8/v9入场做固定对照。部分已实现收益与剩余浮盈分别入账，分批卖出不重复计胜率；旧引擎和历史成绩不修改。
 
-`v9`有序结构研究：`skills/trend/structure.py`用时间状态记录推进、回调、缩量及恢复；`skills/quant/structure_exit.py`只用入场后形成的已确认60F低点保护持有。`jobs.research_ordered_60f`固定7组入场/退出/执行方式对照，不搜索参数或按全年收益挑选赢家。旧v8/v8.1规则与产物不改写，HTTP仍只读完整报告。
+`v9`有序结构研究：`skills/trend/structure.py`用时间状态记录推进、回调、缩量及恢复；`skills/quant/structure_exit.py`只用入场后形成的已确认60F低点保护持有。`workflows.quant.studies.ordered_60f`固定7组入场/退出/执行方式对照，不搜索参数或按全年收益挑选赢家。旧v8/v8.1规则与产物不改写，HTTP仍只读完整报告。
 
-新增独立的`v8`主板研究：`skills/trend/swing.py`只在60F上计算M8/13/21、MACD底背离与上涨回调；`prepare_swing`把当日完整60F机会汇总为盘后计划，日K仅提供原生撮合价格、流动性与估值，不再要求日K阳线形态。`jobs.cache_mainboard_minutes`显式离线缓存同一新浪源，`jobs.research_mainboard_60f`固定参数表、开发段选择、后续分段检验。旧v4—v7公式与报告保留冻结定义。
+新增独立的`v8`主板研究：`skills/trend/swing.py`只在60F上计算M8/13/21、MACD底背离与上涨回调；`prepare_swing`把当日完整60F机会汇总为盘后计划，日K仅提供原生撮合价格、流动性与估值，不再要求日K阳线形态。`workflows.quant.inputs.cache_mainboard_minutes`显式离线缓存同一新浪源，`workflows.quant.studies.mainboard_60f`固定参数表、开发段选择、后续分段检验。旧v4—v7公式与报告保留冻结定义。
 
 模块化单体，复用已有趋势规则，不为回测复制一套入场公式：
 
 ```text
-jobs.backtest_quant → skills/quant/prepare → skills/trend/evaluated_bars
+workflows.quant.backtests.quant → skills/quant/prepare → skills/trend/evaluated_bars
                     → skills/quant/engine + metrics + report
                     → tools/market/backtest_data → storage/repositories/backtest
 api/quant_api → skills/quant/service → tools/market/backtest_data → storage
 web/src/quant/ → platformApi → /api/v1/quant/*
 ```
 
-`mtf_reversal_v6`复用60F早期反转与日K入场规则；`jobs.backtest_reversal`在原五指数同池、原结构止损+2R（40日、单笔风险预算0.5%）下做2026固定参数对照，不混入扩池效果、不搜索退出参数。当前名单回放有前视/幸存者偏差，2026设计样本不属于独立样本外。
+`mtf_reversal_v6`复用60F早期反转与日K入场规则；`workflows.quant.backtests.reversal`在原五指数同池、原结构止损+2R（40日、单笔风险预算0.5%）下做2026固定参数对照，不混入扩池效果、不搜索退出参数。当前名单回放有前视/幸存者偏差，2026设计样本不属于独立样本外。
 
 此前`registry.py`注册`mtf_dual_v5`、`mtf_pullback_v5`、`mtf_rebound_v5`：60F确定趋势、日K确认入场，使用M8/M13/M21简单均线。
-`jobs.backtest_mtf`读取两周期原生行情，`prepare_mtf`复用`skills/trend/mtf.py`纯计算，然后在原生日K执行资金回测。
+`workflows.quant.backtests.mtf`读取两周期原生行情，`prepare_mtf`复用`skills/trend/mtf.py`纯计算，然后在原生日K执行资金回测。
 旧`trend_dual_v4`、`trend_pullback_v4`、`base_rebound_v4`三项保留历史定义及结果，仍可由旧任务显式重放。
 入场公式、前置证据和推进计数详见[股票行情](../frontend/stock_dashboard.md)。
 v4.1增加“初次反转/回调再起”的背景分类，修正首阳观察名称；入场掩码、计数与止损不变，
@@ -81,6 +83,7 @@ v2创作模式支持：开高低收、名义收盘价、MA/EMA、Wilder RSI、AT
 
 | 历史问题 | 根因 | 处理方案 |
 |---|---|---|
+| 研究脚本更名会导致冻结实验无法续跑 | 旧声明把源码的相对路径和逐文件 SHA-256 一起保存 | 新声明记录当前源码路径和实际哈希。校对旧声明时只认可本次迁移中登记的文件及指纹，实验参数、行情输入和其余源码仍逐项比对 |
 | 阅读历史回测时仍每 4 秒请求一次草稿和任务列表 | 创作表单为保留编辑内容持续挂载，定时器只检查组件是否存在 | 工作台可见时串行轮询，切回立即读取。手动保存和轮询复用目录读取逻辑，较早的响应不能覆盖新目录 |
 | Spring测试后右侧跌出更低点仍可能沿用旧测试低点 | 只核对Spring大底未破，没有重新核对测试自身的右侧确认 | v33在右侧出现更低点时清空该测试并重新等待；新测试需重新经过两根完整K线，不把支撑标到较早的高低点 |
 | 盘中已确认需求到15:00未再次触发时漏进攻 | 原加仓状态只读取15:00那一根的瞬时事件 | v33按同日已完成事件保持到收盘的状态发布；原生收盘未退回超过0.25ATR且中途未破防守、无供应警报时才保留，不增加日K形态门槛 |
@@ -144,21 +147,21 @@ v2创作模式支持：开高低收、名义收盘价、MA/EMA、Wilder RSI、AT
 - 警报须有高位区间语境、量比≥1.8、收盘偏弱且推进不足；只暂停进攻。其后4根内出现进一步弱势才分批防守；持仓后新形成且已确认的测试支撑，在达到0.5R后允许上移，防守位不降低。跌破支撑或原风险位退出剩余仓位。
 - 仍按完成60F制定盘后计划，次日合法开盘执行，日K只用于成交、流动性和估值；没有额外日K阳线或均线要求。信号保留类型、量比、缩量比、收盘位置及支撑形成/确认时间。
 
-`python -m jobs.research_wyckoff_60f`支持`--declare-only`/`--resume`，当前v33首次需准备全池；`--prepared-from`只有在准备源码、参数和所有行情哈希一致时才允许复用其他研究目录的冻结缓存，v33不能直接复用v31旧量价状态。最初v32修复基准曲线对账格式时曾复用v31缓存，量价公式未变化，旧记录保留；当前v33修正测试重新确认及同日需求保持，产物`output/quant/wyckoff_price_volume_v33`。固定三组：原v21对照、原入场+量价管理、纯量价主方案，每组均运行全部预声明窗口与两种成本，不搜索参数或按全年赢家改选。纯量价方案不用旧月度相对排序或指数均线门槛；原入场对照明确保留旧均线影响，不能称为纯量价。仍为532、2.5%实际风险、0.35%账户预算、单股10%、72原始质量门槛。纯量价质量0—100是新定义，不能与旧v8的0—120或前端v7分数当作同一校准概率。
+`python -m workflows.quant.studies.wyckoff.price_volume`支持`--declare-only`/`--resume`，当前v33首次需准备全池；`--prepared-from`只有在准备源码、参数和所有行情哈希一致时才允许复用其他研究目录的冻结缓存，v33不能直接复用v31旧量价状态。最初v32修复基准曲线对账格式时曾复用v31缓存，量价公式未变化，旧记录保留；当前v33修正测试重新确认及同日需求保持，产物`output/quant/wyckoff_price_volume_v33`。固定三组：原v21对照、原入场+量价管理、纯量价主方案，每组均运行全部预声明窗口与两种成本，不搜索参数或按全年赢家改选。纯量价方案不用旧月度相对排序或指数均线门槛；原入场对照明确保留旧均线影响，不能称为纯量价。仍为532、2.5%实际风险、0.35%账户预算、单股10%、72原始质量门槛。纯量价质量0—100是新定义，不能与旧v8的0—120或前端v7分数当作同一校准概率。
 
-追加v29辅助标签比较与v30双收益头确认。`python -m jobs.research_label_alignment_60f`（支持`--declare-only`/`--resume`）固定7个变体与原模型：标签风险2.5%或4%、10或20交易日、5%或8%目标的指定组合，以及一组250个已结束标签预热对照；岭回归100及19个因果特征不变。原始9789个候选保留，不只重训原模型选出的615个候选。`python -m jobs.research_dual_forecast_60f`（支持`--declare-only`）固定绝对预测≥0/0.25/0.5%三组门槛，以及绝对/相对预测等权排序且绝对预测≥0的一组。两个收益头的分数与原始质量分分离，不用辅助标签是否最终可得过滤当下预测。
+追加v29辅助标签比较与v30双收益头确认。`python -m workflows.quant.studies.label_alignment_60f`（支持`--declare-only`/`--resume`）固定7个变体与原模型：标签风险2.5%或4%、10或20交易日、5%或8%目标的指定组合，以及一组250个已结束标签预热对照；岭回归100及19个因果特征不变。原始9789个候选保留，不只重训原模型选出的615个候选。`python -m workflows.quant.studies.dual_forecast_60f`（支持`--declare-only`）固定绝对预测≥0/0.25/0.5%三组门槛，以及绝对/相对预测等权排序且绝对预测≥0的一组。两个收益头的分数与原始质量分分离，不用辅助标签是否最终可得过滤当下预测。
 
 两轮仍保持2.5%实际成交风险、账户0.35%、单股10%、532、次日开盘、T+1及费用/涨跌停约束。成本压力复用已拟合模型、完整重放资金路径；模型配置逐报告写入，不能把压力结果回馈当期训练。只允许按1—6月开发段选择，后续已看过的月份不再用于改选。产物位于`output/quant/quality72_labels_v29`及`quality72_dual_forecast_v30`；代码变化会触发原声明拒绝覆盖，冻结源码保留，升级实验需新版本。
 
-追加v27支撑保护与v28完成60F后的保本保护，仍按预先冻结的开发段比较、锁定后检验后续月份。`python -m jobs.research_support_tranches_60f`固定8组：浮盈0.5/1R、支撑缓冲0.25/0.5ATR、442/532；原信号、2.5%实际入场风险、单股10%和账户0.35%预算不变。`python -m jobs.research_intraday_protection_60f`固定6组：0.5/0.75/1R且至少1/1.5%收盘浮盈才允许保本，另设盘后/固定预挂单两个对照；只改保护时点，5%/8%止盈与532比例不变。两入口均支持`--declare-only`。预挂行情准备、输入冻结及回测编排共享函数，避免复制执行引擎。
+追加v27支撑保护与v28完成60F后的保本保护，仍按预先冻结的开发段比较、锁定后检验后续月份。`python -m workflows.quant.studies.support_tranches_60f`固定8组：浮盈0.5/1R、支撑缓冲0.25/0.5ATR、442/532；原信号、2.5%实际入场风险、单股10%和账户0.35%预算不变。`python -m workflows.quant.studies.intraday_protection_60f`固定6组：0.5/0.75/1R且至少1/1.5%收盘浮盈才允许保本，另设盘后/固定预挂单两个对照；只改保护时点，5%/8%止盈与532比例不变。两入口均支持`--declare-only`。预挂行情准备、输入冻结及回测编排共享函数，避免复制执行引擎。
 
 v28需要自动条件单支持，不能将其描述成现有上班族盘后手动执行的等价方案；1D_fallback只在15:00更新。首日突破保护位的未结算批次保留待卖指令，不以T+0成交，也不因反弹自动撤单。保护价从持仓原始风险计算进度，不用事后高点决定当前成交。
 
 复用冻结2333只主板、2026-01-01—11-12、月度因果排序及532资金模型，不增加单股10%上限或账户0.35%风险预算。前端当前筛选与盘中观察显示≥72；历史名单和既有邮件口径保持各自契约。研究中的72仅作用于v8原始质量，所有615个模型候选均通过，不能将此过滤描述成收益提升。
 
-三个入口共享`jobs.research_quality_60f.run`及同一撮合器：v22固定8组退出/持有参数；v26固定6组预挂止损加盘后对照；v25固定5种双指数门槛加对照。参数、代码与本地输入哈希在开发段执行前冻结；同时检查开发段正常和双倍滑点下正收益、PF>1、至少30个闭合周期、回撤≤8%、最差周期≥-8%，按两成本中较低的收益/回撤选定，锁定后才重放后续月份与全区间。重复研究过的2026分段不是独立样本外。
+三个入口共享`workflows.quant.studies.quality_60f.run`及同一撮合器：v22固定8组退出/持有参数；v26固定6组预挂止损加盘后对照；v25固定5种双指数门槛加对照。参数、代码与本地输入哈希在开发段执行前冻结；同时检查开发段正常和双倍滑点下正收益、PF>1、至少30个闭合周期、回撤≤8%、最差周期≥-8%，按两成本中较低的收益/回撤选定，锁定后才重放后续月份与全区间。重复研究过的2026分段不是独立样本外。
 
-命令为`python -m jobs.research_quality_60f`、`python -m jobs.research_stop_orders_60f`、`python -m jobs.research_online_market_gate`，均支持`--declare-only`。产物分别在`output/quant/quality72_exits_v22`、`quality72_stops_v26`、`quality72_market_v25`。代码变化后旧声明会拒绝覆盖，须显式升级实验版本；原声明及source快照用于追溯。v22初次配置解析失败和v23严格数据预检失败单独留存，不算有效试验结果。v26修正零成交量报价不得激活保护单，与此前v24的20份报告逐项对照，不新增参数选择。
+命令为`python -m workflows.quant.studies.quality_60f`、`python -m workflows.quant.studies.stop_orders_60f`、`python -m workflows.quant.studies.online_market_gate`，均支持`--declare-only`。产物分别在`output/quant/quality72_exits_v22`、`quality72_stops_v26`、`quality72_market_v25`。代码变化后旧声明会拒绝覆盖，须显式升级实验版本；原声明及source快照用于追溯。v22初次配置解析失败和v23严格数据预检失败单独留存，不算有效试验结果。v26修正零成交量报价不得激活保护单，与此前v24的20份报告逐项对照，不新增参数选择。
 
 预挂保护单是不同执行假设：需要券商条件单支持，本项目不下单。先执行开盘买卖，再处理当日预挂单；日内卖出款不得反过来资助当天开盘买入。当日新增批次受T+1约束，触发而未成交的保护单继续排队；只允许使用上一交易日的止损，不用当天利润先抬止损再回填当天低点。逐笔记录60F或1D_fallback成交依据。
 
@@ -189,7 +192,7 @@ v28需要自动条件单支持，不能将其描述成现有上班族盘后手�
 
 v15—v17模型原型失败；v18全区间+6.39%、v19+8.05%，但最差周期约-10.09%，未通过既定-8%正常情景门槛，不能充作成功。v20把实际入场/加仓风险限定在1.5/2/2.5%中选择，3%已失败方案只作控制；固定信号后比较442/532及3%/5%盈利保护，共13组，仅按1—6月选择。v21正式化所选流程，不再搜索新模型参数；`model_parity.json`与原型逐项回放证明不是重写后换了一组交易。连续参考2026反馈仍会产生研究过拟合，所有后段均已经看过，不属于独立样本外。
 
-入口`python -m jobs.research_online_60f --declare-only`后运行同模块，`--resume`复用已准备的模型/信号，`--publish-only --publish-variant selected|selected_cost_stress|control`仅发布已完成报告。输入为冻结v13原60F候选缓存、同源分钟及两指数，不在API中拟合或拉行情。源码快照、数据/代码指纹、每月模型/样本数/截止、全部开发段对照、选定方案的三个分段和成本压力位于`output/quant/online_priority_v21/`；真实资金盈亏仍由既有撮合器计算。报告默认标记研究、eligible_for_default=false。
+入口`python -m workflows.quant.studies.online_60f --declare-only`后运行同模块，`--resume`复用已准备的模型/信号，`--publish-only --publish-variant selected|selected_cost_stress|control`仅发布已完成报告。输入为冻结v13原60F候选缓存、同源分钟及两指数，不在API中拟合或拉行情。源码快照、数据/代码指纹、每月模型/样本数/截止、全部开发段对照、选定方案的三个分段和成本压力位于`output/quant/online_priority_v21/`；真实资金盈亏仍由既有撮合器计算。报告默认标记研究、eligible_for_default=false。
 
 ### 2026-11-15 大盘环境及风险受限对照（v11—v14）
 
@@ -201,7 +204,7 @@ v12固定49组：控制组，以及60F触发价保持/相对抗跌、三组止�
 
 四轮共88组（含重复基准），每轮先冻结声明、只在1—6月选择，开发段收益/PF/样本数与风险门槛不合格则不选新方案。全部2026时段已参与研究，不宣称独立样本外。风险仍为0.35%账户预算、单股10%、最多10只、实际买入至止损距离≤4%；这些计划值无法保证隔夜/跌停时的实际损失上限。不得按事后个股损失排除标的或改计价。
 
-产物分别在`output/quant/market_v11/`、`market_timing_v12/`、`market_priority_v13/`、`market_patience_v14/`，保留声明、全部分段报告、逐笔与源代码快照。入口`python -m jobs.research_market_context --study context|timing|priority|patience --declare-only`；随后运行同study，`--resume`复用准备数据。冻结声明会拒绝策略/源码变化，扩展后的新研究必须显式使用新版本，不能覆盖旧结论。`--publish-only --publish-variant <固定名> --trade-page-size 25`独立发布已完成报告，不要求当前研究源码与旧声明相同；指标/逐笔不改，仅补报告说明与指数曲线。API保持只读与JWT要求。
+产物分别在`output/quant/market_v11/`、`market_timing_v12/`、`market_priority_v13/`、`market_patience_v14/`，保留声明、全部分段报告、逐笔与源代码快照。入口`python -m workflows.quant.studies.market_context --study context|timing|priority|patience --declare-only`；随后运行同study，`--resume`复用准备数据。冻结声明会拒绝策略/源码变化，扩展后的新研究必须显式使用新版本，不能覆盖旧结论。`--publish-only --publish-variant <固定名> --trade-page-size 25`独立发布已完成报告，不要求当前研究源码与旧声明相同；指标/逐笔不改，仅补报告说明与指数曲线。API保持只读与JWT要求。
 
 ### 2026-11-14 442/532分批进出（v10）
 
@@ -213,7 +216,7 @@ v12固定49组：控制组，以及60F触发价保持/相对抗跌、三组止�
 
 每次成交保留时间、数量、实际模型价、金额、费用、原因及卖出已实现盈亏。完整周期只统计一次净盈亏/胜负，收益率按累计买入成本；未结束周期的`partial_realized_pnl`与剩余`unrealized_pnl`分开，净值恒等式为初始资金+已结束周期盈亏+未结束周期部分已实现盈亏+剩余浮盈。延续因子份额近似，不声称还原现金分红/送配会计台账；增仓高低价比较使用复权尺度而非除权后原始报价。
 
-固定使用v8 balanced双方向、v9有序结构两种已冻结信号；各比较原单次分段退出、同分批引擎单买单卖、仅442买、仅442卖、442双向、532双向，共12组；各保留四个时间窗口，再做两份442双倍滑点。事前主方案442，不按全年收益挑选赢家，2026所有片段已知，全部仍是样本内。入口`python -m jobs.research_tranches --declare-only`后执行同模块，`--resume`复用输入，`--publish-only --publish-variant <固定名> --trade-page-size 25`可独立幂等发布。产物`output/quant/tranches_v10/`保留冻结参数/数据和代码指纹、比较表、净值/持仓周期与嵌套分笔成交；前端可展开每一笔，首笔/末笔报价与完整周期盈亏明确区分。
+固定使用v8 balanced双方向、v9有序结构两种已冻结信号；各比较原单次分段退出、同分批引擎单买单卖、仅442买、仅442卖、442双向、532双向，共12组；各保留四个时间窗口，再做两份442双倍滑点。事前主方案442，不按全年收益挑选赢家，2026所有片段已知，全部仍是样本内。入口`python -m workflows.quant.studies.tranches --declare-only`后执行同模块，`--resume`复用输入，`--publish-only --publish-variant <固定名> --trade-page-size 25`可独立幂等发布。产物`output/quant/tranches_v10/`保留冻结参数/数据和代码指纹、比较表、净值/持仓周期与嵌套分笔成交；前端可展开每一笔，首笔/末笔报价与完整周期盈亏明确区分。
 
 ### 2026-11-14 有序结构及持有规则（v9固定对照）
 
@@ -223,7 +226,7 @@ v12固定49组：控制组，以及60F触发价保持/相对抗跌、三组止�
 - 测试反转：两个确认低点之间必须有至少2ATR反弹，间隔5—40根；第二低点在第一低点附近、DIF改善、测试相对量较第一次收缩，最多8根内等待收复前两根高点和M8转升。允许略抬高的第二低点，因此不把所有此类测试都称为严格MACD底背离。测试低点破坏即退役，不回填历史信号。
 - 结构持有：保留原始止损；收盘同时达到1.5R和3%才加入成本缓冲，仅用入场后形成、后两根确认的60F低点减0.25ATR上移保护，不能拿未来低点或同根高点回卖。连续两根60F收盘失守M21且M13向下、至少持有4交易日才判结构退出；低位反弹5日不推进可失败退出，趋势回调不套用该反弹等待规则；40日超时，不固定2R/3R止盈。主方案全部盘后判断、次日开盘执行；原止损距离4%及账户风险0.35%是计划约束，不能保证隔夜实际损失。
 
-7组固定方案：旧入场旧退出、新入场旧退出、旧入场结构退出、新入场结构退出（事前主方案），以及新反转/新回调各自结构退出、新入场配旧分段退出的预挂条件单对照。全量及各时间分段均保留，不重新选择赢家；2026所有分段此前已看过，不称独立样本外。入口`python -m jobs.research_ordered_60f --declare-only`后执行同模块；`--resume`复用准备结果，`--publish-only`按run_id幂等发布全年7组及主方案双倍滑点。参数、源数据SHA256和核心代码SHA256冻结在`output/quant/ordered_60f_v9/declaration.json`。
+7组固定方案：旧入场旧退出、新入场旧退出、旧入场结构退出、新入场结构退出（事前主方案），以及新反转/新回调各自结构退出、新入场配旧分段退出的预挂条件单对照。全量及各时间分段均保留，不重新选择赢家；2026所有分段此前已看过，不称独立样本外。入口`python -m workflows.quant.studies.ordered_60f --declare-only`后执行同模块；`--resume`复用准备结果，`--publish-only`按run_id幂等发布全年7组及主方案双倍滑点。参数、源数据SHA256和核心代码SHA256冻结在`output/quant/ordered_60f_v9/declaration.json`。
 
 发布支持`--publish-only --publish-variant <固定方案名或cost_stress>`，用于大响应断连后的独立单元重试，保持原run_id、指标和成交不变。失败研究写入rejected/eligible_for_default=false；前端默认选择器单独过滤明确拒绝的实验，手动审阅入口仍可用。默认选择的拒绝与历史替代分支由前端独立测试覆盖。
 
@@ -250,9 +253,9 @@ v12固定49组：控制组，以及60F触发价保持/相对抗跌、三组止�
 
 只在1—6月选择：至少30笔平仓、正收益、PF>1、最大回撤≤8%、最差单笔≥−8%，按收益/max(回撤,1%)排序；无合格方案时只能保留失败研究，不能宣称可交易。选定后固定检查7—8月、9—11月及全年，分段独立空仓起算。全年5%目标还须同时通过8%回撤、最差单笔−8%和双倍滑点仍盈利检查。已知2026案例与当前名单参与设计，时间留出仍不能称为独立样本外。
 
-命令：先完成`python -m jobs.research_mainboard_60f --declare-only`，再`python -m jobs.cache_mainboard_minutes` → `python -m jobs.research_mainboard_60f`；声明必须在首次查看候选收益前完成。`--resume`复用准备结果，`--publish-only`幂等发布已完成全年及成本压力报告；HTTP不启动回测或下载。全部候选保留在development/，选择依据selection.json、结果comparison.json/README.md、逐笔与净值selected/、输入审计data_audit.json/excluded.json，不隐藏失败组合。
+命令：先完成`python -m workflows.quant.studies.mainboard_60f --declare-only`，再`python -m workflows.quant.inputs.cache_mainboard_minutes` → `python -m workflows.quant.studies.mainboard_60f`；声明必须在首次查看候选收益前完成。`--resume`复用准备结果，`--publish-only`幂等发布已完成全年及成本压力报告；HTTP不启动回测或下载。全部候选保留在development/，选择依据selection.json、结果comparison.json/README.md、逐笔与净值selected/、输入审计data_audit.json/excluded.json，不隐藏失败组合。
 
-第二轮`jobs.research_mainboard_regime`：首轮开发段36组全部不合格后，根据开发段证据加入60F广度与分类型恢复过滤，未用首轮后续区间设计此轮参数。广度是原2333只主板池中站上M21且M21过去8根上升的比例（不是全A市场），阈值固定0.45/0.6；反转要求60F收盘>M13、M8>M13、MACD柱转正，回调要求M8>M13>M21及M21上升。均线贴合/动量零轴采用ATR×1e-8数值容差，v8.1.1覆盖平价换复权基准回归。3个原入场组×2广度阈值×2执行方式×2退出（分段/3R20日）=24组，两轮共60组不同参数，只在开发段选。盘后与预挂券商条件单明确区分，后者仅为预设价模型、需要券商支持；保留同参数另一种执行方式和双倍滑点对照。产物`output/quant/mainboard_60f_regime_v811/`；初版v81保留，数值容差重放不计作新经济参数搜索，不隐藏失败。
+第二轮`workflows.quant.studies.mainboard_regime`：首轮开发段36组全部不合格后，根据开发段证据加入60F广度与分类型恢复过滤，未用首轮后续区间设计此轮参数。广度是原2333只主板池中站上M21且M21过去8根上升的比例（不是全A市场），阈值固定0.45/0.6；反转要求60F收盘>M13、M8>M13、MACD柱转正，回调要求M8>M13>M21及M21上升。均线贴合/动量零轴采用ATR×1e-8数值容差，v8.1.1覆盖平价换复权基准回归。3个原入场组×2广度阈值×2执行方式×2退出（分段/3R20日）=24组，两轮共60组不同参数，只在开发段选。盘后与预挂券商条件单明确区分，后者仅为预设价模型、需要券商支持；保留同参数另一种执行方式和双倍滑点对照。产物`output/quant/mainboard_60f_regime_v811/`；初版v81保留，数值容差重放不计作新经济参数搜索，不隐藏失败。
 
 ### 2026-11-14 对应的分段离场（实验策略）
 
@@ -261,7 +264,7 @@ v12固定49组：控制组，以及60F触发价保持/相对抗跌、三组止�
 2. 持有5个交易日仍未推进0.5R、收于成本下方，排队下一交易日开盘退出。
 3. 日收盘盈利达到1R，止损加入成本/估算卖出费用和滑点缓冲；峰值达到2R后，按峰值减2.5ATR跟踪，不固定2R全部卖出。止损只升不降，下一根生效；跳空仍可能亏损。
 4. 峰值至少推进1R，且必须先收复日K M21，之后连续2个收盘失守、且至少持有4日才触发趋势退出；从未收复不叫失守。40日超时退出兜底。
-`jobs.backtest_reversal_exits --offline`复用项目生成的v6.1缓存及冻结报告交易日历、真实限价，不访问PG；`--publish-only`按已有run_id幂等发布完整full报告。正常模式按工作单元重连重试，保留两方案，不按窗口成绩选胜者。前端默认仍选结构止损+2R，分段离场可查看实验对照。
+`workflows.quant.backtests.reversal_exits --offline`复用项目生成的v6.1缓存及冻结报告交易日历、真实限价，不访问PG；`--publish-only`按已有run_id幂等发布完整full报告。正常模式按工作单元重连重试，保留两方案，不按窗口成绩选胜者。前端默认仍选结构止损+2R，分段离场可查看实验对照。
 
 
 
@@ -292,7 +295,7 @@ R固定为实际模型开盘买入价至初始止损的距离；次日大幅跳�
 8月24日及11月个例在设计前已知，固定名单也非历史成分，因此时间留出仍不是严格未见样本，更不是实盘验证。
 若全年仍负收益或盈利因子<1，必须如实呈现；不以提高胜率为由隐藏亏损交易或较差方案。
 
-`jobs.backtest_mtf --prepare-only`仅准备本地缓存；`--resume`检查冻结参数再执行，
+`workflows.quant.backtests.mtf --prepare-only`仅准备本地缓存；`--resume`检查冻结参数再执行，
 输出`declaration.json`、`selection.json`、所有分段/方案JSON与成交/净值CSV、`comparison.json/csv`、
 `README.md`与独立净值图`exit_comparison.png`。完整结果写PG；旧任务不把v4行情误用于v5策略ID。
 存在数值缺陷的历史批次可由仓储层标记`diagnostics.superseded`及原因，保留其指标，页面明确提示并跳过默认选择。
@@ -342,18 +345,18 @@ R固定为实际模型开盘买入价至初始止损的距离；次日大幅跳�
 
 ```powershell
 # 当前双周期策略：有限退出对照、开发段选择、冻结后验证
-.venv/Scripts/python.exe -m jobs.backtest_mtf --folder output/quant/mtf_v51_research --prepare-only
-.venv/Scripts/python.exe -m jobs.backtest_mtf --folder output/quant/mtf_v51_research --resume
-.venv/Scripts/python.exe -m jobs.backtest_mtf --folder output/quant/mtf_repaired_research --resume --legacy-daily
+.venv/Scripts/python.exe -m workflows.quant.backtests.mtf --folder output/quant/mtf_v51_research --prepare-only
+.venv/Scripts/python.exe -m workflows.quant.backtests.mtf --folder output/quant/mtf_v51_research --resume
+.venv/Scripts/python.exe -m workflows.quant.backtests.mtf --folder output/quant/mtf_repaired_research --resume --legacy-daily
 
 # 单独修复原生日K缺日、BJ日K、真实涨跌停与基准；不会推进日线水位线
-.venv/Scripts/python.exe -m jobs.sync_backtest_inputs --start 2026-01-01 --end 2026-11-12
+.venv/Scripts/python.exe -m workflows.quant.inputs.sync_backtest_inputs --start 2026-01-01 --end 2026-11-12
 
 # 12个独立组合，结果入PG并输出到output/quant/<suite_id>/
-.venv/Scripts/python.exe -m jobs.backtest_quant --start 2026-01-01 --end 2026-11-12 --workers 2
+.venv/Scripts/python.exe -m workflows.quant.backtests.quant --start 2026-01-01 --end 2026-11-12 --workers 2
 
 # 单周期研究；--max-stocks仅开发冒烟，会显式记录缩小后的样本数量
-.venv/Scripts/python.exe -m jobs.backtest_quant --periods 60F --end 2026-11-12
+.venv/Scripts/python.exe -m workflows.quant.backtests.quant --periods 60F --end 2026-11-12
 ```
 
 API：`GET /api/v1/quant/strategies`、`GET /api/v1/quant/backtests`、

@@ -7,21 +7,19 @@ from pathlib import Path
 import pickle
 from uuid import uuid4
 
-import numpy as np
 import pandas as pd
 
 from core.config import get_config
 from core.logger import get_logger
-from jobs.backtest_mtf import WINDOWS, window_series
-from jobs.research_mainboard_60f import write_json
-from jobs.research_quality_60f import (
+from workflows.quant.studies.provenance import digest, freeze, source_hashes
+from workflows.quant.backtests.mtf import WINDOWS, window_series
+from workflows.quant.studies.mainboard_60f import write_json
+from workflows.quant.studies.quality_60f import (
     BASELINE,
     STRESS,
     ORIGINAL,
     RANKED,
     configuration,
-    digest,
-    freeze,
     read_report,
 )
 from skills.quant.candidate_quality import attach_signal_quality
@@ -62,7 +60,7 @@ def main():
         for s in original
     }
     sources = [
-        "jobs/research_wyckoff_60f.py",
+        "workflows/quant/studies/wyckoff/price_volume.py",
         "skills/trend/wyckoff.py",
         "skills/quant/wyckoff.py",
         "skills/quant/tranche_engine.py",
@@ -76,8 +74,8 @@ def main():
         "skills/quant/market_context.py",
         "skills/quant/report.py",
         "skills/quant/metrics.py",
-        "jobs/research_quality_60f.py",
-        "jobs/backtest_mtf.py",
+        "workflows/quant/studies/quality_60f.py",
+        "workflows/quant/backtests/mtf.py",
     ]
     inputs = {
         str(Path(p).relative_to(root) if Path(p).is_absolute() else p): digest(root / p)
@@ -113,7 +111,7 @@ def main():
             primary="price_volume_primary",
             windows=WINDOWS,
             input_sha256=inputs,
-            code_sha256={p: digest(root / p) for p in sources},
+            code_sha256=source_hashes(root, sources),
             selection="Fixed primary plus old-entry/new-management and v21 controls. All three replay every declared window under both costs. No parameter search or full-year winner selection.",
             target="Full primary funded net>=8%, both costs MDD<=8%,worst>=-8%,>=30 cycles and stressed net>0. Failed experiments do not become defaults.",
             sources=[
@@ -130,12 +128,8 @@ def main():
                 "Daily bars only provide execution/liquidity/valuation; decisions use completed60F, next legal open,532,2.5% actual fill risk,.35% account risk,10% stock cap, real limits/T+1/fees. No leverage, broker orders, external fetching or default changes.",
             ],
         ),
+        source_root=root,
     )
-    for rel in sources:
-        dest = folder / "source" / rel
-        if not dest.exists():
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_bytes((root / rel).read_bytes())
     if args.declare_only:
         print("Declared fixed price/volume primary and two controls.")
         return

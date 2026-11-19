@@ -34,16 +34,17 @@ skills/      领域技能 (每技能一目录, 专业知识放 prompt):
              beta_alpha(产业链Beta+个股Alpha: chains种子链/analysis；回归在tests/skills/beta_alpha) /
              content(内容资产管线: 画像/公众号文章/PPT/年报解读) /
              research(研究生产线: 证据→十章草稿→成稿, 任务分派见 docs/research/tasks/)
-workflows/   常驻服务与数据流程，按职责分包
+workflows/   常驻服务、数据流程、离线研究与自检，按职责分包
              runtime/：lifecycle 组合依赖、operations 注入后台接口、scheduled_task 统一启停，另有独立哨兵和企微桥接
              market/：daily_scheduler 交易日17点增量与失败重试；intraday_scheduler 四轮收盘120秒后采集；
                      refresh/collect_intraday/scan_intraday/scan_trend 负责回补、逐股审计与原子发布；
                      digest_scheduler 调度 11:55 午间和18:00盘后两类邮件，分别保留回执
              reports/：scheduler 每日00:00及12:00触发 fetch，逐篇通过 sync 和 deduplicate 入库及去重
-             quant/：worker 持久队列、OS锁串行、独立回测进程、默认15分钟超时
-jobs/        冻结研究、回测和自检命令。已发布研究按历史源文件指纹续跑，保留原始路径。
-             旧版 jobs 模块及 python -m 调用通过兼容入口转到对应 workflows 模块。
-             各版本实验口径、样本区间和验证结果见 docs/agents/quant_backtesting.md
+             quant/：worker 管理持久队列；inputs 准备回测数据，backtests 运行固定对照，
+                     studies 按实验组织研究入口，威科夫系列归入 studies/wyckoff。
+                     实验口径、冻结声明和验证记录见 docs/agents/quant_backtesting.md
+             diagnostics/：check_boundaries 检查分层，agent_trace 跟踪问答，smoke_mcp_* 验证 MCP
+jobs/        旧版导入、python -m 命令和已发布的直接脚本入口统一转发到 workflows
 tests/       Python 回归按 api、core、harness/mcp、workflows、skills、tools、storage 分组；
              test_boundaries.py 检查生产代码依赖，真实数据库用例标记 integration
 tools/       pdf(通用PDF工具: 文本/渲染/OCR/表格) / zsxq爬虫 / market行情同步 /
@@ -155,7 +156,7 @@ vision=qwen3.8-flash（deepseek 不收图片）。**思考开关由 `llm.enable_
    改 beta_alpha 跑 `pytest tests/skills/beta_alpha`
    （改链模板另跑 `python -m skills.beta_alpha.analysis.chain_analysis <chain_id>`）；
    改完 git commit（消息带日期与模块）
-6. **分层验证**：提交前运行 `python -m jobs.check_boundaries` 与 `pytest tests/test_boundaries.py`。
+6. **分层验证**：提交前运行 `python -m workflows.diagnostics.check_boundaries` 与 `pytest tests/test_boundaries.py`。
    禁止新增跨层依赖；历史债务精确登记于 `docs/ops/dependency_baseline.json`，迁移后减少基线，不能整目录豁免。
    新API/Agent通过tools访问仓储，禁止直接写SQL或在HTTP请求里拉取外部分钟行情。
 7. **日志**：一律 `get_logger(__name__)`（core/logger 按顶层包聚合落
@@ -180,7 +181,7 @@ vision=qwen3.8-flash（deepseek 不收图片）。**思考开关由 `llm.enable_
 | MCP 工具层 | [harness/mcp/README.md](harness/mcp/README.md) | 33 工具(30 只读)/ToolSpec 规范/中文description约定/stdio 服务(默认只读) |
 | 企微机器人桥接 | [docs/agents/wecom_bot.md](docs/agents/wecom_bot.md) | wss外拨收消息/流式回复/会话映射; python -m workflows.runtime.wecom_bot |
 | Agent 对话循环 | [docs/agents/agent_loop.md](docs/agents/agent_loop.md) | LLM 自主决策+工具循环/多轮追问/累计口径知识/沙盒；新入口 `/api/v1/agent/stream`；沙盒参数与五域定义在 config.yaml `agent:` 段，全量轨迹落 logs/trajectories/ |
-| dsh 客户端接入 | [docs/agents/dsh_client.md](docs/agents/dsh_client.md) | 外部 harness(dsh/Claude Desktop)连 MCP server；stdio 握手冒烟 jobs/smoke_mcp_stdio.py |
+| dsh 客户端接入 | [docs/agents/dsh_client.md](docs/agents/dsh_client.md) | 外部 harness(dsh/Claude Desktop)连 MCP server；stdio 握手冒烟 workflows.diagnostics.smoke_mcp_stdio |
 | 研究生产线 | [docs/research/tasks/T00_总纲_契约与分工.md](docs/research/tasks/T00_总纲_契约与分工.md) | 三Agent流水线(证据→草稿→成稿)/并行任务分派/契约 skills/research/contracts.py；方法论源 docs/research/company_industry_guide.md |
 | 内容资产管线 | [docs/agents/content_pipeline.md](docs/agents/content_pipeline.md) | 上市公司画像/公众号文章/pptgen出片；`python -m skills.content` |
 | 年报存储设计 | [docs/agents/annual_storage.md](docs/agents/annual_storage.md) | PG真相源+Milvus annual_chunks/锚点/单写路/双路召回；定稿待实现 |

@@ -5,8 +5,7 @@ Jan–Jun normal AND stressed costs before replaying the later known windows.
 """
 
 import argparse
-from dataclasses import asdict, fields, replace
-import hashlib
+from dataclasses import fields, replace
 import json
 from pathlib import Path
 import pickle
@@ -16,8 +15,9 @@ import pandas as pd
 
 from core.config import get_config
 from core.logger import get_logger
-from jobs.backtest_mtf import WINDOWS, window_series
-from jobs.research_mainboard_60f import qualified, score, write_json
+from workflows.quant.studies.provenance import digest, freeze, source_hashes
+from workflows.quant.backtests.mtf import WINDOWS, window_series
+from workflows.quant.studies.mainboard_60f import qualified, score, write_json
 from skills.quant.candidate_quality import attach_signal_quality
 from skills.quant.market_context import MarketPolicy, apply_policy
 from skills.quant.models import BacktestConfig
@@ -57,25 +57,11 @@ CASES = {
 }
 
 
-def digest(path):
-    with path.open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
-
-
 def read_report(folder):
     paths = list(folder.glob("1D_*.json"))
     if len(paths) != 1:
         raise ValueError(f"Expected exactly one frozen report: {folder}")
     return paths[0], json.loads(paths[0].read_text(encoding="utf-8"))
-
-
-def freeze(path, value):
-    value = json.loads(json.dumps(value))
-    if path.exists() and json.loads(path.read_text(encoding="utf-8")) != value:
-        raise ValueError("Frozen experiment changed; use a new version")
-    if not path.exists():
-        write_json(path, value)
-    return value
 
 
 def config_for(base, name, stress=False, cases=CASES):
@@ -351,13 +337,13 @@ def main():
     stress_path, stress = read_report(root / STRESS)
     paths = [ORIGINAL, RANKED, baseline_path, stress_path]
     code_paths = [
-        "jobs/research_quality_60f.py",
+        "workflows/quant/studies/quality_60f.py",
         "skills/quant/candidate_quality.py",
         "skills/quant/tranche_engine.py",
         "skills/quant/tranches.py",
         "skills/quant/models.py",
-        "jobs/backtest_mtf.py",
-        "jobs/research_mainboard_60f.py",
+        "workflows/quant/backtests/mtf.py",
+        "workflows/quant/studies/mainboard_60f.py",
         "skills/quant/report.py",
     ]
     declared = freeze(
@@ -373,7 +359,7 @@ def main():
                 )
                 for p in paths
             },
-            code_sha256={p: digest(root / p) for p in code_paths},
+            code_sha256=source_hashes(root, code_paths),
             selection="Jan-Jun only: normal and doubled-slippage positive/PF>1/>=30 campaigns/MDD<=8%/worst>=-8%; maximize minimum return/max(MDD,1). Freeze choice before later windows.",
             target="Full Jan1-Nov12 funded net return>=8%; >=30 campaigns, MDD<=8%, worst>=-8% under BOTH costs, stressed return>0. No leverage or increased account risk.",
             warnings=[
@@ -386,6 +372,7 @@ def main():
                 "No automatic default changes or broker orders. Model, training and original setup formulas remain frozen.",
             ],
         ),
+        source_root=root,
     )
     if args.declare_only:
         print(

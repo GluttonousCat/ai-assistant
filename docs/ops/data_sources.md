@@ -219,7 +219,7 @@ BaoStock已加入`pyproject.toml`的可选依赖`market`组；AKShare沿用项�
 .venv/Scripts/python.exe -m workflows.market.sync_intraday --refresh-universe
 
 # 分层检查
-.venv/Scripts/python.exe -m jobs.check_boundaries
+.venv/Scripts/python.exe -m workflows.diagnostics.check_boundaries
 ```
 
 - API：`GET /api/v1/market/bars?code=000001.SZ&period=60&start=2026-01-01&end=2026-11-12`，沿用全局JWT，查询PG、不访问供应商。
