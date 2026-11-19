@@ -85,7 +85,7 @@ def _message(snapshot, cards, images, report_day, minimum, recipient, sender, *,
     subject = ("[测试] " if test else "[预览] " if preview else "") + f"Alpha Finance Radar | {report_day} | "
     subject += "行情更新延迟" if delayed else f">{minimum:g}分候选 {len(cards)}只"
     text = f"{subject}\n数据截止: {snapshot['as_of'] if snapshot else '暂无'}（上海时间）\n"
-    text += "正文按入场和观察分组，每股分别展示日 K、60F。\n"
+    text += "入场候选和观察候选的文字解读在前，日 K 与 60F 附图在后。\n"
     for card in cards:
         row = card["row"]
         text += f"\n{row['ts_code']} {row['name']} {row['score']}分 · {row['state']}\n"
@@ -109,7 +109,7 @@ def _prepare(folder, snapshot, cards, report_day, minimum, recipient, sender, pr
     for cid, png in images.items():
         inline_image = base64.b64encode(png).decode("ascii")
         browser_html = browser_html.replace(f'src="cid:{cid}"', f'src="data:image/png;base64,{inline_image}"')
-        (folder / f"{cid}.png").write_bytes(png)
+        (folder / f"{cid.split('.', 1)[0]}.png").write_bytes(png)
     (folder / "part-01.html").write_text(browser_html, encoding="utf-8")
     filename = "part-01.eml"
     (folder / filename).write_bytes(payload)

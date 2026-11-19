@@ -1,4 +1,6 @@
 import smtplib
+from email import policy
+from email.parser import BytesParser
 
 import pytest
 
@@ -11,10 +13,15 @@ def build():
 
 
 def test_inline_images_are_related_to_html_and_csv_has_utf8_bom():
-    msg = build()
-    assert msg.get_body(preferencelist=("html",)).get_content().find("cid:stock-a") >= 0
+    msg = BytesParser(policy=policy.default).parsebytes(build().as_bytes(policy=policy.SMTP))
+    body = msg.get_body(preferencelist=("html",))
+    related = next(part for part in msg.walk() if part.get_content_type() == "multipart/related")
+    assert related.get_param("type") == "text/html"
+    assert related.get_param("start") == body["Content-ID"]
+    assert "cid:stock-a" in body.get_content()
     images = [p for p in msg.walk() if p.get_content_type() == "image/png"]
     assert len(images) == 1 and images[0]["Content-ID"] == "<stock-a>"
+    assert images[0].get_content_disposition() == "inline" and images[0].get_filename() is None
     csv = next(p for p in msg.walk() if p.get_filename() == "stocks.csv")
     assert csv.get_payload(decode=True).startswith(b"\xef\xbb\xbf")
     with pytest.raises(ValueError):

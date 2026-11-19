@@ -44,6 +44,9 @@ def test_html_groups_observations_and_entries_and_escapes_provider_text():
     assert 'src="cid:stock-0-1D"' in html and 'src="cid:stock-0-60F"' in html
     assert "标的概况" in html and "走势解读" in html and "信号与风险" in html
     assert "&lt;行业&gt;" in html
+    assert html.rindex("信号与风险") < html.index('<img src="cid:')
+    assert 'href="#chart-2-60f"' in html and 'name="chart-2-60f"' in html
+    assert 'href="#brief-2"' in html and 'name="brief-2"' in html
 
 
 def test_stock_notes_use_same_session_data_and_keep_missing_values_readable():
@@ -54,7 +57,7 @@ def test_stock_notes_use_same_session_data_and_keep_missing_values_readable():
     notes = stock_notes(candidate, data)
     assert "1,250.0 亿元" in notes["标的概况"] and "市净率 0.82 倍" in notes["标的概况"]
     assert "市盈率" not in notes["标的概况"]
-    assert "-1.24%" in notes["走势解读"] and "日K下跌背景" in notes["走势解读"]
+    assert "收跌 1.24%" in notes["走势解读"] and "日K下跌背景" in notes["走势解读"]
     assert "日K转强阳线、新一轮入场" in notes["信号与风险"] and "参考止损 11.00 元" in notes["信号与风险"]
 
 
@@ -62,7 +65,7 @@ def test_empty_and_delayed_reports_never_insert_old_recommendations():
     empty = render_html({"as_of": "2026-11-13 15:00:00"}, [], date(2026, 11, 16))
     delayed = render_html(None, [], date(2026, 11, 16), delayed=True)
     assert "没有符合评分门槛" in empty
-    assert "不会将旧名单冒充今日结果" in delayed
+    assert "正式日报将在数据更新后发送" in delayed
     assert 'src="cid:' not in delayed
 
 

@@ -2,6 +2,7 @@
 from dataclasses import dataclass, field
 from email.message import EmailMessage
 from email.utils import formatdate, parseaddr
+from hashlib import sha256
 import smtplib
 import ssl
 import time
@@ -66,9 +67,15 @@ def message(sender, recipient, subject, text, html, images, message_id, csv=None
     msg["Message-ID"] = message_id
     msg.set_content(text)
     msg.add_alternative(html, subtype="html")
-    for cid, png in images.items():
-        msg.get_payload()[-1].add_related(png, maintype="image", subtype="png", cid=f"<{cid}>",
-                                        filename=f"{cid}.png", disposition="inline")
+    if images:
+        related = msg.get_payload()[-1]
+        for cid, png in images.items():
+            related.add_related(png, maintype="image", subtype="png", cid=f"<{cid}>", disposition="inline")
+        body_hash = sha256(message_id.encode()).hexdigest()[:24]
+        body_id = f"<body.{body_hash}@afr.invalid>"
+        related.get_payload(0)["Content-ID"] = body_id
+        related.set_param("type", "text/html")
+        related.set_param("start", body_id)
     if csv is not None:
         msg.add_attachment(csv.encode("utf-8-sig"), maintype="text", subtype="csv", filename="stocks.csv")
     return msg
