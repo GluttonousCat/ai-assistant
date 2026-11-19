@@ -16,6 +16,7 @@ import asyncio
 import os
 import queue as _queue
 import threading
+from time import monotonic
 from typing import Any, Dict, Optional
 from urllib.parse import quote
 
@@ -170,14 +171,19 @@ async def analyze_report_stream(
     ).start()
 
     async def _gen():
+        next_keepalive = monotonic() + 15
         while True:
             try:
                 ev = events.get_nowait()
             except _queue.Empty:
+                if monotonic() >= next_keepalive:
+                    yield ": keepalive\n\n"
+                    next_keepalive = monotonic() + 15
                 await asyncio.sleep(0.08)
                 continue
             if ev is None:
                 break
+            next_keepalive = monotonic() + 15
             etype = ev.pop("type", "message")
             if etype == "error":
                 yield _sse("error", ev)

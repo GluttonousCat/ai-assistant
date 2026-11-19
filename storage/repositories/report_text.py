@@ -9,7 +9,8 @@ from storage.schema.reports import (
 def mark_ocr_pending(report_id):
     with PgClient() as pg:
         return pg.execute(
-            "UPDATE fin.report_meta SET extraction_status='pending_ocr' WHERE report_id=%s",
+            "UPDATE fin.report_meta SET extraction_status='pending_ocr' "
+            "WHERE report_id=%s AND extraction_status IS DISTINCT FROM 'pending_ocr'",
             (report_id,),
         )
 
@@ -26,7 +27,9 @@ def save_ocr_text(report_id, text):
 def mark_ocr_failed(report_id):
     with PgClient() as pg:
         return pg.execute(
-            "UPDATE fin.report_meta SET extraction_status='failed', analysis_status='failed' WHERE report_id=%s",
+            "UPDATE fin.report_meta SET extraction_status='failed', "
+            "analysis_status=CASE WHEN analysis_status='done' THEN 'done' ELSE 'failed' END "
+            "WHERE report_id=%s AND extraction_status='pending_ocr'",
             (report_id,),
         )
 

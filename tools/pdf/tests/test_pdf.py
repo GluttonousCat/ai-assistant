@@ -110,6 +110,19 @@ def test_extract_tables_text_pdf_empty(tmp_path):
     assert extract_tables(str(p)) == []
 
 
+def test_layout_text_preserves_table_rows_and_empty_pages(tmp_path):
+    from tools.pdf.text import extract_text_pages
+
+    p = tmp_path / "tab.pdf"
+    _make_table_pdf(p)
+    with fitz.open(p) as doc:
+        doc.new_page()
+        doc.saveIncr()
+    first, second = extract_text_pages(str(p), layout=True)
+    assert "单元格00 | 单元格01 | 单元格02" in first
+    assert second == ""
+
+
 # ---------- markdown ----------
 
 def test_to_markdown(tmp_path):
@@ -157,3 +170,5 @@ def test_ocr_pdf_with_fake_vision_llm(tmp_path, monkeypatch):
     text = ocr_pdf(str(p), prompt="p", vision_llm=fake, dpi=72)
     assert text == "假OCR识别文本\n假OCR识别文本"   # per-page recognition then concatenation
     assert len(fake.calls) == 2
+    marked = ocr_pdf(str(p), prompt="p", vision_llm=fake, dpi=72, page_markers=True)
+    assert marked == "[[PDF_PAGE:1]]\n假OCR识别文本\n[[PDF_PAGE:2]]\n假OCR识别文本"

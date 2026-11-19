@@ -22,10 +22,10 @@ def queue_ocr(row: Dict[str, Any]) -> bool:
         return bool(row.get("content_chars"))
     if row.get("extraction_status") == "pending_ocr":
         return False
-    import threading
 
     rid, fname = (row["report_id"], row.get("file_name") or path)
-    report_text.mark_ocr_pending(rid)
+    if report_text.mark_ocr_pending(rid) == 0:
+        return False
 
     @observed("report_ocr", "研报视觉OCR与接续提取")
     def _job():
@@ -42,6 +42,7 @@ def queue_ocr(row: Dict[str, Any]) -> bool:
                     prompt=VISION_OCR_PROMPT,
                     max_pages=10,
                     vision_llm=get_vision_llm(),
+                    page_markers=True,
                 )
             ok = False
             if text:

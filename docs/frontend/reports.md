@@ -1,7 +1,7 @@
 # 研报中心设计文档
 
 > Alpha Finance Radar 平台 · 知识星球研报库子系统
-> 更新：2026-09-03
+> 更新：2026-11-19
 
 ## 一、系统设计
 
@@ -26,7 +26,7 @@
       ① LLM Analysis 轻量元数据 (tools/finance/report_meta_analysis.py,
          输入仅文件名 → title/org/target/industry/region/market, 输出中文机构名)
       ② 深度提取 (skills/report/skill.py 单篇 extract:
-         正文 → 评级/盈利预测/核心观点/tags; 输出一律中文, 英文原版翻译后输出)
+         按页/段提取 → 汇总券商观点、假设、风险和估值 → 核对预测及研究依据的原文出处)
       (话题 txt 条目跳过, 由 merge 归并进同话题 PDF, 不浪费 LLM)
    3. 去重合并 (jobs/merge_report_duplicates.py)
 
@@ -51,7 +51,7 @@
 | `market` | LLM Analysis | A股/美股/HK股/宏观/商品/行业/其他 |
 | `ts_code` | 深度提取 | A 股标的代码（个股研报才有） |
 | `symbols` | 深度提取 | 非 A 股标的代码（NVDA.O / 0981.HK） |
-| `analysis_json` | 深度提取 | 完整提取结果 JSON |
+| `analysis_json` | 深度提取 | 分析结果、预测和研究依据出处、正文覆盖统计及分析版本 |
 
 `fin.report_forecast`：盈利预测（report_id 关联，A 股用 ts_code、非 A 股用 symbol+market）。
 
@@ -68,7 +68,8 @@
 `标题 | 机构 | 标的 | 行业 | 地区 | 市场 | 发布日期 | 状态 | 操作`
 未分析行操作列有「**AI 分析**」按钮（原「AI 提取」，2026-09 更名）：点击弹出
 **AI 分析流式弹窗**（见 1.5），完成后行状态变「已分析」。
-详情弹层：盈利预测表（AI 分析）+ 正文 + 原始文件名 + **「⬇ 下载原文」按钮**
+详情弹层展示核心观点、评级、研究依据、风险、盈利预测和正文节选。新结果的出处可展开查看 PDF 页码和原文摘录，旧记录可从详情点「重新分析」。
+原始文件名与**「⬇ 下载原文」按钮**继续显示
 （`GET /api/reports/{id}/download`，仅本地有原文文件的研报显示；前端带 JWT fetch blob
 保存，中文文件名走 RFC 5987 `filename*=UTF-8''`）。
 筛选项：搜索（标题/机构）+ 状态（已分析/未分析）+ 市场。
@@ -88,11 +89,12 @@
 ```
 POST /api/reports/{id}/analyze/stream   (SSE, 需 JWT)
   ├─ ReportSkill.extract_stream(report_id)  同步生成器 (worker 线程执行)
-  │    stage load    读取研报 / 正文就绪 (N 字)
+  │    stage load    读取研报 / 正文就绪（片段数）
   │    stage ocr     图片型 PDF → 提交后台视觉 OCR, 友好报错退出 (不标 failed)
-  │    stage extract LLM 结构化提取中 (deepseek, stream + enable_thinking=False)
-  │    delta ×N      LLM 原始 JSON 输出逐块 (弹窗内流式滚动)
-  │    stage parse   JSON 解析 + 词表/代码规范化
+  │    stage extract 逐批提取观点、预测和出处
+  │    stage synthesize 多批时合成摘要
+  │    delta ×N      单批提取或多批摘要的最终模型输出
+  │    stage parse   出处核对和字段规范化
   │    stage save    入库 report_meta + report_forecast (预测 N 条)
   │    data          结构化摘要 (market/rating/标的/core_view/key_points/forecasts)
   │    done
@@ -115,13 +117,24 @@ POST /api/reports/{id}/analyze/stream   (SSE, 需 JWT)
 - 「后台运行并关闭」/关闭弹窗时 `abort()` 只断 SSE 连接，worker 线程照常完成入库；
 - 完成（或出错）后自动刷新列表状态徽章。
 
-**注意事项**：
-- 关思考模式对流式同样必须：`stream(..., extra_body={"enable_thinking": False})`；
-- 流式提取期间持有一条 PG 连接（约 1-2 分钟），与批量链路量级一致。
+模型思考开关与输出预算由 `harness/llm.py` 注入。模型调用期间释放 PG 连接；多批处理期间 SSE 定期发保活注释。
 
 2026-11-17代码重构：HTTP读取通过`tools/finance/report_catalog`访问`storage/repositories/reports`，
 数据库及文件检查移出事件循环；列表字段、日期格式、OCR/原文可见性、翻译优先、分页与下载保持。
 前端取消过时列表/详情请求，关闭弹窗及离页释放请求；首次搜索显式使用当前关键词。
+
+### 1.6 正文分段与出处（2026-11-19）
+
+优先从本地原始 PDF 按物理页读取文本和可识别的表格行，存量无原文时回退到库内正文。
+新 OCR 按实际识别结果记录物理页码，沿用每册前 10 页的调用上限。缺页、无页码的存量 PDF 文本及超限分批会标注覆盖不完整。
+单批输入上限约 24,000 字符，每篇最多 12 批。超限时保留首尾并在中间均匀取样。
+
+每批独立提取，长篇只额外做一次摘要归并。预测和研究依据保留可在输入片段中匹配的原文摘录；预测值还需出现在摘录里。
+同标的、指标和期间的重复预测合并。数值或单位冲突的预测组不写进预测表，详情显示冲突数。
+摘要、出处与预测表在同一事务更新；单批调用或解析失败时保留已有成功结果。并发重跑发现已有更新时跳过写入。
+
+单篇问答在可用正文中按关键词选段，提供 PDF 页码或片段编号。分析与问答使用现有 PostgreSQL、模型和本地 PDF。
+存量记录沿用已有分析，在详情点击「重新分析」即可逐篇更新。
 
 ## 二、历史问题与处理记录
 
@@ -135,6 +148,7 @@ POST /api/reports/{id}/analyze/stream   (SSE, 需 JWT)
 
 | 问题 | 根因 | 处理方案 | 状态 |
 |------|------|---------|------|
+| 长篇后部的盈利预测、估值与风险被漏读；已分析研报难以核对 | 提取与问答固定取前 12,000 字；详情只渲染预测表 | 原始 PDF 分页和有界分批、原文核对、跨页问答、详情展示与存量按篇重跑 | 已实现（2026-11-19） |
 | 列表混杂大量 txt/mp3 且同研报重复 | 爬虫把话题文本/PDF/音频都入库 | 去重合并脚本（1.3）+ API 只展示 PDF 来源 | ✅ 已修复 |
 | PDF 研报正文为空 | 图片型 PDF 文本提取为 0 字符 | 视觉 OCR 链路已实现（qwen-vl-max），默认未启用，后续开启 | ⏸ 暂缓 |
 | 标题一长串机构前缀+文件名噪音 | 初版直接用原文件名 | LLM 清洗：去「中文版-机构-」前缀、「-译文」「.pdf」后缀 | ✅ 已修复 |
@@ -226,3 +240,13 @@ setQuery后读取旧状态、慢请求覆盖新页面 → 显式搜索参数、A
 | OCR排队/JSON失败被算作成功 | 分别返回processed、failed、queued_ocr、discarded；调用方按结果计数 | 混合批次、非法JSON与数组输出测试 |
 
 验证：15组旧/新元数据与摘要一致；真实单篇元数据验证事务回滚，不改生产字段。旧`jobs/selfcheck_report_stream.py`的场景转入`skills/report/tests/test_extraction_pipeline.py`，包含连接与续接时机检查。
+
+2026-11-19 验证记录：
+
+| 样本 | 结果 |
+|---|---|
+| 库内 PDF 只读审计 | 796 篇中有 420 篇正文超过旧流程上限 12,000 字符 |
+| 真实文本型 PDF #19062 | 全部 8 页进入分析；7 条预测通过出处核对；第 8 页的研究依据可定位 |
+| 真实存量扫描件 #19042 | 从已有 OCR 正文提取 19 条研究依据，标注覆盖不完整 |
+| 文件名元数据 #19064 | 启用真实模型完成单篇分析，验证事务已回滚 |
+| 回归 | 研报、PDF、研究来源及分层检查通过；全库回归中的 6 个趋势测试失败已在改动前的版本独立复现 |

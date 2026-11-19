@@ -530,6 +530,14 @@ table.grid tbody td:last-child { border-right: 1px solid var(--border); border-r
 
 /* ---------- 研报中心 ---------- */
 .report-modal { width: 900px; }
+.report-modal .modal-head { flex-wrap: wrap; }
+.report-modal .modal-head h2 { flex: 1 1 280px; overflow-wrap: anywhere; }
+.report-evidence { margin: 10px 0 16px; }
+.report-evidence summary, .forecast-box summary { cursor: pointer; }
+.report-evidence blockquote, .forecast-box blockquote {
+  white-space: pre-wrap; overflow-wrap: anywhere; margin: 6px 0;
+  border-left: 2px solid var(--border); padding-left: 10px;
+}
 .report-meta {
   display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
   color: var(--text-dim); font-size: 13px; margin: 6px 0 14px;

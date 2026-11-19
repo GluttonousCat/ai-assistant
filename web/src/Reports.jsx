@@ -2,10 +2,106 @@ import { useEffect, useRef, useState } from 'react'
 import { platformApi } from './platformApi'
 
 const ANALYSIS_LABEL = { done: '已分析', failed: '失败', none: '未分析' }
-const MARKET_LABEL = { A股: 'A股', H股: 'H股', 台股: '台股', 日股: '日股', 韩股: '韩股', 美股: '美股', 欧洲股: '欧洲股', 东南亚股: '东南亚股', 宏观: '宏观', 商品: '商品', 行业: '行业', 其他: '其他' }
+const MARKET_LABEL = { A股: 'A股', H股: 'H股', 台股: 'TW股', TW股: 'TW股', 日股: '日股', 韩股: '韩股', 美股: '美股', 欧洲股: '欧洲股', 东南亚股: '东南亚股', 宏观: '宏观', 商品: '商品', 行业: '行业', 其他: '其他' }
 const METRIC_LABEL = {
   revenue: '营业收入', net_profit: '净利润', eps: 'EPS',
   roe: 'ROE', target_price: '目标价', gross_margin: '毛利率',
+}
+
+const EVIDENCE_LABEL = {
+  driver: '逻辑与假设', catalyst: '催化因素', valuation: '估值依据',
+  revision: '预期调整', risk: '风险', industry: '行业观察',
+}
+
+function parseAnalysis(raw) {
+  try {
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+function SourceQuote({ source }) {
+  if (!source?.quote) return null
+  return (
+    <details>
+      <summary className="dim">{source.page ? `PDF 第 ${source.page} 页` : `正文片段 ${source.segment}`} · 查看出处</summary>
+      <blockquote>{source.quote}</blockquote>
+    </details>
+  )
+}
+
+function AnalysisOverview({ data }) {
+  if (!data) return null
+  const { coverage } = data
+  const keyPoints = Array.isArray(data.key_points) ? data.key_points.filter(point => typeof point === 'string') : []
+  const risks = Array.isArray(data.risks) ? data.risks.filter(risk => typeof risk === 'string') : []
+  return (
+    <div className="ai-result">
+      {typeof data.rating === 'string' && data.rating && data.rating !== '无' && (
+        <div className="report-meta"><span className="badge EARLY">报告评级 · {data.rating}</span></div>
+      )}
+      {coverage && (
+        <p className="dim">
+          已分析 {coverage.analyzed_segments}/{coverage.segment_count} 个正文片段
+          {coverage.page_count ? ` · PDF 共 ${coverage.page_count} 页` : ''}
+          {coverage.partial && ' · 正文覆盖不完整'}
+          {coverage.missing_pages?.length > 0 && ` · 缺少 ${coverage.missing_pages.length} 页`}
+          {coverage.rejected_forecasts > 0 && ` · ${coverage.rejected_forecasts} 条预测未通过出处核对`}
+          {coverage.forecast_conflicts > 0 && ` · ${coverage.forecast_conflicts} 组预测口径冲突`}
+        </p>
+      )}
+      {typeof data.core_view === 'string' && data.core_view && <p className="ai-coreview">{data.core_view}</p>}
+      {keyPoints.length > 0 && (
+        <ul className="ai-keypoints">
+          {keyPoints.map((point, i) => <li key={i}>{point}</li>)}
+        </ul>
+      )}
+      {risks.length > 0 && (
+        <>
+          <div className="panel-title">风险提示</div>
+          <ul className="ai-keypoints">{risks.map((risk, i) => <li key={i}>{risk}</li>)}</ul>
+        </>
+      )}
+      {Array.isArray(data.evidence) && data.evidence.length > 0 && (
+        <details className="report-evidence">
+          <summary>研究依据 · {data.evidence.length} 条</summary>
+          <ul className="ai-keypoints">
+            {data.evidence.map((note, i) => (
+              <li key={i}>
+                <strong>{EVIDENCE_LABEL[note.kind]} · </strong>{note.statement}
+                <SourceQuote source={note.source} />
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </div>
+  )
+}
+
+function ForecastTable({ forecasts }) {
+  if (!forecasts?.length) return null
+  return (
+    <div className="forecast-box">
+      <div className="panel-title">盈利预测与目标价</div>
+      <table className="grid">
+        <thead><tr><th>指标</th><th>期间</th><th>预测值</th><th>单位</th><th>预测依据</th></tr></thead>
+        <tbody>
+          {forecasts.map((forecast, i) => (
+            <tr key={i}>
+              <td>{METRIC_LABEL[forecast.metric] || forecast.metric}</td>
+              <td className="dim">{forecast.period === 'NA' ? '—' : forecast.period || '—'}</td>
+              <td>{forecast.value}</td>
+              <td className="dim">{forecast.unit || '—'}</td>
+              <td className="dim">{forecast.raw_text || '—'}<SourceQuote source={forecast.source} /></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
 }
 
 // Reports center: Zhixingqiu (知识星球) report library + LLM extraction results
@@ -83,7 +179,7 @@ export default function Reports() {
     setDetail({ loading: true })
     try {
       const d = await platformApi.reportDetail(id, { signal: controller.signal })
-      if (!controller.signal.aborted) setDetail(d)
+      if (!controller.signal.aborted) setDetail({ ...d, analysis: parseAnalysis(d.analysis_json) })
     } catch (e) {
       if (!controller.signal.aborted) setDetail({ error: e.message })
     }
@@ -174,7 +270,8 @@ export default function Reports() {
           <div className="control">
             <select value={market} onChange={(e) => setMarket(e.target.value)}>
               <option value="all">全部市场</option>
-              {Object.entries(MARKET_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+              {Object.entries(MARKET_LABEL).filter(([k]) => k !== '台股')
+                .map(([k, v]) => <option key={k} value={k}>{v}</option>)}
             </select>
           </div>
           <button className="btn ghost" onClick={search}>搜索</button>
@@ -275,6 +372,10 @@ export default function Reports() {
                       ⬇ 下载原文
                     </button>
                   )}
+                  <button className="btn ghost" disabled={busyId != null}
+                    onClick={() => { closeDetail(); analyze(detail) }}>
+                    {detail.analysis_status === 'done' ? '重新分析' : 'AI 分析'}
+                  </button>
                   <button className="modal-close" onClick={closeDetail}>×</button>
                 </div>
                 <div className="report-meta">
@@ -289,28 +390,16 @@ export default function Reports() {
                   <div className="report-filename" title={detail.file_name}>原始文件: {detail.file_name}</div>
                 )}
 
-                {detail.forecasts && detail.forecasts.length > 0 && (
-                  <div className="forecast-box">
-                    <div className="panel-title">盈利预测 (AI 提取)</div>
-                    <table className="grid">
-                      <thead><tr><th>指标</th><th>期间</th><th>预测值</th><th>单位</th><th>原文</th></tr></thead>
-                      <tbody>
-                        {detail.forecasts.map((f, i) => (
-                          <tr key={i}>
-                            <td>{METRIC_LABEL[f.forecast_type] || f.forecast_type}</td>
-                            <td className="dim">{f.forecast_period || '—'}</td>
-                            <td style={{ fontWeight: 600 }}>{f.forecast_value}</td>
-                            <td className="dim">{f.forecast_unit || '—'}</td>
-                            <td className="dim" style={{ maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis' }}>{f.raw_text || '—'}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
+                <AnalysisOverview data={detail.analysis} />
+                <ForecastTable forecasts={detail.analysis?.analysis_version >= 2
+                  ? detail.analysis.forecasts
+                  : detail.forecasts?.map(f => ({
+                    metric: f.forecast_type, period: f.forecast_period,
+                    value: f.forecast_value, unit: f.forecast_unit, raw_text: f.raw_text,
+                  }))} />
 
                 <div className="report-text">
-                  <div className="panel-title">研报正文</div>
+                  <div className="panel-title">研报正文节选</div>
                   <pre>{detail.content_text || '(无文本内容)'}</pre>
                 </div>
               </>
@@ -348,11 +437,11 @@ export default function Reports() {
               )}
             </div>
 
-            {(ai.text || (!ai.done && !ai.error)) && (
+            {ai.text && (
               <>
                 <div className="panel-title" style={{ marginTop: 16 }}>模型输出 · 流式</div>
                 <pre ref={streamBoxRef} className={`stream-out${!ai.done && !ai.error ? ' streaming' : ''}`}>
-                  {ai.text || '等待模型输出…'}
+                  {ai.text}
                 </pre>
               </>
             )}
@@ -362,32 +451,12 @@ export default function Reports() {
                 <div className="panel-title" style={{ marginTop: 16 }}>结构化结果</div>
                 <div className="report-meta">
                   {ai.data.market && <span className="badge FORM">{MARKET_LABEL[ai.data.market] || ai.data.market}</span>}
-                  {ai.data.rating && ai.data.rating !== '无' && <span className="badge EARLY">{ai.data.rating}</span>}
                   {ai.data.report_type && <span className="badge DIG">{ai.data.report_type}</span>}
                   <span>{ai.data.org_name || '未知机构'}</span>
                   <span className="code">{ai.data.ts_code || (ai.data.symbols || []).join(', ') || '未识别标的'}</span>
                 </div>
-                {ai.data.core_view && <p className="ai-coreview">{ai.data.core_view}</p>}
-                {ai.data.key_points?.length > 0 && (
-                  <ul className="ai-keypoints">
-                    {ai.data.key_points.map((k, i) => <li key={i}>{k}</li>)}
-                  </ul>
-                )}
-                {ai.data.forecasts?.length > 0 && (
-                  <table className="grid">
-                    <thead><tr><th>盈利预测</th><th>期间</th><th>预测值</th><th>单位</th></tr></thead>
-                    <tbody>
-                      {ai.data.forecasts.map((f, i) => (
-                        <tr key={i}>
-                          <td>{METRIC_LABEL[f.metric] || f.metric}</td>
-                          <td className="dim">{f.period || '—'}</td>
-                          <td style={{ fontWeight: 600 }}>{f.value}</td>
-                          <td className="dim">{f.unit || '—'}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
+                <AnalysisOverview data={ai.data} />
+                <ForecastTable forecasts={ai.data.forecasts} />
               </div>
             )}
 

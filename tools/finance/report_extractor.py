@@ -67,6 +67,14 @@ class ReportExtractor:
         from tools.pdf import extract_text
         return extract_text(path)
 
+    def pdf_pages(self, path: str, *, layout: bool = True) -> list[str]:
+        """Read cleaned text by physical PDF page, preserving empty slots."""
+        from tools.pdf.text import extract_text_pages
+
+        pages = [self.clean(page) for page in extract_text_pages(path, layout=layout)]
+        # Sorted native PDF text pads columns with spaces; retain the separator.
+        return [re.sub(r"[ \t]{3,}", "  ", page) for page in pages] if layout else pages
+
     def _extract_docx(self, path: str) -> str:
         # .doc (legacy format) is binary; if zipfile cannot open it, raise and
         # let the caller mark failure

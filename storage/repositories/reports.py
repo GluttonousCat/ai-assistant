@@ -33,7 +33,10 @@ def list_reports(
             "(file_name ~* '\\.(pdf|docx?)$' OR (file_name IS NULL AND file_path IS NULL AND content_chars > 0))"
         )
         where.append("extraction_status <> 'pending_ocr'")
-    if market:
+    if market in ("TW股", "台股"):
+        where.append("market IN (%s, %s)")
+        args.extend(("TW股", "台股"))
+    elif market:
         where.append("market = %s")
         args.append(market)
     if industry:

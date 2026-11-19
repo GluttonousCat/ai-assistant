@@ -1,15 +1,19 @@
 """Pure report metadata normalization, shared by streaming and batch extraction."""
 
 import json
+import math
 import re
+from datetime import date
 
 from core.helpers import normalize_org_name
+from skills.report.extraction import list_items, text_items
 from typing import Any, Dict, List, Optional
 
 MARKETS = {
     "A股",
     "H股",
     "台股",
+    "TW股",
     "日股",
     "韩股",
     "美股",
@@ -80,7 +84,7 @@ def display_title(org: Optional[str], orig_name: str) -> str:
 
 def normalize_codes(codes: List[Any]) -> List[str]:
     out = []
-    for c in codes:
+    for c in list_items(codes):
         c = str(c).strip().upper()
         if re.match("^\\d{6}\\.(SH|SZ|BJ)$", c) and c not in out:
             out.append(c)
@@ -90,7 +94,7 @@ def normalize_codes(codes: List[Any]) -> List[str]:
 def normalize_symbols(symbols: List[Any]) -> List[str]:
     """Non-A-share ticker symbols (NVDA.O / 0981.HK / BABA etc.)"""
     out = []
-    for s in symbols:
+    for s in list_items(symbols):
         s = str(s).strip().upper()
         if re.match("^[A-Z0-9.\\-]{2,12}$", s) and s not in out:
             out.append(s)
@@ -98,10 +102,11 @@ def normalize_symbols(symbols: List[Any]) -> List[str]:
 
 
 def normalize_forecasts(
-    forecasts: List[Any], ts_codes: List[str], market: str
-) -> List[Dict[str, Any]]:
-    out = []
-    for f in forecasts:
+    forecasts: List[Any], ts_codes: List[str], market: str, symbols: List[str]
+) -> tuple[List[Dict[str, Any]], int]:
+    by_key = {}
+    conflicts = set()
+    for f in list_items(forecasts, 1200):
         if not isinstance(f, dict):
             continue
         metric = str(f.get("metric") or "").strip()
@@ -109,57 +114,82 @@ def normalize_forecasts(
             continue
         try:
             value = float(f.get("value"))
-        except (TypeError, ValueError):
+        except (OverflowError, TypeError, ValueError):
+            continue
+        if isinstance(f.get("value"), bool) or not math.isfinite(value) or abs(value) >= 1e20:
+            continue
+        unit = str(f.get("unit") or "").strip()
+        period = "NA" if metric == "target_price" else str(f.get("period") or "").strip().upper()
+        if not unit or not period or len(unit) > 16 or len(period) > 16:
             continue
         symbol = str(f.get("symbol") or "").strip().upper()
         ts_code = None
         if re.match("^\\d{6}\\.(SH|SZ|BJ)$", symbol):
             ts_code, symbol = (symbol, None)
+        elif symbol and not normalize_symbols([symbol]):
+            continue
         elif not symbol:
-            if ts_codes:
+            if len(ts_codes) == 1:
                 ts_code = ts_codes[0]
-            elif market != "A股":
-                symbol = ""
-            else:
+            elif len(symbols) == 1:
+                symbol = symbols[0]
+            elif market == "A股":
                 continue
-        out.append(
-            {
-                "ts_code": ts_code,
-                "symbol": symbol or None,
-                "market": market,
-                "metric": metric,
-                "period": str(f.get("period") or "")[:16],
-                "value": value,
-                "unit": str(f.get("unit") or "")[:16],
-                "confidence": float(f.get("confidence") or 80.0),
-                "raw_text": str(f.get("raw_text") or "")[:500],
-            }
-        )
-    return out
+        try:
+            confidence = float(f.get("confidence", 80))
+        except (OverflowError, TypeError, ValueError):
+            confidence = 80.0
+        forecast = {
+            "ts_code": ts_code, "symbol": symbol or None, "market": market,
+            "metric": metric, "period": period, "value": value, "unit": unit,
+            "confidence": confidence if 0 <= confidence <= 100 else 80.0,
+            "raw_text": str(f.get("raw_text") or "")[:500],
+        }
+        if isinstance(f.get("source"), dict):
+            forecast["source"] = f["source"]
+        key = ts_code, symbol, metric, period
+        prior = by_key.setdefault(key, forecast)
+        if (prior["value"], prior["unit"]) != (value, unit):
+            conflicts.add(key)
+    return [forecast for key, forecast in by_key.items() if key not in conflicts], len(conflicts)
 
 
 def prepare_extraction(row, data):
     """Normalize a model result into metadata, forecasts and the UI summary."""
-    market = str(data.get("market") or "其他").strip()
+    market = str(data.get("market") or row.get("market") or "其他").strip()
+    market = {"台股": "TW股", "HK股": "H股"}.get(market, market)
     if market not in MARKETS:
-        market = "其他"
+        market = row.get("market") if row.get("market") in MARKETS else "其他"
     codes = normalize_codes(data.get("ts_codes") or [])
     symbols = normalize_symbols(data.get("symbols") or [])
-    commodities = [str(c)[:32] for c in (data.get("commodities") or [])][:10]
-    tags = data.get("tags") or {}
+    commodities = text_items(data.get("commodities"), 10, 32)
+    tags = data.get("tags") if isinstance(data.get("tags"), dict) else {}
     rating = str(data.get("rating") or "无")
     if rating not in _RATING_WHITELIST:
         rating = "无"
-    forecasts = normalize_forecasts(data.get("forecasts") or [], codes, market)
+    forecasts, conflicts = normalize_forecasts(data.get("forecasts"), codes, market, symbols)
+    coverage = data.get("coverage")
+    if isinstance(coverage, dict):
+        coverage = {**coverage, "forecast_conflicts": conflicts}
+    canonical = {
+        **data, "market": market, "ts_codes": codes, "symbols": symbols,
+        "rating": rating, "commodities": commodities, "tags": tags,
+        "forecasts": [
+            {**forecast, "symbol": forecast["ts_code"] or forecast["symbol"]}
+            for forecast in forecasts
+        ],
+    }
+    if coverage is not None:
+        canonical["coverage"] = coverage
     fields = {
-        "analysis_json": json.dumps(data, ensure_ascii=False),
+        "analysis_json": json.dumps(canonical, ensure_ascii=False),
         "market": market,
         "tags_industries": join_tags(tags.get("industries")),
         "tags_regions": join_tags(tags.get("regions")),
         "tags_commodities": join_tags(tags.get("commodities")) or ",".join(commodities),
         "tags_themes": join_tags(tags.get("themes")),
         "tags_targets": join_tags(tags.get("targets"))
-        or ",".join(str(n)[:32] for n in (data.get("company_names") or [])[:5]),
+        or ",".join(text_items(data.get("company_names"), 5, 32)),
     }
     if codes and not row.get("ts_code") and not row.get("symbols"):
         fields["ts_code"] = codes[0]
@@ -169,18 +199,19 @@ def prepare_extraction(row, data):
         if data.get(key) and not row.get(key):
             fields[key] = str(data[key])[:length]
     published = str(data.get("publish_date") or "").strip()[:10]
-    if (
-        published
-        and not row.get("publish_date")
-        and re.match(r"^\d{4}-\d{2}-\d{2}$", published)
-    ):
-        fields["publish_date"] = published
+    if published and not row.get("publish_date"):
+        try:
+            fields["publish_date"] = date.fromisoformat(published).isoformat()
+        except ValueError:
+            pass
     if data.get("org_name") and not row.get("org_name"):
         fields["org_name"] = normalize_org_name(str(data["org_name"]))[:64]
-    title = display_title(
-        (row.get("org_name") or "").strip() or normalize_org_name(data.get("org_name")),
-        row.get("file_name") or row.get("title") or "",
-    )
+    title = row.get("title")
+    if not title or title == row.get("file_name"):
+        title = display_title(
+            (row.get("org_name") or "").strip() or normalize_org_name(data.get("org_name")),
+            row.get("file_name") or title or "",
+        )
     if title and title != row.get("title"):
         fields["title"] = title[:200]
     summary = {
@@ -193,7 +224,10 @@ def prepare_extraction(row, data):
         "symbols": symbols,
         "org_name": str(data.get("org_name") or row.get("org_name") or "")[:64],
         "core_view": str(data.get("core_view") or "")[:200],
-        "key_points": [str(k)[:80] for k in (data.get("key_points") or [])[:6]],
+        "key_points": text_items(data.get("key_points"), 6, 150),
+        "risks": text_items(data.get("risks"), 10, 200),
+        "evidence": data.get("evidence") or [],
+        "coverage": coverage,
         "forecast_count": len(forecasts),
         "forecasts": forecasts,
     }

@@ -15,20 +15,17 @@ from core.config import get_config
 from core.logger import get_logger
 from tools.finance import report_analysis
 from skills.report import normalization as normalize
+from skills.report.document import load_document, qa_context
+from skills.report.extraction import InvalidExtraction, analyze_document
 from skills.report.ocr import queue_ocr
 
 from skills.base import BaseSkill, SkillContext
 from skills.report.prompts import (
-    REPORT_EXTRACT_PROMPT,
     REPORT_QA_PROMPT,
     REPORT_SUMMARY_PROMPT,
 )
 
 logger = get_logger(__name__)
-
-# Max characters of a single report sent to the LLM (controls token cost)
-_MAX_TEXT_CHARS = 12000
-
 
 class ReportSkill(BaseSkill):
     name = "report"
@@ -115,25 +112,28 @@ class ReportSkill(BaseSkill):
         processed, failed, queued, discarded = [], [], [], []
         for row in rows:
             rid = row["report_id"]
-            if not row.get("content_chars") and not self._vision_backfill(row):
-                if row.get("file_path"):
+            try:
+                document = load_document(row)
+                if not document.segments and self._queue_missing_pdf(row):
                     queued.append(rid)
-                    context.log(f"研报 #{rid} 为图片型 PDF, 已转后台视觉 OCR")
-                else:
-                    report_analysis.mark_failed(rid)
-                    failed.append(rid)
-                    context.log(f"研报 #{rid} 无文本且无源文件, 跳过")
+                    context.log(f"研报 #{rid} 已转后台视觉 OCR")
+                    continue
+                summary = self._extract_one(row, document)
+            except Exception:
+                failed.append(rid)
+                logger.exception("研报 #%s 提取异常", rid)
+                context.log(f"研报 #{rid} 提取异常")
                 continue
-            summary = self._extract_one(row)
             if summary:
                 processed.append(rid)
                 context.log(f"研报 #{rid} 提取完成")
             else:
                 current = report_analysis.load_report(rid)
-                (failed if current else discarded).append(rid)
-                context.log(f"研报 #{rid} 未生成结果，已标记失败或被去重移除")
+                changed = not current or current.get("analysis_json") != row.get("analysis_json")
+                (discarded if changed else failed).append(rid)
+                context.log(f"研报 #{rid} 未保存本次结果")
         context.result = {
-            "summary": f"已分析 {len(processed)} 篇研报；OCR排队 {len(queued)} 篇，失败 {len(failed)} 篇，去重移除 {len(discarded)} 篇",
+            "summary": f"已分析 {len(processed)} 篇研报，OCR排队 {len(queued)} 篇，失败 {len(failed)} 篇，结果弃用 {len(discarded)} 篇",
             "processed": processed,
             "failed": failed,
             "queued_ocr": queued,
@@ -156,11 +156,9 @@ class ReportSkill(BaseSkill):
             return
         title = (row.get("title") or row.get("file_name") or f"#{report_id}").strip()
 
-        if not row.get("content_chars"):
-            # Image-type PDF: same as the batch pipeline, hand off to background OCR
-            # instead of holding the SSE connection for long
-            if row.get("file_path"):
-                self._vision_backfill(row)
+        document = load_document(row)
+        if not document.segments:
+            if self._queue_missing_pdf(row):
                 yield _ev(
                     "stage",
                     stage="ocr",
@@ -176,50 +174,31 @@ class ReportSkill(BaseSkill):
                 yield _ev("error", message="该研报无正文文本且无源文件, 无法分析")
             return
 
-        yield _ev(
-            "stage",
-            stage="load",
-            message=f"正文就绪: {row['content_chars']} 字 · {title[:40]}",
-        )
-
-        text = (row.get("content_text") or "")[:_MAX_TEXT_CHARS]
-        yield _ev(
-            "stage",
-            stage="extract",
-            message="LLM 结构化提取中 (评级 / 标的 / 盈利预测 / tags)…",
-        )
-        chunks: List[str] = []
+        yield _ev("stage", stage="load", message=f"正文就绪 · {len(document.segments)} 个片段")
         try:
-            # The thinking switch is injected uniformly by LLMClient per config
-            # (reasoning blocks are skipped automatically, only body text streams out)
-            for chunk in self._extract_llm().stream(
-                REPORT_EXTRACT_PROMPT.format(report_text=text)
-            ):
-                chunks.append(chunk)
-                yield _ev("delta", text=chunk)
+            for event in analyze_document(document, title, self._extract_llm(), streaming=True):
+                if event["type"] == "result":
+                    data = event["data"]
+                else:
+                    yield event
+        except InvalidExtraction as e:
+            report_analysis.mark_failed(report_id)
+            yield _ev("error", message=str(e))
+            return
         except Exception as e:
             yield _ev("error", message=f"LLM 调用失败: {e}")
             return
-        raw = "".join(chunks)
 
         yield _ev(
             "stage",
             stage="parse",
-            message="解析 JSON 并规范化 (market/rating 词表约束, 代码校验)…",
+            message="核对出处并规范化评级、代码和预测口径…",
         )
-        data = self._parse_json(raw)
-        if not isinstance(data, dict):
-            report_analysis.mark_failed(row["report_id"])
-            yield _ev("error", message="LLM 输出无法解析为 JSON, 本篇标记失败 (可重试)")
-            return
-
         summary = self._apply_extract_result(row, data)
         if summary is None:
-            # the record was dedup-merged away during extraction
             yield _ev(
                 "error",
-                message="提取完成, 但该研报在处理期间被去重合并移除 "
-                "(同话题保留了另一条记录), 本次结果已丢弃",
+                message="研报在处理期间已被更新或去重，本次结果未覆盖现有记录。",
             )
             return
         yield _ev(
@@ -233,14 +212,22 @@ class ReportSkill(BaseSkill):
 
         yield _ev("done")
 
-    def _extract_one(self, row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        text = (row.get("content_text") or "")[:_MAX_TEXT_CHARS]
-        if not text.strip():
-            report_analysis.mark_failed(row["report_id"])
-            return None
-        raw = self._extract_llm().invoke(REPORT_EXTRACT_PROMPT.format(report_text=text))
-        data = self._parse_json(raw)
-        if not isinstance(data, dict):
+    def _queue_missing_pdf(self, row: Dict[str, Any]) -> bool:
+        path = row.get("file_path") or ""
+        if not path.lower().endswith(".pdf"):
+            return False
+        self._vision_backfill({**row, "content_chars": 0})
+        return True
+
+    def _extract_one(self, row: Dict[str, Any], document=None) -> Optional[Dict[str, Any]]:
+        if document is None:
+            document = load_document(row)
+        title = row.get("title") or row.get("file_name") or ""
+        try:
+            for event in analyze_document(document, title, self._extract_llm()):
+                if event["type"] == "result":
+                    data = event["data"]
+        except InvalidExtraction:
             report_analysis.mark_failed(row["report_id"])
             return None
         summary = self._apply_extract_result(row, data)
@@ -270,9 +257,11 @@ class ReportSkill(BaseSkill):
         self, row: Dict[str, Any], data: Dict[str, Any]
     ) -> Optional[Dict[str, Any]]:
         fields, forecasts, summary = normalize.prepare_extraction(row, data)
-        if report_analysis.save_extraction(row["report_id"], fields, forecasts):
+        if report_analysis.save_extraction(
+            row["report_id"], fields, forecasts, previous_analysis=row.get("analysis_json")
+        ):
             return summary
-        logger.info("#%s 提取完成但记录已被去重删除, 结果丢弃", row["report_id"])
+        logger.info("#%s 提取完成但记录已被更新或去重, 结果丢弃", row["report_id"])
         return None
 
     def _run_analyze(self, context: SkillContext, params: Dict[str, Any]) -> None:
@@ -322,6 +311,8 @@ class ReportSkill(BaseSkill):
                     "key_points": data.get("key_points") or [],
                     "commodities": data.get("commodities") or [],
                     "forecasts": data.get("forecasts") or [],
+                    "risks": data.get("risks") or [],
+                    "evidence": (data.get("evidence") or [])[:8],
                     "publish_date": str(r.get("publish_date") or ""),
                 }
             )
@@ -351,13 +342,13 @@ class ReportSkill(BaseSkill):
         if not row:
             context.result = {"summary": f"研报 #{report_id} 不存在"}
             return
-        text = (row.get("content_text") or "")[:_MAX_TEXT_CHARS]
-        if not text.strip():
+        passages = qa_context(load_document(row), question)
+        if not passages:
             context.result = {"summary": "该研报无文本内容"}
             return
         answer = self._llm().invoke(
             REPORT_QA_PROMPT.format(
-                title=row["title"], report_text=text, question=question
+                title=row["title"], report_text="\n\n".join(p.render() for p in passages), question=question
             )
         )
         context.result = {"summary": answer, "report_id": row["report_id"]}

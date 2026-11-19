@@ -24,25 +24,25 @@ def ocr_page_png(b64_png: str, prompt: str, vision_llm: Any) -> str:
 
 
 def ocr_pdf(path: str, prompt: str, vision_llm: Any, max_pages: int = 10,
-            dpi: int = 130) -> Optional[str]:
+            dpi: int = 130, *, page_markers: bool = False) -> Optional[str]:
     """Whole-document OCR for scanned PDFs: render each page → OCR → concatenate."""
     from core.config import get_config
     if not get_config().openai_api_key:
         return None
 
     pages: List[str] = []
+    text_chars = 0
     rendered = render_pages_png(path, max_pages=max_pages, dpi=dpi)
     for page_no, b64 in rendered:
         try:
             text = ocr_page_png(b64, prompt, vision_llm)
             if text and text.strip():
-                pages.append(text.strip())
+                body = text.strip()
+                text_chars += len(body)
+                pages.append(f"[[PDF_PAGE:{page_no}]]\n{body}" if page_markers else body)
                 logger.info(f"OCR 第 {page_no}/{len(rendered)} 页识别完成 "
                             f"({len(text)} 字)")
         except Exception as e:  # noqa: BLE001 a single failed page must not abort the whole document
             logger.warning(f"OCR 第 {page_no} 页识别失败: {e}")
 
-    if not pages:
-        return None
-    result = "\n".join(pages)
-    return result if len(result) > 10 else None
+    return "\n".join(pages) if text_chars + max(0, len(pages) - 1) > 10 else None

@@ -58,19 +58,21 @@ def load_report(report_id):
 def mark_failed(report_id):
     with PgClient() as pg:
         pg.execute(
-            "UPDATE fin.report_meta SET analysis_status='failed' WHERE report_id=%s",
+            "UPDATE fin.report_meta SET analysis_status='failed' "
+            "WHERE report_id=%s AND analysis_status IS DISTINCT FROM 'done'",
             (report_id,),
         )
 
 
-def save_extraction(report_id, fields, forecasts):
+def save_extraction(report_id, fields, forecasts, *, previous_analysis):
     if not fields or fields.keys() - _UPDATE_FIELDS:
         raise ValueError("Invalid report metadata fields")
     with PgClient() as pg:
         assignments = [f"{key}=%s" for key in fields]
         changed = pg.execute(
-            f"UPDATE fin.report_meta SET {', '.join(assignments)}, analysis_status='done' WHERE report_id=%s",
-            (*fields.values(), report_id),
+            f"UPDATE fin.report_meta SET {', '.join(assignments)}, analysis_status='done' "
+            "WHERE report_id=%s AND analysis_json IS NOT DISTINCT FROM %s",
+            (*fields.values(), report_id, previous_analysis),
         )
         if changed == 0:
             return False
