@@ -1,6 +1,7 @@
 """Application operations injected into HTTP handlers at startup."""
 
 from jobs.scheduler import get_scheduler, get_digest_scheduler, get_intraday_scheduler
+from jobs.market_digest_scheduler import get_midday_scheduler
 
 
 class BackendOperations:
@@ -11,6 +12,7 @@ class BackendOperations:
         return {
             **get_scheduler().status(),
             "mail_digest": get_digest_scheduler().status(),
+            "midday_digest": get_midday_scheduler().status(),
             "intraday_watch": get_intraday_scheduler().status(),
         }
 

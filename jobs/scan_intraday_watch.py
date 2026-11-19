@@ -17,6 +17,7 @@ from core.logger import get_logger
 from core.observability import observed, task_progress
 from jobs.cache_intraday_prefix import SLOTS
 from skills.trend.intraday import observe, rank_candidates
+from skills.trend.intraday_followup import build_followup
 from skills.trend.chart_history import stock_chart
 from skills.trend.digest import export_csv
 from skills.trend.mtf import MtfConfig, minute_context
@@ -117,6 +118,12 @@ def run(day, clock="11:30", wait=False, render_static=False):
             "statuses": dict(Counter(r["status"] for r in results)), "data": candidates,
             "slots": [slot for slot in SLOTS if slot <= clock],
             "note": f"仅使用今天截至{clock}已收盘60F；日K背景截至上一完整日。eligible均为false，等待盘后复核。"}
+        report["scan_status"] = {**dict.fromkeys(bad, "data_missing"),
+                                 **{row["ts_code"]: row["status"] for row in results}}
+        try:
+            report["follow_up"] = build_followup(report)
+        except Exception as error:
+            logger.warning("盘中历史标的跟踪暂缺: %s", type(error).__name__)
         write_json(folder / "report.json", report)
         (folder / "candidates.csv").write_text(export_csv(candidates), encoding="utf-8-sig")
         if render_static:

@@ -45,6 +45,7 @@ def test_shutdown_cleans_started_jobs_on_application_error_and_continues_after_s
     monkeypatch.setattr(
         lifecycle, "get_digest_scheduler", lambda: scheduler("mail", failed_stop=True)
     )
+    monkeypatch.setattr(lifecycle, "get_midday_scheduler", lambda: scheduler("midday"))
     monkeypatch.setattr(
         zsxq_scheduler, "get_zsxq_scheduler", lambda: scheduler("reports")
     )
@@ -59,9 +60,11 @@ def test_shutdown_cleans_started_jobs_on_application_error_and_continues_after_s
         "daily-start",
         "intraday-start",
         "mail-start",
+        "midday-start",
         "reports-start",
         "worker-stop",
         "reports-stop",
+        "midday-stop",
         "mail-stop",
         "daily-stop",
     ]

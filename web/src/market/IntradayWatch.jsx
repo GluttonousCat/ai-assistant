@@ -3,6 +3,7 @@ import { platformApi } from '../platformApi'
 import { startPolling } from '../lib/polling'
 import OpportunityBadge from '../OpportunityBadge'
 import IndustryLabel from './IndustryLabel'
+import IntradayFollowUp from './IntradayFollowUp'
 import { compareStockScores, stockSearchText, meetsDisplayScore, MIN_DISPLAY_SCORE } from './stockList'
 import { opportunityFor } from '../opportunities'
 import TrendChart from './TrendChart'
@@ -20,7 +21,7 @@ export default function IntradayWatch({ industries }) {
   const [code, setCode] = useState('')
   const [query, setQuery] = useState('')
   const [kind, setKind] = useState('')
-  const [stage, setStage] = useState('')
+  const [stage, setStage] = useState('new')
   const [chart, setChart] = useState(null)
   const [chartError, setChartError] = useState('')
   const [timeframe, setTimeframe] = useState('60F')
@@ -32,7 +33,9 @@ export default function IntradayWatch({ industries }) {
       try {
         const next = await platformApi.marketIntraday({ signal })
         if (!signal.aborted) {
-          setReport((previous) => previous?.run_id === next.run_id && previous?.created_at === next.created_at && JSON.stringify(previous?.schedule) === JSON.stringify(next.schedule) ? previous : next)
+          setReport((previous) => previous?.run_id === next.run_id && previous?.created_at === next.created_at
+            && Boolean(previous?.follow_up) === Boolean(next.follow_up)
+            && JSON.stringify(previous?.schedule) === JSON.stringify(next.schedule) ? previous : next)
           setError('')
         }
       } finally { if (!signal.aborted) setBusy(false) }
@@ -69,6 +72,8 @@ export default function IntradayWatch({ industries }) {
     {error && <div className="trend-notice error" role="alert">{error}</div>}
     {busy && !report ? <div className="trend-placeholder">正在读取已发布盘中观察…</div> : !report?.as_of ? <div className="trend-placeholder">{report?.note || '等待离线采集与扫描完成。'}</div> : <>
       <div className="intraday-scope"><b>观察截止 {String(report.as_of).replace('T', ' ').slice(0, 16)}</b><span>今日已收盘{slots.length}根 · 日K背景截至 {String(report.daily_as_of).slice(0, 10)}</span><p>{report.score_scope}。所有记录均为观察，尚未满足完整日K入场确认。</p></div>
+      <IntradayFollowUp rows={report.follow_up} industries={industries} />
+      <h3 className="intraday-section-title">盘中观察信号</h3>
       <div className="tracking-stats intraday-stats">
         <div><span>采集范围</span><strong>{report.universe}<small>只</small></strong><p>当前已保存的非ST股票池</p></div>
         <div><span>已完成前缀可得</span><strong>{report.collected}<small>只</small></strong><p>{report.collection_failed}只获取不完整，未据此推荐</p></div>

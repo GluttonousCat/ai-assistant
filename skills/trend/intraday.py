@@ -2,24 +2,43 @@
 import math
 import json
 from datetime import timedelta
+from functools import lru_cache
 
 import pandas as pd
 
+from core.logger import get_logger
+from skills.trend.intraday_followup import build_followup
 from skills.trend.mtf import MtfConfig, minute_context
 from skills.trend.parent_context import annotate_summary
 from skills.trend.chart_history import five_year_start
 from tools.market.trend_data import adjust_prices, intraday_report, intraday_schedule, scan_inputs, scan_daily_inputs
+
+logger = get_logger(__name__)
 
 
 def rank_candidates(rows):
     return sorted(rows, key=lambda row: (-row["score"], row["ts_code"]))
 
 
+@lru_cache(maxsize=4)
+def _legacy_followup(run_id, created_at):
+    report = intraday_report(run_id)
+    if not report or report.get("created_at") != created_at:
+        return None
+    return build_followup(report)
+
+
 def dashboard():
     report = intraday_report()
     if not report:
         return None
-    return {**report, "data": rank_candidates(report["data"]), "schedule": intraday_schedule()}
+    public = {key: value for key, value in report.items() if key != "scan_status"}
+    if "follow_up" not in public and all(report.get(key) for key in ("run_id", "created_at", "as_of", "daily_as_of")):
+        try:
+            public["follow_up"] = _legacy_followup(report["run_id"], report["created_at"])
+        except Exception as error:
+            logger.warning("历史轮次跟踪暂缺: %s", type(error).__name__)
+    return {**public, "data": rank_candidates(report["data"]), "schedule": intraday_schedule()}
 
 
 def chart(code, run_id=None, timeframe="60F"):

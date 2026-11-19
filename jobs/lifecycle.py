@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from core.config import get_config
 from core.logger import get_logger
 from jobs.scheduler import get_scheduler, get_digest_scheduler, get_intraday_scheduler
+from jobs.market_digest_scheduler import get_midday_scheduler
 from jobs.operations import BackendOperations
 
 logger = get_logger(__name__)
@@ -38,6 +39,7 @@ async def lifespan(app: FastAPI):
             (get_scheduler, "日线增量同步", config.get("schedule.enabled", True)),
             (get_intraday_scheduler, "盘中60F", True),
             (get_digest_scheduler, "趋势邮件", True),
+            (get_midday_scheduler, "午间60F邮件", True),
             (
                 get_zsxq_scheduler,
                 "知识星球研报",

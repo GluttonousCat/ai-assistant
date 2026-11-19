@@ -14,3 +14,10 @@
 .intraday-reason { font-size:12px; line-height:1.8; color:#b7a181; }.intraday-chart-note, .intraday-footnote { color:#887e6d; font-size:10px; line-height:1.9; }.intraday-chart-image { display:block; width:100%; height:auto; margin-top:12px; }.intraday-empty { padding:35px 15px; color:#9d907b; font-size:12px; }.intraday-footnote { margin:18px 0; }
 @media(max-width:1000px) { .intraday-stats { grid-template-columns:repeat(2,minmax(0,1fr)); }.intraday-filters > span { margin-left:0; } }
 @media(max-width:600px) { .intraday-header { align-items:flex-start; flex-direction:column; }.intraday-scope > span { display:block; margin:9px 0 0; }.intraday-two-bars { grid-template-columns:1fr 1fr; }.intraday-selected { flex-wrap:wrap; }.intraday-stats > div { padding:14px 12px; } }
+.intraday-follow { border:1px solid #393127; background:#17140f; border-radius:8px; margin-bottom:20px; padding:15px 16px; }
+.intraday-follow h3, .intraday-section-title { margin:0 0 8px; color:#e5d9c5; font-size:16px; font-weight:600; }
+.intraday-follow p, .intraday-follow summary { margin:6px 0; color:#b1a493; font-size:12px; }
+.intraday-follow summary { cursor:pointer; }
+.intraday-follow-list { list-style:none; margin:8px 0; padding:0; }
+.intraday-follow-list li { display:flex; flex-wrap:wrap; align-items:baseline; gap:6px 16px; padding:8px 0; border-top:1px solid #353024; color:#d5c4a8; font-size:12px; }
+.intraday-follow-list small { color:#a69b8a; font-size:11px; }

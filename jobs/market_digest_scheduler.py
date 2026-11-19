@@ -1,4 +1,4 @@
-"""Backend-owned daily 18:00 Shanghai email scheduling, independent of AI."""
+"""Backend-owned midday and closing email schedules in Shanghai time."""
 from __future__ import annotations
 
 import asyncio
@@ -8,6 +8,8 @@ from zoneinfo import ZoneInfo
 from core.config import get_config
 from core.logger import get_logger
 from jobs.send_market_digest import deliver_once
+from jobs import send_intraday_digest as midday
+from tools.kline.calendar import is_trading_day
 
 logger = get_logger(__name__)
 SHANGHAI = ZoneInfo("Asia/Shanghai")
@@ -25,6 +27,12 @@ def _local(now):
 
 
 class MarketDigestScheduler:
+    send_time = SEND_TIME
+    retry_until = RETRY_UNTIL
+    retry_seconds = RETRY_SECONDS
+    send_delay_notice = True
+    label = "盘后趋势邮件"
+
     def __init__(self):
         self._task = None
         self._stop = asyncio.Event()
@@ -39,11 +47,17 @@ class MarketDigestScheduler:
         value = cfg.env("MARKET_DIGEST_ENABLED", cfg.get("email_digest.enabled", True))
         return str(value).lower() in ("true", "1", "yes")
 
-    @staticmethod
-    def next_slot(now=None):
+    @classmethod
+    def next_slot(cls, now=None):
         now = _local(now or market_now())
-        slot = datetime.combine(now.date(), SEND_TIME, SHANGHAI)
+        slot = datetime.combine(now.date(), cls.send_time, SHANGHAI)
         return slot if now < slot else slot + timedelta(days=1)
+
+    def initial_due(self, now):
+        return now.time() >= self.send_time
+
+    def deliver(self, *, delay_notice=False):
+        return deliver_once(delay_notice=delay_notice)
 
     def status(self):
         return {
@@ -54,7 +68,7 @@ class MarketDigestScheduler:
             "last_run": self.last_run.isoformat() if self.last_run else None,
             "last_result": self.last_result,
             "time_zone": "Asia/Shanghai",
-            "schedule_time": "18:00",
+            "schedule_time": self.send_time.isoformat(timespec="minutes"),
             "owner": "backend",
         }
 
@@ -69,21 +83,21 @@ class MarketDigestScheduler:
         self.last_run = market_now()
         self.next_run = None
         try:
-            result = await asyncio.to_thread(deliver_once, delay_notice=delay_notice)
+            result = await asyncio.to_thread(self.deliver, delay_notice=delay_notice)
         except Exception as error:
             # SMTP errors and diagnostics may contain account/server details.
             # Expose only the type, retaining the existing persistent receipts.
             result = {"status": "retry", "error_type": type(error).__name__}
-            logger.warning("后台趋势邮件异常: %s", type(error).__name__)
+            logger.warning("%s异常: %s", self.label, type(error).__name__)
         self.last_result = result
-        logger.info("后台趋势邮件结果: status=%s, count=%s, delay=%s",
-                    result.get("status"), result.get("count"), delay_notice)
+        logger.info("%s结果: status=%s, count=%s, delay=%s",
+                    self.label, result.get("status"), result.get("count"), delay_notice)
         return result
 
     async def _deliver_window(self):
         async with self._lock:
             day = market_now().date()
-            deadline = datetime.combine(day, RETRY_UNTIL, SHANGHAI)
+            deadline = datetime.combine(day, self.retry_until, SHANGHAI)
             while not self._stop.is_set() and market_now().date() == day:
                 result = await self._attempt()
                 if result.get("status") not in ("waiting_data", "retry", "busy"):
@@ -92,27 +106,28 @@ class MarketDigestScheduler:
                 if now.date() != day:
                     return result  # Do not roll an old retry into tomorrow.
                 if now >= deadline:
-                    if result.get("status") == "waiting_data" and not self._stop.is_set():
+                    if self.send_delay_notice and result.get("status") == "waiting_data" and not self._stop.is_set():
                         result = await self._attempt(delay_notice=True)
                         if result.get("status") == "retry":
                             # The warehouse may have completed between checks.
                             result = await self._attempt()
                     return result
-                wait = min(RETRY_SECONDS, (deadline-now).total_seconds())
+                wait = min(self.retry_seconds, (deadline-now).total_seconds())
                 self.next_run = now + timedelta(seconds=wait)
-                logger.info("后台趋势邮件待重试: %s", self.next_run.isoformat())
+                if self.send_delay_notice or result["status"] != "waiting_data":
+                    logger.info("%s待重试: %s", self.label, self.next_run.isoformat())
                 if await self._wait(wait):
                     return result
 
     async def _loop(self):
-        logger.info("后台趋势邮件调度已启动: 每日18:00 Asia/Shanghai")
+        logger.info("%s调度已启动: %s Asia/Shanghai", self.label, self.send_time.isoformat(timespec="minutes"))
         # Only today's run is recovered; durable per-day receipts make this safe
         # for a restart after 18:00, including a restart after the retry deadline.
-        if market_now().time().replace(tzinfo=None) >= SEND_TIME:
+        if self.initial_due(market_now()):
             await self._deliver_window()
         while not self._stop.is_set():
             self.next_run = self.next_slot()
-            logger.info("下次后台趋势邮件: %s", self.next_run.isoformat())
+            logger.info("下次%s: %s", self.label, self.next_run.isoformat())
             if await self._wait((self.next_run-market_now()).total_seconds()):
                 break
             await self._deliver_window()
@@ -120,7 +135,7 @@ class MarketDigestScheduler:
     def start(self):
         if self.enabled and (self._task is None or self._task.done()):
             self._stop.clear()
-            self._task = asyncio.create_task(self._loop(), name="market-digest-scheduler")
+            self._task = asyncio.create_task(self._loop(), name=self.label)
 
     async def stop(self):
         self._stop.set()
@@ -134,10 +149,38 @@ class MarketDigestScheduler:
                     await self._task
                 except asyncio.CancelledError:
                     pass
-        logger.info("后台趋势邮件调度已停止")
+        logger.info("%s调度已停止", self.label)
+
+
+class MiddayDigestScheduler(MarketDigestScheduler):
+    send_time = midday.SEND_TIME
+    retry_until = midday.RETRY_UNTIL
+    retry_seconds = 60
+    send_delay_notice = False
+    label = "午间60F邮件"
+
+    @property
+    def enabled(self):
+        cfg = get_config()
+        value = cfg.env("MIDDAY_DIGEST_ENABLED", cfg.get("email_digest.midday_enabled", True))
+        return super().enabled and str(value).lower() in ("true", "1", "yes")
+
+    @classmethod
+    def next_slot(cls, now=None):
+        slot = super().next_slot(now)
+        while not is_trading_day(slot.date()):
+            slot += timedelta(days=1)
+        return slot
+
+    def initial_due(self, now):
+        return is_trading_day(now.date()) and self.send_time <= now.time() <= self.retry_until
+
+    def deliver(self, *, delay_notice=False):
+        return midday.deliver_midday_once()
 
 
 _scheduler = None
+_midday_scheduler = None
 
 
 def get_digest_scheduler():
@@ -145,3 +188,10 @@ def get_digest_scheduler():
     if _scheduler is None:
         _scheduler = MarketDigestScheduler()
     return _scheduler
+
+
+def get_midday_scheduler():
+    global _midday_scheduler
+    if _midday_scheduler is None:
+        _midday_scheduler = MiddayDigestScheduler()
+    return _midday_scheduler

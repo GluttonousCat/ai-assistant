@@ -104,6 +104,10 @@ def _prepare(folder, snapshot, cards, report_day, minimum, recipient, sender, pr
         snapshot, cards, images, report_day, minimum, recipient, sender,
         preview=preview, delayed=delayed, observations=observations, test=test,
     )
+    return write_prepared(folder, html, payload, message_id, images)
+
+
+def write_prepared(folder, html, payload, message_id, images):
     folder.mkdir(parents=True, exist_ok=True)
     browser_html = html
     for cid, png in images.items():
@@ -148,6 +152,33 @@ def deliver_once(now=None, *, delay_notice=False, test=False, retry_uncertain_te
     target = expected_date(now)
     profile = _profile(recipient, minimum, observations)
     root = (_root() / "test" if test else _root()) / str(report_day) / profile
+
+    def prepare(state, folder):
+        snapshot = load_dashboard(state["snapshot_run_id"]) if state.get("snapshot_run_id") else load_dashboard()
+        # Explicit tests use the latest published snapshot at any hour; its
+        # actual cutoff is displayed. Per-stock chart validation still runs.
+        complete = bool(snapshot) if test else target is not None and ready(snapshot, target, market_state(), scan_cutoffs(now.replace(tzinfo=None)))
+        if not complete and not delay_notice:
+            return {"status": "waiting_data", "target": str(target), "as_of": snapshot.get("as_of") if snapshot else None}
+        if complete and delay_notice:
+            return {"status": "retry", "reason": "数据刚完成，请发送正式日报"}
+        rows = [] if delay_notice else select_stocks(snapshot, minimum, observations, exclusive=True)
+        cards = [] if delay_notice else stock_cards(snapshot, rows)
+        try:
+            parts = _prepare(folder, snapshot, cards, report_day,
+                             minimum, recipient, settings.sender, delayed=delay_notice, observations=observations, test=test)
+        except DigestTooLarge:
+            return {"status": "blocked", "reason": "整封日报超过8MiB上限，未拆分、未发送", "count": len(rows)}
+        return {"status": "prepared", "snapshot_run_id": snapshot["run_id"] if snapshot else None,
+                "as_of": snapshot["as_of"] if snapshot else None, "count": len(rows), "parts": parts}
+
+    return deliver_prepared(root, recipient, settings, prepare, delay_notice=delay_notice,
+                            test=test, retry_uncertain_test=retry_uncertain_test, now=now)
+
+
+def deliver_prepared(root, recipient, settings, prepare, *, delay_notice=False, test=False,
+                     retry_uncertain_test=False, now=None):
+    folder = root / ("delay" if delay_notice else "report")
     with file_lock(root / "delivery.lock") as acquired:
         if not acquired:
             return {"status": "busy"}
@@ -164,7 +195,7 @@ def deliver_once(now=None, *, delay_notice=False, test=False, retry_uncertain_te
             return {"status": "uncertain", "reason": "上次发送确认中断，请核对收件箱；未自动重发"}
         if uncertain:
             state.setdefault("uncertain_history", []).append({
-                "acknowledged_not_received_at": now.isoformat(),
+                "acknowledged_not_received_at": (now or datetime.now(SHANGHAI)).isoformat(),
                 "error_type": state.get("error_type"),
                 "error_phase": state.get("error_phase"),
                 "parts": [dict(part) for part in state["parts"]],
@@ -187,24 +218,10 @@ def deliver_once(now=None, *, delay_notice=False, test=False, retry_uncertain_te
             state.pop("error_phase", None)
             write_json(state_path, state)
         if not state.get("parts"):
-            snapshot = load_dashboard(state["snapshot_run_id"]) if state.get("snapshot_run_id") else load_dashboard()
-            # Explicit tests use the latest published snapshot at any hour; its
-            # actual cutoff is displayed. Per-stock chart validation still runs.
-            complete = bool(snapshot) if test else target is not None and ready(snapshot, target, market_state(), scan_cutoffs(now.replace(tzinfo=None)))
-            if not complete and not delay_notice:
-                return {"status": "waiting_data", "target": str(target), "as_of": snapshot.get("as_of") if snapshot else None}
-            if complete and delay_notice:
-                return {"status": "retry", "reason": "数据刚完成，请发送正式日报"}
-            rows = [] if delay_notice else select_stocks(snapshot, minimum, observations, exclusive=True)
-            cards = [] if delay_notice else stock_cards(snapshot, rows)
-            try:
-                parts = _prepare(root / ("delay" if delay_notice else "report"), snapshot, cards, report_day,
-                                 minimum, recipient, settings.sender, delayed=delay_notice, observations=observations, test=test)
-            except DigestTooLarge:
-                return {"status": "blocked", "reason": "整封日报超过8MiB上限，未拆分、未发送", "count": len(rows)}
-            state = {**state, "status": "prepared", "snapshot_run_id": snapshot["run_id"] if snapshot else None,
-                     "as_of": snapshot["as_of"] if snapshot else None, "count": len(rows),
-                     "sender": settings.sender, "parts": parts}
+            prepared = prepare(state, folder)
+            if prepared["status"] != "prepared":
+                return prepared
+            state = {**state, **prepared, "sender": settings.sender}
             write_json(state_path, state)
         if state["sender"] != settings.sender:
             return {"status": "blocked", "reason": "发件人已变更，请先核对已有发送记录"}
@@ -214,7 +231,7 @@ def deliver_once(now=None, *, delay_notice=False, test=False, retry_uncertain_te
             part["status"] = "sending"
             write_json(state_path, state)
             try:
-                payload = _mail_file(root / ("delay" if delay_notice else "report"), part["file"]).read_bytes()
+                payload = _mail_file(folder, part["file"]).read_bytes()
                 msg = BytesParser(policy=policy.default).parsebytes(payload)
                 if address(str(msg["To"])) != recipient or str(msg["Message-ID"]) != part["message_id"]:
                     raise ValueError("缓存信件收件人或标识与发送记录不一致")

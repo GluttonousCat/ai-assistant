@@ -221,6 +221,8 @@ def test_lifespan_starts_and_stops_mail_even_when_quotes_are_disabled(monkeypatc
         "get_intraday_scheduler",
         lambda: SimpleNamespace(start=lambda: None, stop=noop),
     )
+    monkeypatch.setattr(lifespan_module, "get_midday_scheduler",
+                        lambda: SimpleNamespace(start=lambda: None, stop=noop))
     monkeypatch.setattr(
         zsxq_scheduler, "get_zsxq_scheduler", lambda: SimpleNamespace(stop=noop)
     )
