@@ -51,7 +51,7 @@ jobs/        quant_worker(个人工作台持久队列/OS锁串行/独立任务�
              backtest_mtf(双周期日K入场/三退出方案开发段选择与分段验证) / backtest_quant(旧v4两周期三策略对照) / sync_backtest_inputs(原生日K查缺/真实限价/基准,不推水位线) /
              scan_trend(全池离线筛票/原子发布) / repair_trend_factors(精确补缺真实复权因子,不推进日线水位线) /
              refresh_market(日K/因子→60F逐股审计→沿用参数重算快照,同池重叠回补/OS锁/持久进度) /
-             任务层一体: scheduler(17:00 Asia/Shanghai,交易日;启动三阶段补漏,失败30分钟重试最多3次) / zsxq_scheduler(爬虫 00:00/12:00) /
+             任务层一体: scheduler(17:00 Asia/Shanghai,交易日;启动补漏/逐指数日K查缺,失败30分钟重试最多3次) / zsxq_scheduler(爬虫 00:00/12:00) /
              管线入口(daily_fetch_zxsq, sync_zxsq_to_pg, merge_report_duplicates, smoke) /
              health_sentinel(独立心跳哨兵: API探活+WS广播+自动拉起, 8209) /
              wecom_bot(企微智能机器人 wss 长连接桥接→本地Agent, 见 docs/agents/wecom_bot.md)

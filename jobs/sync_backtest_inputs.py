@@ -7,7 +7,9 @@ import pandas as pd
 from core.config import get_config
 from core.logger import get_logger
 from storage.schema.quant import ensure_quant_schema
+from storage.schema.market import ensure_index_daily_schema
 from storage.repositories import backtest as store
+from tools.market.sync_index import sync_index
 from tools.market.trend_data import scan_universe
 import core.net  # noqa: F401
 
@@ -96,20 +98,10 @@ def sync(start, end):
         count = _retry(repair_bj)
         logger.info("BJ原生日K %s %s行", code, count)
         time.sleep(0.4)
-    for code in ["000300.SH", "000852.SH"]:
-
-        def index():
-            f = pro.index_daily(
-                ts_code=code,
-                start_date=start.replace("-", ""),
-                end_date=end.replace("-", ""),
-            )
-            if f is None or f.empty:
-                raise ValueError(f"{code}没有基准行情")
-            f["trade_date"] = pd.to_datetime(f.trade_date).dt.date
-            return store.save_index(f)
-
-        logger.info("基准 %s %s行", code, _retry(index))
+    ensure_index_daily_schema()
+    first, last = date.fromisoformat(start), date.fromisoformat(end)
+    for code in ("000300.SH", "000852.SH"):
+        logger.info("基准 %s %s行", code, _retry(lambda: sync_index(pro, code, first, last)))
 
 
 def main():

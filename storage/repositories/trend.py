@@ -9,19 +9,16 @@ from storage.pg import PgClient
 
 def cutoffs(now: datetime) -> dict:
     with PgClient(read_only=True) as pg:
-        bars = pg.fetch_one(
-            """SELECT max(bar_end) AS bar_end FROM stock.intraday_bar
-            WHERE source='akshare-sina' AND adjustment='none' AND interval_minutes=60 AND bar_end<=%s""",
-            (now,),
+        return pg.fetch_one(
+            """SELECT
+                (SELECT max(bar_end) FROM stock.intraday_bar
+                 WHERE source='akshare-sina' AND adjustment='none' AND interval_minutes=60
+                 AND bar_end<=%s) AS bar_end,
+                (SELECT max(trade_date) FROM stock.adj_factor) AS factor_date,
+                (SELECT max(trade_date) FROM stock.daily
+                 WHERE trade_date <= (%s::timestamp - interval '15 hours')::date) AS daily_end""",
+            (now, now),
         )
-        factor = pg.fetch_one(
-            "SELECT max(trade_date) AS factor_date FROM stock.adj_factor"
-        )
-        daily = pg.fetch_one(
-            "SELECT max(trade_date) AS daily_end FROM stock.daily WHERE trade_date::timestamp+interval '15 hours'<=%s",
-            (now,),
-        )
-    return {**bars, **factor, **daily}
 
 
 def universe(as_of: str, listed=False) -> list[dict]:

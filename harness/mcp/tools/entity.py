@@ -69,15 +69,10 @@ def get_schema(keyword: str = "") -> Dict[str, Any]:
     from tools.finance.schema_info import get_schema_info
 
     text = get_schema_info().to_prompt_text()
-    if keyword:
-        lines = text.splitlines()
-        kept, hit = [], False
-        for ln in lines:
-            if ln.startswith(("##", "表")) or "表:" in ln:
-                hit = keyword.lower() in ln.lower()
-            if not keyword or hit:
-                kept.append(ln)
-        text = "\n".join(kept) if kept else text
+    if keyword := keyword.strip().casefold():
+        matched = [block for block in text.split("\n\n") if keyword in block.casefold()]
+        if matched:
+            text = "\n\n".join(matched)
     return {"schema_text": text[:12000], "truncated": len(text) > 12000}
 
 

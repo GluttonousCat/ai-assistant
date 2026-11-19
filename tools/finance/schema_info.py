@@ -105,16 +105,26 @@ TABLE_INTRO = {
     "balancesheet": "资产负债表(按报告期, 单位:元)。columns: ts_code,end_date,...",
     "cashflow": "现金流量表(按报告期, 单位:元)",
     "fina_indicator": "财务指标(按报告期)。含ROE/增长率/毛利率/偿债指标",
-    "daily": "日K行情(按交易日×股票)",
-    "daily_basic": "每日估值指标(PE/PB/市值/换手)",
-    "stock_basic": "股票基础信息(代码/名称/行业/板块)",
-    "adj_factor": "复权因子(后复权)",
+    "daily": "股票日K行情(按交易日×股票，原始价格)",
+    "daily_basic": "股票每日估值与换手(PE/PB/市值/换手)",
+    "stock_basic": "股票主数据(代码、名称、行业、板块)",
+    "adj_factor": "股票复权因子(按交易日×股票，复权价需明确基准日)",
     "trade_calendar": "交易日历(是否交易日)",
+    "index_daily": "大盘指数日K(按交易日×指数代码，ts_code 为指数代码)",
+    "intraday_bar": "股票分钟K线(按周期、来源和复权口径区分，bar_end 为上海时间)",
     "v_financial_summary": "财务宽表(三表+指标join) 推荐查询用",
     "v_daily_valuation": "日频行情+估值宽表 推荐查询用",
     "v_main_biz": "主营构成清洗视图: 收入占比+毛利率, 查『公司靠什么赚钱/某业务收入占比』首选",
     "fina_mainbz": "主营构成原始表(公司x报告期x维度x项目, 单位:元); 查占比优先用 v_main_biz",
 }
+
+
+_PROMPT_TABLES = (
+    "fin.v_financial_summary", "stock.v_daily_valuation", "fin.v_main_biz",
+    "fin.fina_indicator", "fin.fina_mainbz", "fin.income", "fin.balancesheet", "fin.cashflow",
+    "stock.daily_basic", "stock.daily", "stock.stock_basic", "stock.index_daily",
+    "stock.intraday_bar", "stock.adj_factor", "stock.trade_calendar",
+)
 
 
 class SchemaInfo:
@@ -129,40 +139,17 @@ class SchemaInfo:
         if self._columns_cache:
             return self._columns_cache
 
-        with PgClient() as pg:
-            for schema in ("stock", "fin"):
-                tables = pg.fetch_all(
-                    "SELECT table_name FROM information_schema.tables "
-                    "WHERE table_schema=%s AND table_type='BASE TABLE' "
-                    "ORDER BY table_name",
-                    (schema,),
-                )
-                for t in tables:
-                    tn = t["table_name"]
-                    cols = pg.fetch_all(
-                        "SELECT column_name FROM information_schema.columns "
-                        "WHERE table_schema=%s AND table_name=%s "
-                        "ORDER BY ordinal_position",
-                        (schema, tn),
-                    )
-                    self._columns_cache[tn] = [c["column_name"] for c in cols]
-
-            # Views
-            for schema in ("stock", "fin"):
-                views = pg.fetch_all(
-                    "SELECT table_name FROM information_schema.views "
-                    "WHERE table_schema=%s ORDER BY table_name",
-                    (schema,),
-                )
-                for v in views:
-                    vn = v["table_name"]
-                    cols = pg.fetch_all(
-                        "SELECT column_name FROM information_schema.columns "
-                        "WHERE table_schema=%s AND table_name=%s "
-                        "ORDER BY ordinal_position",
-                        (schema, vn),
-                    )
-                    self._columns_cache[vn] = [c["column_name"] for c in cols]
+        with PgClient(read_only=True) as pg:
+            rows = pg.fetch_all(
+                """SELECT table_schema, table_name, column_name FROM information_schema.columns
+                WHERE table_schema IN ('stock', 'fin')
+                ORDER BY table_schema DESC, table_name, ordinal_position"""
+            )
+        columns = {}
+        for row in rows:
+            relation = f"{row['table_schema']}.{row['table_name']}"
+            columns.setdefault(relation, []).append(row["column_name"])
+        self._columns_cache = columns
 
         return self._columns_cache
 
@@ -171,23 +158,21 @@ class SchemaInfo:
         cols = self._load_columns()
         lines: List[str] = []
 
-        for name in ("v_financial_summary", "v_daily_valuation", "v_main_biz",
-                     "fina_indicator", "fina_mainbz",
-                     "income", "balancesheet", "cashflow", "daily_basic", "daily",
-                     "stock_basic"):
-            if tables and name not in tables:
+        for relation in _PROMPT_TABLES:
+            name = relation.split(".", 1)[1]
+            if tables and relation not in tables and name not in tables:
                 continue
-            if name not in cols:
+            if relation not in cols:
                 continue
 
             intro = TABLE_INTRO.get(name, name)
-            lines.append(f"表 {name}: {intro}")
-            lines.append(f"  字段: {', '.join(cols[name][:40])}")
-            lines.append(f"  关键字段说明:")
+            lines.append(f"表 {relation}: {intro}")
+            lines.append(f"  字段: {', '.join(cols[relation][:40])}")
             descs = FIELD_DESCRIPTIONS.get(name, {})
             if descs:
+                lines.append("  关键字段说明:")
                 for f, d in descs.items():
-                    if f in cols[name]:
+                    if f in cols[relation]:
                         lines.append(f"    - {f}: {d}")
             lines.append("")
 
@@ -195,7 +180,7 @@ class SchemaInfo:
 
     def to_json(self) -> str:
         """JSON format (for programmatic use)"""
-        cols = self._load_columns()
+        cols = {relation.split(".", 1)[1]: fields for relation, fields in self._load_columns().items()}
         return json.dumps(cols, ensure_ascii=False, indent=2)
 
 

@@ -26,6 +26,35 @@ def test_domains_cover_five_groups():
     assert domains == {"entity", "financial", "report", "chain", "risk"}
 
 
+def test_schema_tool_keeps_qualified_relations_and_finds_column_keywords(monkeypatch):
+    from tools.finance import schema_info
+
+    class Catalog:
+        def __init__(self, *, read_only):
+            assert read_only
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def fetch_all(self, query):
+            return [
+                {"table_schema": "stock", "table_name": "index_daily", "column_name": "close"},
+                {"table_schema": "stock", "table_name": "intraday_bar", "column_name": "interval_minutes"},
+                {"table_schema": "fin", "table_name": "index_daily", "column_name": "wrong_column"},
+            ]
+
+    monkeypatch.setattr(schema_info, "PgClient", Catalog)
+    monkeypatch.setattr(schema_info, "_schema_info", None)
+    answer = REGISTRY.call("get_schema", {"keyword": "interval_minutes"})
+    assert answer["ok"] and "表 stock.intraday_bar:" in answer["data"]["schema_text"]
+    assert "index_daily" not in answer["data"]["schema_text"]
+    text = REGISTRY.call("get_schema", {"keyword": "stock.index_daily"})["data"]["schema_text"]
+    assert "字段: close" in text and "wrong_column" not in text
+
+
 @pytest.mark.parametrize("spec", REGISTRY.specs(), ids=lambda s: s.name)
 def test_spec_well_formed(spec):
     """Every tool: Chinese description / valid schema / callable handler."""

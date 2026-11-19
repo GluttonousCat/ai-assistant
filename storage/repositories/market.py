@@ -22,6 +22,44 @@ def latest_daily_date():
         return row["latest"] if row else None
 
 
+def index_daily_gaps(codes, target):
+    """Check a recent overlap per index and extend it when that index is stale."""
+    with PgClient(read_only=True) as pg:
+        if not pg.table_exists("stock", "index_daily"):
+            return {code: [target] for code in codes}
+        rows = pg.fetch_all(
+            """WITH expected AS (
+                SELECT unnest(%(codes)s::text[]) AS code
+            ), bounds AS (
+                SELECT e.code, least(%(target)s::date - 10,
+                                     coalesce(i.trade_date + 1, %(target)s::date)) AS start_date
+                FROM expected e LEFT JOIN LATERAL (
+                    SELECT trade_date FROM stock.index_daily
+                    WHERE ts_code=e.code AND trade_date <= %(target)s
+                      AND close > 0 AND close < 'Infinity'::double precision
+                    ORDER BY trade_date DESC LIMIT 1
+                ) i ON true
+            ), days AS (
+                SELECT cal_date FROM stock.trade_calendar
+                WHERE exchange='SSE' AND is_open=1
+                  AND cal_date BETWEEN (SELECT min(start_date) FROM bounds) AND %(target)s
+                UNION SELECT %(target)s::date
+            )
+            SELECT b.code, array_agg(d.cal_date ORDER BY d.cal_date) AS missing
+            FROM bounds b JOIN days d ON d.cal_date >= b.start_date
+            LEFT JOIN stock.index_daily i ON i.ts_code=b.code AND i.trade_date=d.cal_date
+              AND i.close > 0 AND i.close < 'Infinity'::double precision
+            WHERE i.ts_code IS NULL GROUP BY b.code ORDER BY b.code""",
+            {"codes": list(codes), "target": target},
+        )
+    return {row["code"]: row["missing"] for row in rows}
+
+
+def save_index_daily(frame):
+    with PgClient() as pg:
+        return pg.upsert_df(frame, "stock", "index_daily", ["trade_date", "ts_code"])
+
+
 def daily_coverage(codes, day):
     """Exact-date counts, including absent symbols; do not infer suspensions."""
     with PgClient(read_only=True) as pg:

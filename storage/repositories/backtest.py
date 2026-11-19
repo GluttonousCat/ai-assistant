@@ -49,24 +49,6 @@ def save_daily(frame):
         return pg.upsert_df(frame, "stock", "daily", ["trade_date", "ts_code"])
 
 
-def save_index(frame):
-    frame = frame[
-        [
-            "ts_code",
-            "trade_date",
-            "open",
-            "high",
-            "low",
-            "close",
-            "pct_chg",
-            "vol",
-            "amount",
-        ]
-    ]
-    with PgClient() as pg:
-        return pg.upsert_df(frame, "stock", "index_daily", ["trade_date", "ts_code"])
-
-
 def quotes(codes, start, end, timeframe):
     with PgClient(read_only=True) as pg:
         if timeframe == "60F":

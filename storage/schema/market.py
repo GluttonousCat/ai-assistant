@@ -1,6 +1,29 @@
 """Market ingestion schema. All DDL uses a separate autocommit connection."""
 from storage.schema.connection import ddl_cursor
 
+DDL_INDEX_DAILY = """
+CREATE TABLE IF NOT EXISTS stock.index_daily (
+    trade_date DATE NOT NULL,
+    ts_code VARCHAR(16) NOT NULL,
+    open DOUBLE PRECISION,
+    high DOUBLE PRECISION,
+    low DOUBLE PRECISION,
+    close DOUBLE PRECISION,
+    pct_chg DOUBLE PRECISION,
+    vol DOUBLE PRECISION,
+    amount DOUBLE PRECISION,
+    PRIMARY KEY (trade_date, ts_code)
+);
+CREATE INDEX IF NOT EXISTS idx_index_daily_code ON stock.index_daily (ts_code, trade_date);
+"""
+
+_CUTOFF_INDEXES = {
+    "idx_intraday_bar_60f_native_end": """ON stock.intraday_bar (bar_end)
+        WHERE interval_minutes=60 AND source='akshare-sina' AND adjustment='none'""",
+    "idx_adj_factor_trade_date": "ON stock.adj_factor (trade_date)",
+    "idx_daily_price_limit_trade_date": "ON stock.daily_price_limit (trade_date)",
+}
+
 DDL = """
 CREATE TABLE IF NOT EXISTS stock.listed_universe_snapshot (
     snapshot_date DATE NOT NULL,
@@ -63,3 +86,24 @@ def ensure_intraday_schema() -> None:
         cur.execute("SET lock_timeout='5s'")
         cur.execute("CREATE SCHEMA IF NOT EXISTS stock")
         cur.execute(DDL)
+
+
+def ensure_index_daily_schema() -> None:
+    with ddl_cursor() as cur:
+        cur.execute("SET lock_timeout='5s'")
+        cur.execute("SELECT to_regclass('stock.index_daily'), to_regclass('stock.idx_index_daily_code')")
+        if not all(cur.fetchone()):
+            cur.execute("CREATE SCHEMA IF NOT EXISTS stock")
+            cur.execute(DDL_INDEX_DAILY)
+
+
+def deploy_cutoff_indexes() -> None:
+    """Run explicitly after the market tables exist, outside application startup."""
+    with ddl_cursor() as cur:
+        cur.execute("SET lock_timeout='5s'")
+        cur.execute("SET statement_timeout='10min'")
+        for name, definition in _CUTOFF_INDEXES.items():
+            cur.execute(f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {name} {definition}")
+            cur.execute("SELECT indisvalid FROM pg_index WHERE indexrelid=to_regclass(%s)", (f"stock.{name}",))
+            if cur.fetchone() != (True,):
+                raise RuntimeError(f"行情索引 stock.{name} 无效，请检查后重建")

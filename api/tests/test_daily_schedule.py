@@ -1,6 +1,14 @@
 from datetime import datetime, date, timezone
 import asyncio
+import pytest
 from jobs import scheduler
+from tools.market import sync_index
+
+
+@pytest.fixture(autouse=True)
+def isolate_index_sync(monkeypatch):
+    monkeypatch.setattr(sync_index, "pending_index_days", lambda target: {})
+    monkeypatch.setattr(scheduler, "_run_index_incremental", lambda target: {"status": "complete"})
 
 
 def test_next_slot_uses_shanghai_not_host_or_utc_clock(monkeypatch):
@@ -88,7 +96,25 @@ def test_startup_repairs_minutes_or_snapshot_even_when_daily_is_current(monkeypa
 
     job._run_sync = sync
     asyncio.run(job._catchup_if_missed())
-    assert seen == [{"include_financial": False, "end": date(2026, 11, 13)}]
+    assert seen == [{"include_financial": False, "end": date(2026, 11, 13), "refresh_quotes": True}]
+
+
+def test_startup_repairs_only_stale_index_and_keeps_retry_armed(monkeypatch):
+    target = date(2026, 11, 18)
+    monkeypatch.setattr("jobs.refresh_market.needs_refresh", lambda _: False)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("an index gap must not rebuild the stock snapshot")
+
+    monkeypatch.setattr("jobs.refresh_market.refresh", forbidden)
+    monkeypatch.setattr(sync_index, "pending_index_days", lambda _: {"000905.SH": [target]})
+    monkeypatch.setattr(scheduler, "_run_index_incremental", lambda _: {"status": "partial"})
+    monkeypatch.setattr(scheduler.DailySyncScheduler, "_expected_latest_trade_date",
+                        staticmethod(lambda: target))
+    job = scheduler.DailySyncScheduler()
+    asyncio.run(job._catchup_if_missed())
+    assert job.last_result["index_daily"]["status"] == "partial"
+    assert job._retry_target == target and job._retry_count == 1
 
 
 def test_retry_is_bounded_and_success_clears_it():

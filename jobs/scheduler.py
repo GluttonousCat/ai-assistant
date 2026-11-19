@@ -75,6 +75,13 @@ def _run_disclosure_daily(days: int) -> int:
     return run_disclosure_daily(days=days)
 
 
+@observed("index_daily_sync", "指数日K增量同步")
+def _run_index_incremental(target: date) -> dict:
+    from tools.market.sync_index import refresh_index_bars
+
+    return refresh_index_bars(target)
+
+
 class DailySyncScheduler:
     """Daily incremental-sync scheduler."""
 
@@ -111,34 +118,43 @@ class DailySyncScheduler:
         include_financial: bool = True,
         start: Optional[date] = None,
         end: Optional[date] = None,
+        refresh_quotes: bool = True,
     ) -> dict:
         """Serialize scheduled/manual runs; IO stays off the HTTP event loop."""
         async with self._run_lock:
-            return await self._run_sync_locked(include_financial, start, end)
+            return await self._run_sync_locked(include_financial, start, end, refresh_quotes)
 
     def _record_retry(self, end, result):
         if self._retry_target != end:
             self._retry_target, self._retry_count = end, 0
         self._retry_at = None
-        if result.get("status") != "complete":
+        if (result.get("status") != "complete"
+                or result.get("index_daily", {}).get("status", "complete") != "complete"):
             self._retry_count += 1
             if self._retry_count <= 3:
                 self._retry_at = _market_time() + timedelta(minutes=30)
-                logger.warning("行情未完成，30分钟后第%s次重试", self._retry_count)
+                logger.warning("股票或指数行情未完成，30分钟后第%s次重试", self._retry_count)
         else:
             self._retry_count = 0
 
-    async def _run_sync_locked(self, include_financial=True, start=None, end=None):
+    async def _run_sync_locked(self, include_financial=True, start=None, end=None, refresh_quotes=True):
         from jobs.refresh_market import refresh
 
         end = end or self._expected_latest_trade_date()
         if end is None:
             raise ValueError("无法确定已完成交易日")
+        result = {"status": "complete", "target": end.isoformat()}
+        if refresh_quotes:
+            try:
+                result = await asyncio.to_thread(refresh, end, start=start)
+            except Exception as error:
+                logger.exception("行情更新异常")
+                result = {"status": "error", "error": str(error)}
         try:
-            result = await asyncio.to_thread(refresh, end, start=start)
+            result["index_daily"] = await asyncio.to_thread(_run_index_incremental, end)
         except Exception as error:
-            logger.exception("行情更新异常")
-            result = {"status": "error", "error": str(error)}
+            logger.warning("指数日K同步异常: %s", type(error).__name__)
+            result["index_daily"] = {"status": "error", "error_type": type(error).__name__}
         self._record_retry(end, result)
 
         # On an incomplete market refresh, return to the retry loop immediately.
@@ -200,25 +216,29 @@ class DailySyncScheduler:
         return expected_date(_market_time(now), SYNC_HOUR, SYNC_MINUTE)
 
     async def _catchup_if_missed(self):
-        """Check quotes, minute coverage and published snapshot after a restart."""
+        """Check stocks, published snapshots and index coverage after a restart."""
         expected = self._expected_latest_trade_date()
         if expected is None:
             logger.warning("无法计算应有最新交易日, 跳过启动自检")
             return
 
         try:
-            from jobs.refresh_market import needs_refresh
-
-            missing = await asyncio.to_thread(needs_refresh, expected)
+            await self._resume_market(expected)
         except Exception as error:
             logger.exception("启动行情自检失败")
             self._record_retry(expected, {"status": "error", "error": str(error)})
-            return
-        if not missing:
-            logger.info("启动自检: 日K/60F/快照已完成至 %s", expected)
-            return
-        logger.info("启动自检: 补齐日K/60F/快照至 %s", expected)
-        await self._run_sync(include_financial=False, end=expected)
+
+    async def _resume_market(self, expected):
+        from jobs.refresh_market import needs_refresh
+        from tools.market.sync_index import pending_index_days
+
+        missing = await asyncio.to_thread(needs_refresh, expected)
+        if missing or await asyncio.to_thread(pending_index_days, expected):
+            logger.info("行情自检: 补齐行情至 %s，需更新股票快照=%s", expected, missing)
+            await self._run_sync(include_financial=False, end=expected, refresh_quotes=missing)
+        else:
+            logger.info("行情自检: 股票日K/60F/快照与指数日K已完成至 %s", expected)
+            self._record_retry(expected, {"status": "complete"})
 
     async def _loop(self):
         """Scheduling loop."""
@@ -239,14 +259,9 @@ class DailySyncScheduler:
                     retry = self._retry_at is not None and next_run == self._retry_at
                     self._retry_at = None
                     if retry:
-                        # A concurrent CLI may have finished while we waited.
-                        from jobs.refresh_market import needs_refresh
-
                         expected = self._expected_latest_trade_date()
-                        if expected and await asyncio.to_thread(
-                            needs_refresh, expected
-                        ):
-                            await self._run_sync(include_financial=False)
+                        if expected:
+                            await self._resume_market(expected)
                     else:
                         await self._run_sync()
                 except Exception:

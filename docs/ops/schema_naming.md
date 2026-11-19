@@ -1,6 +1,6 @@
 # 数据库命名与兼容迁移约定
 
-> 2026-11-12；本轮完成设计审核与命名规则，不执行物理表重命名。
+> 2026-11-19；已部署首轮行情查询索引，保留现有物理表名。
 
 ## 一、系统设计
 
@@ -41,7 +41,26 @@ Text-to-SQL 依赖 schema_info、SQL guard 白名单、业务视图和提示词�
 索引候选必须以 EXPLAIN 与调用频次为证据，不能仅根据字段名添加。
 现有日线主键 `(trade_date, ts_code)` 与按股票查询索引 `(ts_code, trade_date)` 用途不同，不能机械删重。
 
+行情截止索引由 `storage.schema.market.deploy_cutoff_indexes()` 显式部署。先确保行情及回测输入表存在，再从项目根执行：
+
+```powershell
+.venv/Scripts/python.exe -c "from core.config import get_config; get_config(); from storage.schema.market import deploy_cutoff_indexes; deploy_cutoff_indexes()"
+```
+
+部署使用独立连接和 `CREATE INDEX CONCURRENTLY`，应用启动不会建这些索引。若部署中断留下无效索引，
+先在独立自动提交连接上核对该索引的状态，再用 `DROP INDEX CONCURRENTLY` 清理无效索引并重跑。
+回滚时可用同一方式移除本轮新增的 `stock.idx_intraday_bar_60f_native_end`、
+`stock.idx_adj_factor_trade_date`、`stock.idx_daily_price_limit_trade_date`。
+
+数据字典为 Agent 和 MCP 展示 `schema.table` 与实际列名。股票日K、每日估值与换手、股票主数据、
+指数日K、分钟K线分开描述。其中 `stock.index_daily.ts_code` 表示指数代码；
+`stock.intraday_bar` 仍按周期、来源和复权方式区分。
+
 ## 五、验证记录
 
-本轮检查 `storage/pg_schema.py` 的行情、财务、研报 DDL、现有索引及 schema_info/SQL guard 调用契约。
-未连接生产库进行 DDL、数据清洗或 EXPLAIN；这些步骤属于后续迁移的必要验收条件。
+2026-11-19 在 PostgreSQL 核对 35 张非研报实体表，均含数据。旧量化两张跟踪表共 33,234 行，保留原历史。
+三个行情截止索引均已部署并验证有效。相同单次实测中，60F、复权因子、涨跌停价的最新记录查询均改为
+反向索引扫描，数据库执行时间分别约 0.10、0.07、0.09 毫秒；新增索引合计约 141 MiB。
+15:00 前后日K截止的交易日切换与旧口径一致。研报相关表和解析未参与迁移。
+以真实 PG 字典逐一核对 MCP 返回的 15 个表及视图和所列字段。stdio 和 FastMCP 均通过，
+注册 33 个工具，只读清单 30 个。全量离线回归 875 项通过。
