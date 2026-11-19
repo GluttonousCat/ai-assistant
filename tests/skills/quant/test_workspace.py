@@ -51,10 +51,13 @@ def test_versions_are_immutable_and_user_isolated(local_store):
         store.task(1, "../../outside")
 
 
-def test_queue_idempotency_freeze_and_capacity(local_store):
+def test_queue_idempotency_freeze_and_capacity(local_store, monkeypatch):
+    now = "2026-11-18T09:00:00+00:00"
+    monkeypatch.setattr(store, "_now", lambda: now)
     draft = store.save_draft(1, StrategyDraft().model_dump())
     payload = request(draft["id"])
     first = store.enqueue(1, payload)
+    now = "2026-11-18T09:00:01+00:00"
     assert store.enqueue(1, payload) == first
     assert store.task(2, first["id"]) is None
     assert store.load_result(2, first["id"]) is None

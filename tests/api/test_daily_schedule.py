@@ -175,7 +175,9 @@ def test_failed_market_refresh_does_not_start_slow_financial_tail(monkeypatch):
     monkeypatch.setattr(scheduler, "_run_dividend_daily", forbidden)
     monkeypatch.setattr(scheduler, "_run_disclosure_daily", forbidden)
     job = scheduler.DailySyncScheduler()
-    result = asyncio.run(job._run_sync(end=date(2026, 11, 18)))
+    target = date(2026, 11, 18)
+    monkeypatch.setattr(job, "_expected_latest_trade_date", lambda: target)
+    result = asyncio.run(job._run_sync(end=target))
     assert result["status"] == "error"
     assert job._retry_at is not None and job._retry_count == 1
     assert "financial" not in result
