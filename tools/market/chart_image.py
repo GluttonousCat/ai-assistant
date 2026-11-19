@@ -4,8 +4,25 @@ from pathlib import Path
 
 import numpy as np
 
+DIGEST_DAILY_BARS = 96
+MINUTE_BARS = 134
+
 
 def render_pair(daily, minute, *, stop=None):
+    panels = ((daily, "日K · 近5年历史", None, True),
+              (minute, "60F · 趋势与局部触发", MINUTE_BARS, False))
+    return _render(panels, stop=stop)
+
+
+def render_digest_chart(detail, timeframe, *, stop=None):
+    daily = timeframe == "1D"
+    title = "日K · 近期走势" if daily else "60F · 趋势与局部触发"
+    overview = detail["data"] if daily and len(detail["data"]) > DIGEST_DAILY_BARS else ()
+    return _render(((detail, title, DIGEST_DAILY_BARS if daily else MINUTE_BARS, daily),),
+                   stop=stop, overview=overview)
+
+
+def _render(panels, *, stop=None, overview=()):
     # Import only in offline jobs: importing market APIs never initializes plots.
     from matplotlib.backends.backend_agg import FigureCanvasAgg
     from matplotlib.collections import LineCollection, PolyCollection
@@ -14,11 +31,15 @@ def render_pair(daily, minute, *, stop=None):
 
     font_path = Path("C:/Windows/Fonts/msyh.ttc")
     font = FontProperties(fname=str(font_path)) if font_path.exists() else FontProperties(family="DejaVu Sans")
-    fig = Figure(figsize=(14, 9), dpi=110, facecolor="#11100f")
+    single = len(panels) == 1
+    height = (6.2 if overview else 5) if single else 9
+    fig = Figure(figsize=(14, height), dpi=110, facecolor="#11100f")
     canvas = FigureCanvasAgg(fig)
-    grid = fig.add_gridspec(4, 1, height_ratios=[3.8, .85, 3.8, .85], hspace=.34,
-                           left=.045, right=.89, top=.95, bottom=.065)
-    for slot, (detail, title, size) in enumerate([(daily, "日K · 近5年历史", None), (minute, "60F · 趋势与局部触发", 134)]):
+    ratios = [3.8, .85] * len(panels) + ([1.05] if overview else [])
+    grid = fig.add_gridspec(len(ratios), 1, height_ratios=ratios, hspace=.5 if overview else .34,
+                           left=.045, right=.89, top=.91 if single else .95,
+                           bottom=.11 if single else .065)
+    for slot, (detail, title, size, daily) in enumerate(panels):
         rows = detail["data"] if size is None else detail["data"][-size:]
         if not rows:
             raise ValueError("图表没有可用行情")
@@ -52,13 +73,13 @@ def render_pair(daily, minute, *, stop=None):
             values = [r.get(f"ma{window}") for r in rows]
             ax.plot(x, [float(v) if v is not None else np.nan for v in values], color=color, linewidth=1.15, label=f"M{window}")
         ymin, ymax = float(low.min()) - span*.14, float(high.max()) + span*.12
-        if slot == 0 and stop is not None and ymin <= stop <= ymax:
+        if daily and stop is not None and ymin <= stop <= ymax:
             ax.axhline(stop, color="#e5a579", linewidth=.8, linestyle="--", alpha=.8)
             ax.text(.01, (stop-ymin)/(ymax-ymin), f"参考止损 {stop:.2f}", transform=ax.transAxes,
                     color="#e5a579", fontsize=9, fontproperties=font, va="bottom")
         for i, row in enumerate(rows):
-            entry = slot == 0 and row.get("eligible") is True
-            watch = slot == 1 and bool(row.get("reversal_ignition") or row.get("resume_watch"))
+            entry = daily and row.get("eligible") is True
+            watch = not daily and bool(row.get("reversal_ignition") or row.get("resume_watch"))
             if entry or watch:
                 kind = row.get("context_pattern") or row.get("pattern")
                 color = "#80b8ff" if kind == "trend_pullback" else "#c6a0f6" if kind == "base_rebound" else "#dfb671"
@@ -78,14 +99,33 @@ def render_pair(daily, minute, *, stop=None):
         volume.text(.005, .80, "成交量 / 万股", transform=volume.transAxes, color="#8e867b", fontsize=9, fontproperties=font)
         ticks = np.unique(np.linspace(0, len(rows)-1, 6).astype(int))
         volume.set_xticks(ticks)
-        volume.set_xticklabels([str(rows[i]["bar_end"])[:7] if slot == 0 else
-                                str(rows[i]["bar_end"])[5:16].replace("T", " ") for i in ticks])
-    fig.text(.045, .012, "前复权 · M8 / M13 / M21    ▲ 日K入场标记    ● 60F观察标记（非入场）", color="#8f867a", fontproperties=font, fontsize=10)
+        volume.set_xticklabels([
+            str(rows[i]["bar_end"])[5:16].replace("T", " ") if not daily else
+            str(rows[i]["bar_end"])[:(10 if single else 7)] for i in ticks
+        ])
+    if overview:
+        ax = fig.add_subplot(grid[-1], facecolor="#11100f")
+        x = np.arange(len(overview))
+        ax.vlines(x, [r["low"] for r in overview], [r["high"] for r in overview],
+                  color="#514332", linewidth=.38)
+        ax.plot(x, [r["close"] for r in overview], color="#ac8a55", linewidth=.8)
+        ax.axvspan(len(overview) - DIGEST_DAILY_BARS - .5, len(overview) - .5, color="#564630", alpha=.35)
+        ax.set_xlim(-.5, len(overview) - .5)
+        ticks = np.unique(np.linspace(0, len(overview) - 1, 6).astype(int))
+        ax.set_xticks(ticks, [str(overview[i]["bar_end"])[:7] for i in ticks])
+        ax.set_yticks([])
+        ax.tick_params(axis="x", length=0, labelsize=9, colors="#a29a90", pad=5)
+        ax.set_title("日K历史概览 · 近5年（上市不足按实际）", fontproperties=font,
+                     fontsize=10, color="#b9b0a3", loc="left", pad=6)
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+    if not single:
+        fig.text(.045, .012, "前复权 · M8 / M13 / M21    ▲ 日K入场标记    ● 60F观察标记（非入场）",
+                 color="#8f867a", fontproperties=font, fontsize=10)
     buffer = BytesIO()
     canvas.print_png(buffer)
     fig.clear()
-    # Indexed color keeps the full 1540x990 resolution while substantially
-    # reducing SMTP upload volume for these mostly flat-color financial plots.
+    # Indexed color reduces the SMTP payload without resampling the chart.
     from PIL import Image
     image = Image.open(buffer).convert("RGB")
     compact = BytesIO()

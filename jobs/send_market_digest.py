@@ -76,7 +76,7 @@ class DigestTooLarge(ValueError):
     """Do not turn one daily digest into several messages or omit candidates."""
 
 
-def _messages(snapshot, cards, report_day, minimum, recipient, sender, *, preview=False, delayed=False, observations=True, test=False):
+def _message(snapshot, cards, images, report_day, minimum, recipient, sender, *, preview=False, delayed=False, observations=True, test=False):
     html = render_html(snapshot, cards, report_day, minimum, preview=preview, delayed=delayed, test=test)
     profile = _profile(recipient, minimum, observations)
     kind = "test" if test else "delay" if delayed else "digest"
@@ -85,32 +85,35 @@ def _messages(snapshot, cards, report_day, minimum, recipient, sender, *, previe
     subject = ("[测试] " if test else "[预览] " if preview else "") + f"Alpha Finance Radar | {report_day} | "
     subject += "行情更新延迟" if delayed else f">{minimum:g}分候选 {len(cards)}只"
     text = f"{subject}\n数据截止: {snapshot['as_of'] if snapshot else '暂无'}（上海时间）\n"
-    text += "观察不代表入场，评分不代表胜率。正文按入场/观察分组，每股展示日K和60F图片。\n"
-    text += "\n".join(f"{c['row']['ts_code']} {c['row']['name']} {c['row']['score']}分 · {c['row']['state']}" for c in cards)
-    msg = message(sender, recipient, subject, text, html, {c["cid"]: c["png"] for c in cards},
+    text += "正文按入场和观察分组，每股分别展示日 K、60F。\n"
+    for card in cards:
+        row = card["row"]
+        text += f"\n{row['ts_code']} {row['name']} {row['score']}分 · {row['state']}\n"
+        text += "\n".join(f"{title}　{content}" for title, content in card["notes"].items()) + "\n"
+    msg = message(sender, recipient, subject, text, html, images,
                   message_id, csv=export_csv([c["row"] for c in cards]) if not delayed else None)
     payload = msg.as_bytes(policy=policy.SMTP)
     if len(payload) > MAX_MESSAGE_BYTES:
         raise DigestTooLarge("整封日报超过8MiB上限，未拆分、未发送，请检查预览")
-    return [(html, payload)], [cards]
+    return html, payload, message_id
 
 
 def _prepare(folder, snapshot, cards, report_day, minimum, recipient, sender, preview=False, delayed=False, observations=True, test=False):
+    images = {chart["cid"]: chart["png"] for card in cards for chart in card["charts"].values()}
+    html, payload, message_id = _message(
+        snapshot, cards, images, report_day, minimum, recipient, sender,
+        preview=preview, delayed=delayed, observations=observations, test=test,
+    )
     folder.mkdir(parents=True, exist_ok=True)
-    built, groups = _messages(snapshot, cards, report_day, minimum, recipient, sender,
-                              preview=preview, delayed=delayed, observations=observations, test=test)
-    files = []
-    for n, ((html, payload), group) in enumerate(zip(built, groups), 1):
-        # Both sequences are produced together by _messages, not independent feeds.
-        browser_html = html
-        for card in group:
-            browser_html = browser_html.replace(f"cid:{card['cid']}", "data:image/png;base64,"+base64.b64encode(card["png"]).decode())
-            (folder / f"{card['cid']}.png").write_bytes(card["png"])
-        (folder / f"part-{n:02d}.html").write_text(browser_html, encoding="utf-8")
-        filename = f"part-{n:02d}.eml"
-        (folder / filename).write_bytes(payload)
-        files.append({"file": filename, "status": "prepared", "message_id": str(BytesParser(policy=policy.default).parsebytes(payload)["Message-ID"])})
-    return files
+    browser_html = html
+    for cid, png in images.items():
+        inline_image = base64.b64encode(png).decode("ascii")
+        browser_html = browser_html.replace(f'src="cid:{cid}"', f'src="data:image/png;base64,{inline_image}"')
+        (folder / f"{cid}.png").write_bytes(png)
+    (folder / "part-01.html").write_text(browser_html, encoding="utf-8")
+    filename = "part-01.eml"
+    (folder / filename).write_bytes(payload)
+    return [{"file": filename, "status": "prepared", "message_id": message_id}]
 
 
 def preview():

@@ -7,6 +7,7 @@ import pytest
 
 from core.local_state import write_json
 from jobs import send_market_digest as job
+from skills.trend.digest import stock_notes
 from skills.trend.tests.test_digest import row
 from tools.notifications.email import SmtpSettings, DeliveryUncertain
 
@@ -25,7 +26,10 @@ def delivery(monkeypatch, tmp_path):
     monkeypatch.setattr(job, "scan_cutoffs", lambda now: {
         "bar_end": datetime(2026, 11, 16, 15), "daily_end": date(2026, 11, 16), "factor_date": date(2026, 11, 16)})
     monkeypatch.setattr(job, "stock_cards", lambda snap, rows: [
-        {"row": r, "cid": "stock-"+r["ts_code"].replace(".", "-"), "png": b"png"} for r in rows])
+        {"row": r, "notes": stock_notes(r, {}), "charts": {
+            period: {"cid": f"stock-{r['ts_code'].replace('.', '-')}-{period.lower()}", "png": b"png"}
+            for period in ("1D", "60F")
+        }} for r in rows])
     return snapshot, tmp_path
 
 
@@ -145,7 +149,8 @@ def test_47_candidates_fit_in_one_daily_email(delivery, monkeypatch):
     assert "(1/" not in str(sent[0]["Subject"])
     assert "第1/1部分" not in sent[0].get_body(preferencelist=("html",)).get_content()
     images = [p for p in sent[0].walk() if p.get_content_type() == "image/png"]
-    assert len(images) == len({str(p["Content-ID"]) for p in images}) == 47
+    assert len(images) == len({str(p["Content-ID"]) for p in images}) == 94
+    assert "走势解读" in sent[0].get_body(preferencelist=("plain",)).get_content()
 
 
 def test_oversized_digest_never_splits_or_sends_partial_candidates(delivery, monkeypatch):

@@ -24,6 +24,10 @@ def load_dashboard(run_id=None, include_rows=True):
     return repository.latest_snapshot(run_id, include_rows)
 
 
+def digest_stock_context(codes, trade_date):
+    return repository.digest_stock_context(codes, trade_date)
+
+
 def tracking_days(end):
     return repository.history_days(end)
 

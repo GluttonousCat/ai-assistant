@@ -21,6 +21,20 @@ def cutoffs(now: datetime) -> dict:
         )
 
 
+def digest_stock_context(codes, trade_date):
+    with PgClient(read_only=True) as pg:
+        rows = pg.fetch_all(
+            """SELECT u.ts_code, NULLIF(trim(s.industry_l2), '') AS industry_l2,
+                      b.total_mv, b.pe_ttm, b.pb, d.pct_chg
+               FROM unnest(%s::text[]) AS u(ts_code)
+               LEFT JOIN stock.stock_basic s USING (ts_code)
+               LEFT JOIN stock.daily_basic b ON b.ts_code=u.ts_code AND b.trade_date=%s
+               LEFT JOIN stock.daily d ON d.ts_code=u.ts_code AND d.trade_date=%s""",
+            (codes, trade_date, trade_date),
+        )
+    return {row["ts_code"]: row for row in rows}
+
+
 def universe(as_of: str, listed=False) -> list[dict]:
     with PgClient(read_only=True) as pg:
         if listed and pg.table_exists("stock", "listed_universe_snapshot"):
