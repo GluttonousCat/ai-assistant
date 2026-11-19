@@ -124,21 +124,18 @@ LIMIT 30"""
         return sql
     # Financial comparison: prefer the specified report period (each stock
     # takes that period); otherwise each stock's latest period
-    if time_phrase and time_phrase[0] in ("year", "quarter", "half"):
-        period_filter = _financial_period_filter(time_phrase).replace(
-            "i.end_date", "t.end_date", 1)
-        latest_sub = f"""SELECT ts_code, end_date FROM fin.income
+    period_filter = _financial_period_filter(time_phrase)
+    if period_filter:
+        latest_sub = f"""SELECT ts_code, end_date FROM fin.income i
             WHERE ts_code IN ({in_clause}) AND report_type='1'{period_filter}"""
-        join_cond = "t.ts_code = i.ts_code AND t.end_date = i.end_date"
     else:
         latest_sub = f"""SELECT DISTINCT ON (ts_code) ts_code, end_date FROM fin.income
             WHERE ts_code IN ({in_clause}) AND report_type='1'
             ORDER BY ts_code, end_date DESC"""
-        join_cond = "t.ts_code = i.ts_code AND t.end_date = i.end_date"
     sql = f"""WITH latest AS ({latest_sub})
 SELECT s.name AS stock_name, i.end_date, {prefix}.{field} AS value
 FROM fin.income i
-JOIN latest t ON {join_cond}
+JOIN latest t ON t.ts_code = i.ts_code AND t.end_date = i.end_date
 JOIN stock.stock_basic s ON i.ts_code = s.ts_code
 LEFT JOIN fin.fina_indicator f
     ON i.ts_code = f.ts_code AND i.end_date = f.end_date AND i.report_type = f.report_type
@@ -175,11 +172,6 @@ def build_industry_query(
     op/value: metric condition filter (gt/lt/ge/le + threshold)
     """
     index_col = "index_l2" if level == "L2" else "index_l1"
-    period_filter = ""
-    if time_phrase:
-        kw, val = time_phrase
-        if kw == "year":
-            period_filter = f" AND i.end_date = '{val}-12-31'"
 
     if prefix in ("d", "db"):
         # Industry market data: latest trading day
@@ -197,8 +189,15 @@ ORDER BY d.close DESC
 LIMIT {top_n}"""
         return sql
 
-    # Financial industry query: current industry members + the metric's
-    # recent report period
+    # Use each member's latest filing only when no fixed period was requested.
+    period_filter = _financial_period_filter(time_phrase) or """
+  AND i.end_date = (SELECT MAX(end_date) FROM fin.income
+                     WHERE ts_code = i.ts_code AND report_type='1')"""
+    cashflow_join = ""
+    if prefix == "c":
+        cashflow_join = """
+LEFT JOIN fin.cashflow c
+    ON i.ts_code = c.ts_code AND i.end_date = c.end_date AND i.report_type = c.report_type"""
     cond = ""
     if op and value is not None:
         cond = f" AND COALESCE({prefix}.{field}, 0) {_OP_SQL[op]} {value}"
@@ -211,11 +210,9 @@ JOIN fin.income i ON i2.ts_code = i.ts_code
 LEFT JOIN fin.fina_indicator f
     ON i.ts_code = f.ts_code AND i.end_date = f.end_date AND i.report_type = f.report_type
 LEFT JOIN fin.balancesheet b
-    ON i.ts_code = b.ts_code AND i.end_date = b.end_date AND i.report_type = b.report_type
+    ON i.ts_code = b.ts_code AND i.end_date = b.end_date AND i.report_type = b.report_type{cashflow_join}
 WHERE i2.{index_col} = '{index_code}'
   AND i.report_type = '1'{period_filter}{cond}
-  AND i.end_date = (SELECT MAX(end_date) FROM fin.income
-                     WHERE ts_code = i.ts_code AND report_type='1')
 ORDER BY value DESC NULLS LAST
 LIMIT {top_n}"""
     return sql

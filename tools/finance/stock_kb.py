@@ -39,13 +39,15 @@ def parse_time_phrase(text: str) -> Optional[Tuple[str, object]]:
     last year. Quarterly patterns are matched before plain years (avoids a
     "2023 Q1 report" being truncated into the 2023 annual report)"""
     text = text.strip()
-    # Quarterly report forms: 2023Q1 / year+Q1 / Chinese-numeral or digit
-    # quarter+report forms (exact variants in the regex below)
     m = re.search(
-        r"(19|20)\d{2}\s*年?\s*[Qq]?\s*([一二三四1234])\s*季报?", text)
+        r"(?<!\d)(?P<year>(?:19|20)\d{2})\s*年?\s*"
+        r"(?:[Qq]\s*(?P<number>[1-4])(?!\d)|(?:[Qq]\s*)?(?P<report>[一二三四1-4])\s*季)",
+        text,
+    )
     if m:
-        q = {"一": 1, "二": 2, "三": 3, "四": 4}[m.group(2)]
-        year = int(m.group(0)[:4])
+        token = m.group("number") or m.group("report")
+        q = int(token) if token.isdigit() else "一二三四".index(token) + 1
+        year = int(m.group("year"))
         if q == 4:
             return ("year", year)  # Q4 report = annual report
         return ("quarter", (year, q))

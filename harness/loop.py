@@ -195,6 +195,7 @@ def _llm_nl2sql(text: str, context_stocks=None) -> Optional[str]:
      仅当用户明说"季度/报告期"才取全部报告期
    - "2024年报" = i.end_date = '2024-12-31'; "2024中报" = '2024-06-30';
      "2024" 无后缀 = 该年年报; 行情时间用 d.trade_date
+   - 财报查询中的 "2023Q1"、"2023年1季报"、"2023年一季报" 均指 i.end_date = '2023-03-31'。
 4. 股票实体一律用上面给出的 ts_code 等值过滤; 已解析实体: {ent_desc}
 5. 时序查询 ORDER BY end_date ASC (旧→新, 便于图表); 非时序按数值 DESC
 6. SELECT 列固定包含 s.name AS stock_name 与报告期 i.end_date
