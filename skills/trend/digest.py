@@ -142,7 +142,7 @@ def stock_notes(row, context):
     }
 
 
-def _candidate_briefs(cards):
+def _candidate_cards(cards):
     groups = []
     for eligible, anchor, title in ((True, "entries", "入场候选"), (False, "observations", "观察候选")):
         members = [(number, card) for number, card in enumerate(cards, 1)
@@ -167,25 +167,18 @@ def _candidate_briefs(cards):
 <h3 style="font-size:18px;color:#152c43;margin:0 0 4px">{number:02d}　{escape(row["name"])}</h3>
 <p style="font-size:13px;color:#4b5d71;margin:0 0 8px">{identity}　<strong style="color:#234d76">{float(row["score"]):.1f} 分</strong>　{escape(label)}</p>
 {notes}<p style="margin:8px 0 0;font-size:13px">{links}</p>
+{_stock_figures(card, number)}
 </td></tr></table>''')
     return "".join(groups)
 
 
-def _chart_appendix(cards):
-    if not cards:
-        return ""
-    sections = [
-        '<a id="charts" name="charts"></a><h2 style="color:#172b40;font-size:22px;border-top:2px solid #dce4ec;padding-top:20px;margin:30px 0 5px">K 线附图</h2>',
-        '<p style="color:#4b5d71;font-size:13px;line-height:1.6;margin:0 0 16px">前复权 · M8 / M13 / M21　▲ 日 K 入场标记　● 60F 观察标记</p>',
-    ]
-    for number, card in enumerate(cards, 1):
-        name = escape(card["row"]["name"])
-        sections.append(f'<h3 style="color:#172b40;font-size:17px;margin:20px 0 8px">{number:02d}　{name}　'
-                        f'<a href="#brief-{number}" style="font-size:12px;color:#185694">返回文字解读</a></h3>')
-        for period, (title, caption) in CHARTS.items():
-            cid = escape(card["charts"][period]["cid"], quote=True)
-            anchor = f"chart-{number}-{period.lower()}"
-            sections.append(f'''<a id="{anchor}" name="{anchor}"></a><p style="margin:12px 0 7px;color:#4b5d71;font-size:13px">
+def _stock_figures(card, number):
+    name = escape(card["row"]["name"])
+    sections = []
+    for period, (title, caption) in CHARTS.items():
+        cid = escape(card["charts"][period]["cid"], quote=True)
+        anchor = f"chart-{number}-{period.lower()}"
+        sections.append(f'''<a id="{anchor}" name="{anchor}"></a><p style="margin:12px 0 7px;color:#4b5d71;font-size:13px">
 <strong style="color:#172b40">{title}</strong>　{caption}</p>
 <img src="cid:{cid}" width="936" alt="{name} {title}前复权K线" style="display:block;width:100%;max-width:100%;height:auto;border:0">''')
     return "".join(sections)
@@ -199,8 +192,6 @@ def render_html(snapshot, cards, report_day: date, minimum=DEFAULT_EMAIL_MIN_SCO
     for number, anchor, label in ((entries, "entries", "入场候选"), (observations, "observations", "观察候选")):
         if number:
             links.append(f'<a href="#{anchor}" style="color:#185694;text-decoration:underline">{label} {number} 只</a>')
-    if cards:
-        links.append('<a href="#charts" style="color:#185694;text-decoration:underline">K 线附图</a>')
     navigation = "　·　".join(links)
     alert = ("测试邮件" if test else "本地预览" if preview else "行情更新延迟" if delayed else
              "休市日报" if snapshot and cutoff[:10] != report_day.isoformat() else "盘后日报")
@@ -217,6 +208,7 @@ def render_html(snapshot, cards, report_day: date, minimum=DEFAULT_EMAIL_MIN_SCO
         patterns[name] = patterns.get(name, 0) + 1
     overview = "，".join(f"{escape(name)} {count} 只" for name, count in patterns.items())
     overview_html = f'<p style="margin:6px 0 0;color:#365c80;font-size:13px">{overview}</p>' if overview else ""
+    legend = '<p style="margin:6px 0 0;color:#4b5d71;font-size:12px">前复权 · M8 / M13 / M21　▲ 日 K 入场标记　● 60F 观察标记</p>' if cards else ""
     return f'''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Alpha Finance Radar · {report_day}</title></head>
 <body style="margin:0;padding:0;background:#edf2f7;color:#25364a;font-family:'Microsoft YaHei',Arial,sans-serif">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" bgcolor="#edf2f7" style="table-layout:fixed"><tr><td align="center" style="padding:18px 8px">
@@ -227,9 +219,9 @@ def render_html(snapshot, cards, report_day: date, minimum=DEFAULT_EMAIL_MIN_SCO
 <h1 style="font-size:28px;color:#142a40;margin:0 0 8px">盘后选股简报</h1>
 <p style="margin:0 0 10px;color:#4b5d71;font-size:13px;line-height:1.6">数据截至 {escape(cutoff)} · 评分 &gt; {minimum:g}</p>
 <p style="margin:0;font-size:15px;line-height:1.75">{summary}</p>
-{overview_html}
+{overview_html}{legend}
 </td></tr>
-<tr><td style="padding:0 12px 24px">{_candidate_briefs(cards)}{_chart_appendix(cards)}</td></tr>
+<tr><td style="padding:0 12px 24px">{_candidate_cards(cards)}</td></tr>
 </table><!--[if mso]></td></tr></table><![endif]--></td></tr></table></body></html>'''
 
 

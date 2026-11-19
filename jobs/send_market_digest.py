@@ -85,7 +85,7 @@ def _message(snapshot, cards, images, report_day, minimum, recipient, sender, *,
     subject = ("[测试] " if test else "[预览] " if preview else "") + f"Alpha Finance Radar | {report_day} | "
     subject += "行情更新延迟" if delayed else f">{minimum:g}分候选 {len(cards)}只"
     text = f"{subject}\n数据截止: {snapshot['as_of'] if snapshot else '暂无'}（上海时间）\n"
-    text += "入场候选和观察候选的文字解读在前，日 K 与 60F 附图在后。\n"
+    text += "正文按入场和观察分组，每只标的在点评后附日 K 与 60F 图。\n"
     for card in cards:
         row = card["row"]
         text += f"\n{row['ts_code']} {row['name']} {row['score']}分 · {row['state']}\n"

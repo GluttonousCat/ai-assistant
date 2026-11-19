@@ -44,9 +44,11 @@ def test_html_groups_observations_and_entries_and_escapes_provider_text():
     assert 'src="cid:stock-0-1D"' in html and 'src="cid:stock-0-60F"' in html
     assert "标的概况" in html and "走势解读" in html and "信号与风险" in html
     assert "&lt;行业&gt;" in html
-    assert html.rindex("信号与风险") < html.index('<img src="cid:')
+    assert (html.index("信号与风险") < html.index('src="cid:stock-0-1D"')
+            < html.index('src="cid:stock-0-60F"') < html.index('id="brief-2"')
+            < html.rindex("信号与风险") < html.index('src="cid:stock-1-1D"')
+            < html.index('src="cid:stock-1-60F"'))
     assert 'href="#chart-2-60f"' in html and 'name="chart-2-60f"' in html
-    assert 'href="#brief-2"' in html and 'name="brief-2"' in html
 
 
 def test_stock_notes_use_same_session_data_and_keep_missing_values_readable():
