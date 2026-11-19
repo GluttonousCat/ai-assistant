@@ -185,6 +185,29 @@ def test_disabled_scheduler_does_not_start(monkeypatch):
     assert job._task is None and job.status()["enabled"] is False
 
 
+def test_repeated_start_owns_one_loop_and_stop_wakes_long_wait(monkeypatch):
+    job = module.MarketDigestScheduler()
+    monkeypatch.setattr(type(job), "enabled", property(lambda self: True))
+    runs = []
+
+    async def loop():
+        runs.append(asyncio.current_task())
+        await job._wait(3600)
+
+    async def scenario():
+        for _ in range(2):
+            job.start()
+            job.start()
+            await asyncio.sleep(0)
+            assert job.running
+            await asyncio.wait_for(job.stop(), timeout=1)
+            assert not job.running
+
+    monkeypatch.setattr(job, "_loop", loop)
+    asyncio.run(scenario())
+    assert len(set(runs)) == 2
+
+
 def test_lifespan_starts_and_stops_mail_even_when_quotes_are_disabled(monkeypatch):
     import jobs.lifecycle as lifespan_module
     from tools.auth import users as accounts

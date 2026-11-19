@@ -3,30 +3,22 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, time, timedelta
-from zoneinfo import ZoneInfo
 
 from core.config import get_config
 from core.logger import get_logger
 from jobs.send_market_digest import deliver_once
 from jobs import send_intraday_digest as midday
+from jobs.scheduled_task import ScheduledTask
 from tools.kline.calendar import is_trading_day
+from tools.market.refresh_clock import SHANGHAI, market_now, market_time
 
 logger = get_logger(__name__)
-SHANGHAI = ZoneInfo("Asia/Shanghai")
 SEND_TIME = time(18)
 RETRY_UNTIL = time(20)
 RETRY_SECONDS = 600
 
 
-def market_now():
-    return datetime.now(SHANGHAI)
-
-
-def _local(now):
-    return now.replace(tzinfo=SHANGHAI) if now.tzinfo is None else now.astimezone(SHANGHAI)
-
-
-class MarketDigestScheduler:
+class MarketDigestScheduler(ScheduledTask):
     send_time = SEND_TIME
     retry_until = RETRY_UNTIL
     retry_seconds = RETRY_SECONDS
@@ -34,12 +26,9 @@ class MarketDigestScheduler:
     label = "盘后趋势邮件"
 
     def __init__(self):
-        self._task = None
-        self._stop = asyncio.Event()
+        super().__init__(self.label)
         self._lock = asyncio.Lock()
-        self.next_run = None
         self.last_run = None
-        self.last_result = None
 
     @property
     def enabled(self):
@@ -49,7 +38,7 @@ class MarketDigestScheduler:
 
     @classmethod
     def next_slot(cls, now=None):
-        now = _local(now or market_now())
+        now = market_time(now or market_now())
         slot = datetime.combine(now.date(), cls.send_time, SHANGHAI)
         return slot if now < slot else slot + timedelta(days=1)
 
@@ -62,7 +51,7 @@ class MarketDigestScheduler:
     def status(self):
         return {
             "enabled": self.enabled,
-            "running": self._task is not None and not self._task.done(),
+            "running": self.running,
             "sending": self._lock.locked(),
             "next_run": self.next_run.isoformat() if self.next_run else None,
             "last_run": self.last_run.isoformat() if self.last_run else None,
@@ -71,13 +60,6 @@ class MarketDigestScheduler:
             "schedule_time": self.send_time.isoformat(timespec="minutes"),
             "owner": "backend",
         }
-
-    async def _wait(self, seconds):
-        try:
-            await asyncio.wait_for(self._stop.wait(), timeout=max(0, seconds))
-            return True
-        except asyncio.TimeoutError:
-            return False
 
     async def _attempt(self, *, delay_notice=False):
         self.last_run = market_now()
@@ -131,25 +113,6 @@ class MarketDigestScheduler:
             if await self._wait((self.next_run-market_now()).total_seconds()):
                 break
             await self._deliver_window()
-
-    def start(self):
-        if self.enabled and (self._task is None or self._task.done()):
-            self._stop.clear()
-            self._task = asyncio.create_task(self._loop(), name=self.label)
-
-    async def stop(self):
-        self._stop.set()
-        self.next_run = None
-        if self._task and not self._task.done():
-            try:
-                await asyncio.wait_for(asyncio.shield(self._task), timeout=5)
-            except asyncio.TimeoutError:
-                self._task.cancel()
-                try:
-                    await self._task
-                except asyncio.CancelledError:
-                    pass
-        logger.info("%s调度已停止", self.label)
 
 
 class MiddayDigestScheduler(MarketDigestScheduler):

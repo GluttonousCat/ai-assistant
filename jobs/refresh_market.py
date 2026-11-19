@@ -12,7 +12,6 @@ from datetime import date, datetime, timedelta
 import json
 from pathlib import Path
 from uuid import uuid4
-from zoneinfo import ZoneInfo
 
 from core.config import get_config
 from core.logger import get_logger
@@ -22,11 +21,10 @@ from storage.repositories import market as store
 from storage.repositories.trend import publish
 from tools.kline.calendar import is_trading_day
 from tools.market.refresh_state import read_state, write_state, refresh_lock
-from tools.market.refresh_clock import expected_date
+from tools.market.refresh_clock import SHANGHAI, expected_date
 from tools.market.trend_data import load_dashboard, scan_cutoffs
 
 logger = get_logger(__name__)
-SHANGHAI = ZoneInfo("Asia/Shanghai")
 
 
 def overlap_start(end, days=5):

@@ -144,6 +144,31 @@ def test_publishing_an_older_slot_does_not_replace_latest(isolated):
     assert repo.read_report()["as_of"] == "2026-11-17 15:00:00"
 
 
+def test_publication_check_reads_unchanged_reports_once_and_observes_replacements(isolated, monkeypatch):
+    run_id = "2026-11-17_1500"
+    cutoff = "2026-11-17 15:00:00"
+    archive = isolated / run_id / "report.json"
+    latest = isolated / "latest.json"
+    write_json(archive, {"as_of": cutoff})
+    write_json(latest, {"as_of": cutoff})
+    reads = []
+
+    def tracked_read(path, **kwargs):
+        reads.append(path)
+        return read_json(path, **kwargs)
+
+    monkeypatch.setattr(repo, "read_json", tracked_read)
+    assert repo.reconcile_publication(run_id, cutoff)
+    assert repo.reconcile_publication(run_id, cutoff)
+    assert reads == [archive, latest]
+    write_json(archive, {"as_of": "2026-11-17 14:00:00"})
+    assert not repo.reconcile_publication(run_id, cutoff)
+    write_json(archive, {"as_of": cutoff})
+    latest.unlink()
+    assert repo.reconcile_publication(run_id, cutoff)
+    assert read_json(latest)["as_of"] == cutoff
+
+
 def test_all_four_slots_keep_the_morning_source_even_after_eod_refresh(tmp_path, monkeypatch):
     from jobs import cache_intraday_prefix as collector
     seed = {"day": "2026-11-17", "snapshot_run_id": "prior", "universe": [{"ts_code": "600000.SH"}]}

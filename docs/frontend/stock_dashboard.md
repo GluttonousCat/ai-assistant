@@ -142,6 +142,8 @@ web/src/market/StockDashboard → platformApi → /api/v1/market/dashboard
 python -c "from core.config import get_config; get_config(); from storage.schema.trend import deploy_tracking_index; deploy_tracking_index()"
 ```
 
+2026-11-19 后端重启后，已登录用户首次打开和再次刷新看板均返回 HTTP 200。两次快照读取分别用时 384 和 245 毫秒（含查询与组装）。页面展示全池 5,070 只及评分达 72 分的 16 只股票。日 K 图和当日 15:00 的盘中 60F 图均已加载。
+
 ### 2026-11-17 历史信号跟踪
 
 后续增加`GET /api/v1/market/tracking/episodes?view=active|archive`，静态路由置于`tracking/{code}`之前。

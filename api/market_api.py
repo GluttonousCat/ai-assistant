@@ -2,10 +2,12 @@
 
 import asyncio
 import re
+from time import perf_counter
 from datetime import date
 from uuid import UUID
 from typing import Literal
 from fastapi import APIRouter, HTTPException, Query
+from core.logger import get_logger
 from tools.market.queries import query_intraday, stock_industries
 from skills.trend.service import dashboard, freshness
 from skills.trend.chart_history import stock_chart as stock_detail
@@ -14,6 +16,7 @@ from skills.trend.episodes import episode_tracking
 from skills.trend.intraday import dashboard as intraday_dashboard, chart as intraday_chart
 
 market_router = APIRouter(prefix="/api/v1/market", tags=["market"])
+logger = get_logger(__name__)
 
 
 def _validate_stock_code(code: str):
@@ -76,9 +79,12 @@ async def market_freshness():
 async def trend_dashboard(min_numeric_score: int | None = Query(
     default=None, ge=0, le=100, description="仅对 JSON 数字评分预筛。历史格式由客户端按原规则处理。",
 )):
+    started = perf_counter()
     result = await asyncio.to_thread(dashboard, min_numeric_score=min_numeric_score)
     if result is None:
         raise HTTPException(503, "尚未生成趋势快照，请运行 python -m jobs.scan_trend")
+    logger.info("行情看板快照读取 min_score=%s rows=%d elapsed_ms=%.1f",
+                min_numeric_score, len(result["data"]), (perf_counter() - started) * 1000)
     return result
 
 

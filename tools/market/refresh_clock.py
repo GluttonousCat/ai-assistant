@@ -8,9 +8,18 @@ from tools.kline.calendar import is_trading_day
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 
 
+def market_now() -> datetime:
+    return datetime.now(SHANGHAI)
+
+
+def market_time(now: datetime | None = None) -> datetime:
+    if now is None:
+        return market_now()
+    return now.replace(tzinfo=SHANGHAI) if now.tzinfo is None else now.astimezone(SHANGHAI)
+
+
 def expected_date(now=None, hour=None, minute=None):
-    now = now or datetime.now(SHANGHAI)
-    now = now.replace(tzinfo=SHANGHAI) if now.tzinfo is None else now.astimezone(SHANGHAI)
+    now = market_time(now)
     hour = int(get_config().get("schedule.sync_hour", 17)) if hour is None else hour
     minute = int(get_config().get("schedule.sync_minute", 0)) if minute is None else minute
     day = now.date()

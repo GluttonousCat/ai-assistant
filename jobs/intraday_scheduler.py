@@ -1,29 +1,21 @@
 """Four closed-60F captures, serialized and restart-safe, owned by the backend."""
 import asyncio
 from datetime import datetime, time, timedelta
-from zoneinfo import ZoneInfo
 
 from core.config import get_config
 from core.local_state import file_lock, read_json, write_json
 from core.logger import get_logger
 from jobs.cache_intraday_prefix import SLOTS, collect
 from jobs.scan_intraday_watch import run as scan
-from storage.repositories.intraday_watch import root, read_report, publish_report
+from jobs.scheduled_task import ScheduledTask
+from storage.repositories.intraday_watch import root, reconcile_publication
 from tools.kline.calendar import is_trading_day
+from tools.market.refresh_clock import SHANGHAI, market_now, market_time as local
 
 logger = get_logger(__name__)
-SHANGHAI = ZoneInfo("Asia/Shanghai")
 SETTLE_SECONDS = 120
 RETRY_SECONDS = 300
 MAX_ATTEMPTS = 3
-
-
-def market_now():
-    return datetime.now(SHANGHAI)
-
-
-def local(now):
-    return now.replace(tzinfo=SHANGHAI) if now.tzinfo is None else now.astimezone(SHANGHAI)
 
 
 def slots_for(day):
@@ -48,12 +40,9 @@ def next_slot(now):
     raise ValueError("未来32天没有可用交易时点")
 
 
-class IntradayScheduler:
+class IntradayScheduler(ScheduledTask):
     def __init__(self):
-        self._task = None
-        self._stop = asyncio.Event()
-        self.next_run = None
-        self.last_result = None
+        super().__init__("intraday-60f-scheduler")
 
     @property
     def enabled(self):
@@ -61,7 +50,7 @@ class IntradayScheduler:
         return str(cfg.env("INTRADAY_WATCH_ENABLED", cfg.get("intraday_watch.enabled", True))).lower() in ("true", "1", "yes")
 
     def status(self):
-        return {"enabled": self.enabled, "running": self._task is not None and not self._task.done(),
+        return {"enabled": self.enabled, "running": self.running,
                 "next_run": self.next_run.isoformat() if self.next_run else None,
                 "last_result": self.last_result, "time_zone": "Asia/Shanghai", "owner": "backend",
                 "close_times": list(SLOTS), "settle_seconds": SETTLE_SECONDS}
@@ -79,11 +68,7 @@ class IntradayScheduler:
                 return {"status": "busy", "run_id": run_id}
             receipt = read_json(folder / "scheduled.json", strict=True)
             # A manually published run also satisfies this slot. No re-fetch on restart.
-            report = read_report(run_id)
-            if report and report.get("as_of") == f"{now.date()} {slot}:00":
-                latest = read_report()
-                if not latest or latest["as_of"] < report["as_of"]:
-                    publish_report(report)
+            if reconcile_publication(run_id, f"{now.date()} {slot}:00"):
                 if receipt and receipt.get("status") != "complete":
                     receipt.update(status="complete", updated_at=now.isoformat())
                     write_json(folder / "scheduled.json", receipt)
@@ -125,34 +110,16 @@ class IntradayScheduler:
         while not self._stop.is_set():
             try:
                 self.last_result = await asyncio.to_thread(self.tick)
-                self.next_run = next_slot(market_now())
+                upcoming = next_slot(market_now())
                 retry = self.last_result.get("retry_at")
                 if retry and self.last_result.get("attempts", 0) < MAX_ATTEMPTS:
-                    self.next_run = min(self.next_run, datetime.fromisoformat(retry))
+                    upcoming = min(upcoming, datetime.fromisoformat(retry))
+                if upcoming != self.next_run:
+                    logger.info("下次盘中60F更新: %s", upcoming.isoformat())
+                self.next_run = upcoming
             except Exception as error:
                 logger.warning("后台60F调度检查失败: %s", type(error).__name__)
-            try:
-                await asyncio.wait_for(self._stop.wait(), timeout=30)
-            except asyncio.TimeoutError:
-                pass
-
-    def start(self):
-        if self.enabled and (self._task is None or self._task.done()):
-            self._stop.clear()
-            self._task = asyncio.create_task(self._loop(), name="intraday-60f-scheduler")
-
-    async def stop(self):
-        self._stop.set()
-        self.next_run = None
-        if self._task and not self._task.done():
-            try:
-                await asyncio.wait_for(asyncio.shield(self._task), timeout=5)
-            except asyncio.TimeoutError:
-                self._task.cancel()
-                try:
-                    await self._task
-                except asyncio.CancelledError:
-                    pass
+            await self._wait(30)
 
 
 _scheduler = None

@@ -21,17 +21,16 @@ from __future__ import annotations
 import asyncio
 from datetime import date, datetime, timedelta
 from typing import Optional
-from zoneinfo import ZoneInfo
 
 from core.config import get_config as _cfg
 from core.logger import get_logger
 from core.observability import observed
 from tools.kline.calendar import is_trading_day
+from tools.market.refresh_clock import SHANGHAI, market_time as _market_time
 
 logger = get_logger(__name__)
 
 # Configurable local-market clock, independent of the host operating-system zone.
-SHANGHAI = ZoneInfo("Asia/Shanghai")
 SYNC_HOUR = int(_cfg().get("schedule.sync_hour", 17))
 SYNC_MINUTE = int(_cfg().get("schedule.sync_minute", 0))
 if not 0 <= SYNC_HOUR <= 23 or not 0 <= SYNC_MINUTE <= 59:
@@ -39,14 +38,6 @@ if not 0 <= SYNC_HOUR <= 23 or not 0 <= SYNC_MINUTE <= 59:
 # Financial-report announcement lookback (calendar days; covers weekend/holiday
 # announcement pile-ups)
 FIN_BACKFILL_DAYS = 10
-
-
-def _market_time(now: Optional[datetime] = None) -> datetime:
-    if now is None:
-        return datetime.now(SHANGHAI)
-    return (
-        now.replace(tzinfo=SHANGHAI) if now.tzinfo is None else now.astimezone(SHANGHAI)
-    )
 
 
 @observed("financial_sync", "财务报表增量同步")

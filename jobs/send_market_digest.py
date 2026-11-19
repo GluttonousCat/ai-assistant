@@ -17,19 +17,17 @@ from pathlib import Path
 import re
 import smtplib
 import time
-from zoneinfo import ZoneInfo
 
 from core.config import get_config
 from core.local_state import file_lock, read_json, write_json
 from core.logger import get_logger
 from skills.trend.digest import DEFAULT_EMAIL_MIN_SCORE, export_csv, render_html, select_stocks, stock_cards
-from tools.market.refresh_clock import expected_date
+from tools.market.refresh_clock import SHANGHAI, expected_date, market_time
 from tools.market.refresh_state import read_state as market_state
 from tools.market.trend_data import load_dashboard, scan_cutoffs
 from tools.notifications.email import SmtpSettings, MailNotConfigured, DeliveryUncertain, address, message, send
 
 logger = get_logger(__name__)
-SHANGHAI = ZoneInfo("Asia/Shanghai")
 MAX_MESSAGE_BYTES = 8 * 1024 * 1024
 
 
@@ -139,8 +137,7 @@ def preview():
 def deliver_once(now=None, *, delay_notice=False, test=False, retry_uncertain_test=False):
     if retry_uncertain_test and not test:
         raise ValueError("仅允许在用户核对未收到后显式重试测试邮件")
-    now = now or datetime.now(SHANGHAI)
-    now = now.replace(tzinfo=SHANGHAI) if now.tzinfo is None else now.astimezone(SHANGHAI)
+    now = market_time(now)
     if not test and now.time().replace(tzinfo=None) < day_time(18):
         return {"status": "not_due", "next": str(now.date())+" 18:00 Asia/Shanghai"}
     recipient, minimum, observations = options()

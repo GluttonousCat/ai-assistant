@@ -6,9 +6,10 @@ import json
 
 from core.config import get_config
 from core.local_state import read_json, write_json
-from jobs.send_market_digest import MAX_MESSAGE_BYTES, SHANGHAI, _root, deliver_prepared, write_prepared
+from jobs.send_market_digest import MAX_MESSAGE_BYTES, _root, deliver_prepared, write_prepared
 from skills.trend.intraday_digest import render
 from tools.kline.calendar import is_trading_day
+from tools.market.refresh_clock import SHANGHAI, market_time
 from tools.market.trend_data import intraday_report
 from tools.notifications.email import MailNotConfigured, SmtpSettings, address, message
 
@@ -34,8 +35,7 @@ def _serialize(report, recipient, sender, *, preview=False):
 
 
 def deliver_midday_once(now=None):
-    now = now or datetime.now(SHANGHAI)
-    now = now.replace(tzinfo=SHANGHAI) if now.tzinfo is None else now.astimezone(SHANGHAI)
+    now = market_time(now)
     day, clock = now.date(), now.time()
     if not is_trading_day(day) or not SEND_TIME <= clock <= RETRY_UNTIL:
         return {"status": "not_due"}
