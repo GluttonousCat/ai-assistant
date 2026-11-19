@@ -4,12 +4,13 @@ from datetime import date
 from html import escape
 from io import StringIO
 import math
+from operator import ge, gt
 
 from skills.trend.chart_history import stock_chart as stock_detail
 from tools.market.chart_image import render_pair
 from tools.market.universe import risk_name
 
-DEFAULT_MIN_SCORE = 75
+DEFAULT_EMAIL_MIN_SCORE = 75
 TYPES = {"trend_pullback": ("↑ 趋势回调", "#80b8ff"), "base_rebound": ("■ 底部反转", "#c6a0f6")}
 
 
@@ -25,15 +26,16 @@ def opportunity(row):
     return TYPES.get(kind, ("· 待识别", "#aaa294"))
 
 
-def select_stocks(snapshot, minimum=DEFAULT_MIN_SCORE, observations=True):
+def select_stocks(snapshot, minimum=60., observations=True, *, exclusive=False):
     cfg = snapshot["metadata"]["config"]
+    meets_threshold = gt if exclusive else ge
     selected = []
     for row in snapshot["data"]:
         try:
             score = float(row.get("score", 0))
         except (ValueError, TypeError):
             continue
-        if not math.isfinite(score) or score <= minimum or risk_name(row.get("name")):
+        if not math.isfinite(score) or not meets_threshold(score, minimum) or risk_name(row.get("name")):
             continue
         # Same candidate view as StockDashboard; mature/rejected structures do
         # not become digest candidates merely because a stale score is high.
@@ -68,7 +70,7 @@ def _value(value, suffix=""):
     return "—" if value is None else f"{float(value):.2f}{suffix}"
 
 
-def render_html(snapshot, cards, report_day: date, minimum=DEFAULT_MIN_SCORE, *, preview=False, delayed=False, test=False):
+def render_html(snapshot, cards, report_day: date, minimum=DEFAULT_EMAIL_MIN_SCORE, *, preview=False, delayed=False, test=False):
     e = lambda value: escape(str(value if value is not None else "—"))
     count = len(cards)
     cutoff = str(snapshot["as_of"]).replace("T", " ")[:16] if snapshot else "暂无"

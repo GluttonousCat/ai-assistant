@@ -30,6 +30,8 @@ def delivery(monkeypatch, tmp_path):
 
 
 def test_send_is_once_per_local_day_and_accepts_utc_clock(delivery, monkeypatch):
+    snapshot, _ = delivery
+    snapshot["data"].append(row("600001.SH", score=60))
     calls = []
     monkeypatch.setattr(job, "send", lambda msg, cfg: calls.append(msg))
     utc = datetime(2026, 11, 16, 10, tzinfo=timezone.utc)

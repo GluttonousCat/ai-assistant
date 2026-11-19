@@ -14,12 +14,13 @@ def test_threshold_and_candidate_scope_match_dashboard_without_promoting_observa
     rows = [row("a", 75.1), row("b", 74.9), row("c", 90, fresh=False),
             row("d", 80, name="*ST示例"), row("e", math.nan),
             row("f", 76, eligible=True, fresh=False),
-            row("g", 75, eligible=True), row("h", 75)]
+            row("g", 75, eligible=True), row("h", 75), row("i", 60), row("j", 59.9)]
     snapshot = {"metadata": {"config": {"fresh_reversal": True}}, "data": rows}
-    selected = select_stocks(snapshot)
+    selected = select_stocks(snapshot, minimum=75, exclusive=True)
     assert [r["ts_code"] for r in selected] == ["f", "a"]
     assert selected[1]["eligible"] is False
-    assert [r["ts_code"] for r in select_stocks(snapshot, observations=False)] == ["f"]
+    assert [r["ts_code"] for r in select_stocks(snapshot, minimum=75, observations=False, exclusive=True)] == ["f"]
+    assert [r["ts_code"] for r in select_stocks(snapshot)] == ["f", "g", "a", "h", "b", "i"]
 
 
 def test_parent_context_has_the_same_presentation_priority_as_frontend():

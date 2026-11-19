@@ -22,7 +22,7 @@ from zoneinfo import ZoneInfo
 from core.config import get_config
 from core.local_state import file_lock, read_json, write_json
 from core.logger import get_logger
-from skills.trend.digest import DEFAULT_MIN_SCORE, export_csv, render_html, select_stocks, stock_cards
+from skills.trend.digest import DEFAULT_EMAIL_MIN_SCORE, export_csv, render_html, select_stocks, stock_cards
 from tools.market.refresh_clock import expected_date
 from tools.market.refresh_state import read_state as market_state
 from tools.market.trend_data import load_dashboard, scan_cutoffs
@@ -35,7 +35,7 @@ MAX_MESSAGE_BYTES = 8 * 1024 * 1024
 
 def options():
     cfg = get_config()
-    minimum = float(cfg.env("MARKET_DIGEST_MIN_SCORE", cfg.get("email_digest.min_score", DEFAULT_MIN_SCORE)))
+    minimum = float(cfg.env("MARKET_DIGEST_MIN_SCORE", cfg.get("email_digest.min_score", DEFAULT_EMAIL_MIN_SCORE)))
     if not 0 <= minimum <= 100:
         raise ValueError("邮件评分门槛必须为0~100")
     observations = str(cfg.env("MARKET_DIGEST_OBSERVATIONS", cfg.get("email_digest.observations", True))).lower() in ("true", "1", "yes")
@@ -119,7 +119,7 @@ def preview():
     if not snapshot:
         raise ValueError("尚无已发布快照")
     folder = _root() / "preview" / snapshot["run_id"]
-    rows = select_stocks(snapshot, minimum, observations)
+    rows = select_stocks(snapshot, minimum, observations, exclusive=True)
     cards = stock_cards(snapshot, rows)
     files = _prepare(folder, snapshot, cards, datetime.now(SHANGHAI).date(), minimum, recipient,
                      "radar@example.invalid", preview=True, observations=observations)
@@ -192,7 +192,7 @@ def deliver_once(now=None, *, delay_notice=False, test=False, retry_uncertain_te
                 return {"status": "waiting_data", "target": str(target), "as_of": snapshot.get("as_of") if snapshot else None}
             if complete and delay_notice:
                 return {"status": "retry", "reason": "数据刚完成，请发送正式日报"}
-            rows = [] if delay_notice else select_stocks(snapshot, minimum, observations)
+            rows = [] if delay_notice else select_stocks(snapshot, minimum, observations, exclusive=True)
             cards = [] if delay_notice else stock_cards(snapshot, rows)
             try:
                 parts = _prepare(root / ("delay" if delay_notice else "report"), snapshot, cards, report_day,
