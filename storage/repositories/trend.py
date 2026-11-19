@@ -1,10 +1,10 @@
 """SQL boundary for trend inputs and atomically published scan results."""
 
 from datetime import datetime
-import json
 
 from psycopg2.extras import Json, execute_values
 from storage.pg import PgClient
+from storage.schema.trend import TRACKING_SCORE_PREDICATE
 
 
 def cutoffs(now: datetime) -> dict:
@@ -136,7 +136,8 @@ def publish(run_id: str, as_of: str, version: str, metadata: dict, rows: list[di
         )
 
 
-def latest_snapshot(run_id: str | None = None, include_rows: bool = True):
+def latest_snapshot(run_id: str | None = None, include_rows: bool = True, *,
+                    min_numeric_score: int | None = None, code: str | None = None):
     with PgClient(read_only=True) as pg:
         # Missing schema is a friendly first-run state, without request-time DDL.
         if not pg.fetch_one("SELECT to_regclass('stock.trend_scan') AS name")["name"]:
@@ -148,17 +149,26 @@ def latest_snapshot(run_id: str | None = None, include_rows: bool = True):
         )
         if run is None:
             return None
-        rows = (
-            pg.fetch_all(
-                "SELECT payload FROM stock.trend_signal WHERE run_id=%s ORDER BY ts_code",
-                (run["run_id"],),
-            )
-            if include_rows
-            else []
-        )
-    return json.loads(
-        json.dumps({**run, "data": [r["payload"] for r in rows]}, default=str)
-    )
+        rows = []
+        if include_rows:
+            sql = "SELECT payload FROM stock.trend_signal WHERE run_id=%s"
+            params = [run["run_id"]]
+            if code is not None:
+                sql += " AND ts_code=%s"
+                params.append(code)
+            if min_numeric_score is not None:
+                # Historical strings and missing scores still go through the caller's rules.
+                sql += """ AND (jsonb_typeof(payload->'score') IS DISTINCT FROM 'number'
+                             OR payload->'score' >= to_jsonb(%s::int))"""
+                params.append(min_numeric_score)
+            rows = pg.fetch_all(sql + " ORDER BY ts_code", params, as_dict=False)
+    return {**_public_run(run), "data": [payload for (payload,) in rows]}
+
+
+def _public_run(run):
+    # JSONB metadata and payloads are already decoded. Only these SQL timestamps
+    # need the historical wire format (space separator and session UTC offset).
+    return {**run, "as_of": str(run["as_of"]), "created_at": str(run["created_at"])}
 
 
 def history_days(end: str, limit: int = 120):
@@ -172,7 +182,7 @@ def history_days(end: str, limit: int = 120):
             ORDER BY as_of::date DESC,as_of DESC,created_at DESC,run_id DESC LIMIT %s""",
             (end, limit),
         )
-    return json.loads(json.dumps(rows, default=str))
+    return [_public_run(row) for row in rows]
 
 
 def trading_days(start: str, end: str):
@@ -196,12 +206,10 @@ def tracking_history(end: str, limit=120):
         if not runs:
             return []
         rows = pg.fetch_all(
-            """SELECT run_id::text,payload FROM stock.trend_signal
-            WHERE run_id=ANY(%s::uuid[]) AND CASE
-                WHEN (payload->>'score') ~ '^[0-9]+([.][0-9]+)?$'
-                THEN (payload->>'score')::numeric>=60 ELSE false END
+            f"""SELECT run_id::text,payload FROM stock.trend_signal
+            WHERE run_id=ANY(%s::uuid[]) AND {TRACKING_SCORE_PREDICATE}
             ORDER BY run_id,ts_code""", ([r["run_id"] for r in runs],))
     grouped = {r["run_id"]: [] for r in runs}
     for row in rows:
         grouped[row["run_id"]].append(row["payload"])
-    return json.loads(json.dumps([{**r, "data": grouped[r["run_id"]]} for r in runs], default=str))
+    return [{**_public_run(r), "data": grouped[r["run_id"]]} for r in runs]

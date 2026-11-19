@@ -127,3 +127,33 @@ def test_fetch_one_does_not_materialize_the_remaining_result(
             == expected
         )
     cursor.execute.assert_any_call("SELECT id,name FROM records WHERE id>%s", (3,))
+
+
+@pytest.mark.integration
+def test_frame_writers_preserve_order_nulls_and_constraint_errors():
+    from datetime import timedelta
+    import pandas as pd
+    from core.config import get_config
+
+    get_config()
+    with PgClient() as pg:
+        pg.execute('CREATE TEMP TABLE frame_io (id int PRIMARY KEY, "quoted""value" int, '
+                   'at_time timestamp, duration interval) ON COMMIT DROP')
+        frame = pd.DataFrame({
+            "id": [1, 1, 2],
+            'quoted"value': pd.array([7, 8, None], dtype="Int64"),
+            "at_time": [pd.Timestamp("2026-01-01"), pd.NaT, pd.NaT],
+            "duration": [pd.NaT, pd.Timedelta(seconds=3), pd.NaT],
+        })
+        original = frame.copy(deep=True)
+        assert pg.upsert_df(frame, "pg_temp", "frame_io", ["id"]) == 3
+        assert pg.upsert_df(frame[["id"]], "pg_temp", "frame_io", ["id"]) == 3
+        assert pg.fetch_all("SELECT * FROM frame_io ORDER BY id", as_dict=False) == [
+            (1, 8, None, timedelta(seconds=3)), (2, None, None, None)]
+        pd.testing.assert_frame_equal(frame, original)
+        assert pg.insert_df(pd.DataFrame({"id": [3]}), "pg_temp", "frame_io") == 1
+        pg.execute("SAVEPOINT duplicate")
+        with pytest.raises(psycopg2.IntegrityError):
+            pg.insert_df(pd.DataFrame({"id": [4, 3]}), "pg_temp", "frame_io")
+        pg.execute("ROLLBACK TO SAVEPOINT duplicate")
+        assert pg.fetch_one("SELECT count(*) AS n FROM frame_io")["n"] == 3

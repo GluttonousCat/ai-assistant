@@ -73,7 +73,11 @@ def test_cohort_uses_frozen_selection_and_defaults_to_a_date_with_forward_time(m
     monkeypatch.setattr(tracking, "tracking_days", lambda end: [
         {"run_id": "new", "as_of": "2026-11-16 15:00:00"},
         {"run_id": "old", "as_of": snapshot["as_of"]}])
-    monkeypatch.setattr(tracking, "load_dashboard", lambda run: snapshot if run == "old" else pytest.fail("must use selected old snapshot"))
+    def cohort(run, *, min_numeric_score):
+        assert (run, min_numeric_score) == ("old", 60)
+        return snapshot
+
+    monkeypatch.setattr(tracking, "load_dashboard", cohort)
     monkeypatch.setattr(tracking, "tracking_calendar", lambda *a: ["2026-11-13", "2026-11-16"])
     seen = []
 
@@ -94,7 +98,11 @@ def test_cohort_uses_frozen_selection_and_defaults_to_a_date_with_forward_time(m
 def test_chart_keeps_one_original_date_marker_without_new_trade_signals(monkeypatch):
     snapshot = {"run_id": "old", "as_of": "2026-11-13 15:00:00",
                 "metadata": {"start": "2026-01-01", "config": {"fresh_reversal": True}}, "data": [row("600000.SH")]}
-    monkeypatch.setattr(tracking, "load_dashboard", lambda *a: snapshot)
+    def snapshot_for_code(run, *, code):
+        assert run == "old"
+        return {**snapshot, "data": [r for r in snapshot["data"] if r["ts_code"] == code]}
+
+    monkeypatch.setattr(tracking, "load_dashboard", snapshot_for_code)
     seen = []
 
     def detail(*args):

@@ -97,10 +97,13 @@ def save_memberships(frame: pd.DataFrame) -> None:
 def load_universe() -> list[str]:
     with PgClient(read_only=True) as pg:
         rows = pg.fetch_all("""
-            SELECT DISTINCT ts_code FROM stock.index_membership_snapshot m
-            WHERE as_of_date=(SELECT max(as_of_date) FROM stock.index_membership_snapshot s
-                              WHERE s.index_code=m.index_code AND s.source=m.source)
-            ORDER BY ts_code
+            WITH latest AS (
+                SELECT index_code, source, max(as_of_date) AS as_of_date
+                FROM stock.index_membership_snapshot GROUP BY index_code, source
+            )
+            SELECT DISTINCT m.ts_code FROM stock.index_membership_snapshot m
+            JOIN latest USING (index_code, source, as_of_date)
+            ORDER BY m.ts_code
         """)
     return [row["ts_code"] for row in rows]
 

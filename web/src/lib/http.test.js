@@ -84,3 +84,18 @@ test('report list and details forward AbortSignal without changing query contrac
   await platformApi.reportDetail(7, { signal: controller.signal })
   assert.deepEqual(seen, [['/api/reports?keyword=%E4%B8%AD%E6%96%87&page=2', controller.signal], ['/api/reports/7', controller.signal]])
 })
+
+test('dashboard callers can request the display floor or the full snapshot', async () => {
+  const seen = []
+  const { signal } = new AbortController()
+  globalThis.fetch = async (path, options) => {
+    seen.push([path, options.signal])
+    return Response.json({})
+  }
+  await platformApi.marketDashboard({ minNumericScore: 72, signal })
+  await platformApi.marketDashboard()
+  assert.deepEqual(seen, [
+    ['/api/v1/market/dashboard?min_numeric_score=72', signal],
+    ['/api/v1/market/dashboard', undefined],
+  ])
+})

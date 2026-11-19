@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { platformApi } from '../platformApi'
+import { startPolling } from '../lib/polling'
 import RuleBuilder from './RuleBuilder'
 import { isStaged, newRequestId, opportunityNames, poolNames, statusNames, summarizeDraft } from './workspaceRules'
 
@@ -7,7 +8,7 @@ function NumberField({ label, value, onChange, min, max, step = 'any', hint }) {
   return <label className="quant-field"><span>{label}</span><input type="number" value={value} min={min} max={max} step={step} required onChange={(e) => onChange(e.target.value === '' ? '' : Number(e.target.value))} />{hint && <small>{hint}</small>}</label>
 }
 
-export default function StrategyWorkspace({ onView }) {
+export default function StrategyWorkspace({ active, onView }) {
   const [catalog, setCatalog] = useState({ drafts: [], tasks: [] })
   const [draft, setDraft] = useState(null)
   const [text, setText] = useState('')
@@ -26,38 +27,55 @@ export default function StrategyWorkspace({ onView }) {
   const mounted = useRef(false)
   const pendingRequest = useRef(null)
   const dirtyVersion = useRef(0)
+  const catalogRequest = useRef(null)
+
+  const refresh = useCallback(async () => {
+    if (!mounted.current) return
+    catalogRequest.current?.abort()
+    const controller = new AbortController()
+    catalogRequest.current = controller
+    try {
+      const data = await platformApi.quantWorkspace({ signal: controller.signal })
+      if (!controller.signal.aborted) {
+        setCatalog(data)
+        setDraft((current) => current || data.defaults)
+      }
+    } catch (e) {
+      if (!controller.signal.aborted) throw e
+    }
+  }, [])
 
   useEffect(() => {
     mounted.current = true
-    let active = true
     const availabilityController = new AbortController()
     platformApi.quantAvailability({ signal: availabilityController.signal }).then((data) => {
-      if (!active) return
+      if (availabilityController.signal.aborted) return
       setAvailability(data)
       if (data.available_end) setEnd((current) => current > data.available_end ? data.available_end : current)
-    }).catch((e) => { if (active && e.name !== 'AbortError') setError(e.message) })
-    let timer, controller
-    const refresh = async () => {
-      controller = new AbortController()
-      try {
-        const data = await platformApi.quantWorkspace({ signal: controller.signal })
-        if (active) { setCatalog(data); setDraft((current) => current || data.defaults) }
-      } catch (e) { if (active && e.name !== 'AbortError') setError(e.message) }
-      if (active) timer = setTimeout(refresh, 4000)
+    }).catch((e) => { if (!availabilityController.signal.aborted) setError(e.message) })
+    return () => {
+      mounted.current = false
+      catalogRequest.current?.abort()
+      availabilityController.abort()
     }
-    refresh()
-    return () => { active = false; mounted.current = false; clearTimeout(timer); controller?.abort(); availabilityController.abort() }
   }, [])
+
+  useEffect(() => {
+    if (!active) return
+    const stop = startPolling(refresh, {
+      interval: 4000, pauseWhenHidden: true, onError: (e) => setError(e.message),
+    })
+    return () => {
+      stop()
+      catalogRequest.current?.abort()
+    }
+  }, [active, refresh])
 
   const change = (group, key, value) => {
     dirtyVersion.current += 1
     pendingRequest.current = null
     setDraft((current) => group ? { ...current, [group]: { ...current[group], [key]: value } } : { ...current, [key]: value })
     setConfirmed(false); setNotice('')
-  }
-  const refresh = async () => {
-    const data = await platformApi.quantWorkspace()
-    if (mounted.current) setCatalog(data)
   }
   const generate = async () => {
     setBusy('generate'); setError(''); setNotice('')

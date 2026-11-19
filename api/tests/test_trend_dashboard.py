@@ -12,10 +12,26 @@ def client():
 
 
 def test_no_snapshot_returns_actionable_unavailable_without_ddl(monkeypatch):
-    monkeypatch.setattr("api.market_api.dashboard", lambda *a: None)
+    monkeypatch.setattr("api.market_api.dashboard", lambda **kw: None)
     response = client().get("/api/v1/market/dashboard")
     assert response.status_code == 503
     assert "jobs.scan_trend" in response.json()["detail"]
+
+
+def test_dashboard_filter_is_optional_and_validated_before_read(monkeypatch):
+    floors = []
+
+    def dashboard(*, min_numeric_score):
+        floors.append(min_numeric_score)
+        return {"metadata": {"total": 3}, "data": []}
+
+    monkeypatch.setattr("api.market_api.dashboard", dashboard)
+    c = client()
+    path = "/api/v1/market/dashboard"
+    assert c.get(path).status_code == 200
+    assert c.get(path, params={"min_numeric_score": 72}).json()["metadata"] == {"total": 3}
+    assert c.get(path, params={"min_numeric_score": -1}).status_code == 422
+    assert floors == [None, 72]
 
 
 def test_stock_chart_is_pinned_to_requested_snapshot(monkeypatch):

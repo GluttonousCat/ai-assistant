@@ -147,13 +147,16 @@ def _page_min_end(df: pd.DataFrame) -> Optional[date]:
 _warned_dropped: set = set()
 
 
+def _table_layout(table: str) -> tuple[list[str], set[str]]:
+    """Read the ordered provider fields and all writable columns for one run."""
+    with PgClient(read_only=True) as pg:
+        names = [c["name"] for c in pg.get_columns("fin", table)]
+    return [name for name in names if name != "created_at"], set(names)
+
+
 def table_fields(table: str) -> List[str]:
-    """Reflect the fetch field list from the actual table (excluding local
-    created_at); new columns need no code change - the table structure is the
-    request list"""
-    with PgClient() as pg:
-        return [c["name"] for c in pg.get_columns("fin", table)
-                if c["name"] != "created_at"]
+    """Provider fields in physical column order, excluding the local timestamp."""
+    return _table_layout(table)[0]
 
 
 def _filter_to_table(df: pd.DataFrame, table: str, table_cols: set) -> pd.DataFrame:
@@ -161,12 +164,13 @@ def _filter_to_table(df: pd.DataFrame, table: str, table_cols: set) -> pd.DataFr
     the API returns out-of-table columns. Should normally never trigger after
     field reflection - pure safety net."""
     dropped = [c for c in df.columns if c not in table_cols]
-    if dropped:
-        key = (table, tuple(dropped))
-        if key not in _warned_dropped:
-            _warned_dropped.add(key)
-            logger.warning(f"{table}: API 返回了表内不存在的列, 已丢弃: {dropped}")
-    return df[[c for c in df.columns if c in table_cols]]
+    if not dropped:
+        return df
+    key = (table, tuple(dropped))
+    if key not in _warned_dropped:
+        _warned_dropped.add(key)
+        logger.warning(f"{table}: API 返回了表内不存在的列, 已丢弃: {dropped}")
+    return df.drop(columns=dropped)
 
 def get_whitelist_codes() -> List[str]:
     """Read the whitelist ts_code list from PG stock_basic"""
@@ -271,7 +275,7 @@ def fetch_stock_fin(pro, api_name: str, ts_code: str, fields: List[str],
 
 
 def _upsert_stock_fin(pro, table: str, api_name: str, fields: List[str],
-                      ts_code: str, start: str = "19900101") -> int:
+                      ts_code: str, table_cols: set[str], start: str = "19900101") -> int:
     """Fetch + store work unit for one stock (returns stored row count); PG
     disconnects are retried per stock by the caller"""
     df = fetch_stock_fin(pro, api_name, ts_code, fields, start=start)
@@ -288,15 +292,9 @@ def _upsert_stock_fin(pro, table: str, api_name: str, fields: List[str],
         df = df[~bad]
         if df.empty:
             return 0
-    with PgClient() as pg:
-        table_cols = {c["name"] for c in pg.get_columns("fin", table)}
     df = _filter_to_table(df, table, table_cols)
     with PgClient() as pg:
-        pg.upsert_df(
-            df, "fin", table,
-            conflict_keys=FIN_CONFLICT_KEYS.get(
-                table, ["ts_code", "end_date", "report_type"]),
-        )
+        pg.upsert_df(df, "fin", table, conflict_keys=keys)
     return len(df)
 
 
@@ -310,7 +308,7 @@ def fetch_recent_financial(pro, table: str, codes: List[str],
     throttling with the full backfill.
     """
     api_name = FIN_TABLE_APIS[table]
-    fields = table_fields(table)
+    fields, table_cols = _table_layout(table)
     # fina_indicator's start_date/end_date mean REPORT PERIOD, not announce
     # date (the income family uses announce date): an announce-date window
     # start would filter out whole blocks of earlier-period rows (observed:
@@ -326,7 +324,7 @@ def fetch_recent_financial(pro, table: str, codes: List[str],
         for attempt in range(1, 4):
             try:
                 rows = _upsert_stock_fin(pro, table, api_name, fields,
-                                         ts_code, start=fetch_start)
+                                         ts_code, table_cols, start=fetch_start)
                 break
             except PG_DOWN as e:
                 logger.warning(f"{table} {ts_code} PG 断连 "
@@ -396,12 +394,10 @@ def sync_dividend_daily(pro, days: int = 2) -> int:
     whole-market dividend events are << 2000 rows, no paging; returns the
     cumulative processed row count (including idempotent duplicates).
     """
-    fields = table_fields("dividend")
+    fields, table_cols = _table_layout("dividend")
     conflict = FIN_CONFLICT_KEYS["dividend"]
     today = date.today()
     total = 0
-    with PgClient() as pg:
-        table_cols = {c["name"] for c in pg.get_columns("fin", "dividend")}
     for back in range(days):
         d = (today - timedelta(days=back)).strftime("%Y%m%d")
         for param in ("ann_date", "imp_ann_date", "ex_date"):
@@ -511,9 +507,7 @@ def backfill_disclosure_periods(pro, start_year: int = 1998,
     are skipped naturally via df.empty; ~111 calls in total finish in
     minutes, no checkpoint needed.
     """
-    fields = table_fields("disclosure_date")
-    with PgClient() as pg:
-        table_cols = {c["name"] for c in pg.get_columns("fin", "disclosure_date")}
+    fields, table_cols = _table_layout("disclosure_date")
     end_year = end_year or date.today().year
     today_s = date.today().strftime("%Y%m%d")
     total = 0
@@ -544,9 +538,7 @@ def sync_disclosure_daily(pro, days: int = 2) -> int:
     safe; returns the cumulative processed row count (including idempotent
     duplicates).
     """
-    fields = table_fields("disclosure_date")
-    with PgClient() as pg:
-        table_cols = {c["name"] for c in pg.get_columns("fin", "disclosure_date")}
+    fields, table_cols = _table_layout("disclosure_date")
     today = date.today()
     total = 0
     for back in range(days):
@@ -579,7 +571,7 @@ def backfill_fin_table(pro, table: str, codes: List[str],
                        force_full: bool = False) -> int:
     """Backfill one financial table (stock by stock)"""
     api_name = FIN_TABLE_APIS[table]
-    fields = table_fields(table)
+    fields, table_cols = _table_layout(table)
     logger.info(f"回填 {table}: {len(codes)} 只股票, limit={limit}, force_full={force_full}")
 
     # Checkpoint: resume after the last ts_code (ignored when force_full=True)
@@ -602,7 +594,7 @@ def backfill_fin_table(pro, table: str, codes: List[str],
         rows = 0
         for attempt in range(1, 4):
             try:
-                rows = _upsert_stock_fin(pro, table, api_name, fields, ts_code)
+                rows = _upsert_stock_fin(pro, table, api_name, fields, ts_code, table_cols)
                 break
             except PG_DOWN as e:
                 logger.warning(f"{table} {ts_code} PG 断连 "

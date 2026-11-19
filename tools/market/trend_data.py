@@ -20,8 +20,8 @@ def scan_cutoffs(now):
     return repository.cutoffs(now)
 
 
-def load_dashboard(run_id=None, include_rows=True):
-    return repository.latest_snapshot(run_id, include_rows)
+def load_dashboard(run_id=None, include_rows=True, *, min_numeric_score=None, code=None):
+    return repository.latest_snapshot(run_id, include_rows, min_numeric_score=min_numeric_score, code=code)
 
 
 def digest_stock_context(codes, trade_date):

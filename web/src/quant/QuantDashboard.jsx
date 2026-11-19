@@ -44,24 +44,26 @@ export default function QuantDashboard() {
 
   useEffect(() => {
     if (tab !== 'results' || workspaceSelected) { setBusy(false); return }
-    let active = true
+    const controller = new AbortController()
+    const { signal } = controller
     setBusy(true); setError('')
-    Promise.all([platformApi.quantStrategies(), platformApi.quantBacktests()]).then(([catalog, results]) => {
-      if (!active) return
+    Promise.all([platformApi.quantStrategies({ signal }), platformApi.quantBacktests({ signal })]).then(([catalog, results]) => {
+      if (signal.aborted) return
       setStrategies(catalog.data); setRuns(results.data)
       setRunId((current) => current.startsWith('workspace:') || results.data.some((r) => r.run_id === current && !r.diagnostics?.superseded) ? current : preferredRun(results.data)?.run_id || '')
-    }).catch((e) => { if (active) setError(e.message) }).finally(() => { if (active) setBusy(false) })
-    return () => { active = false }
+    }).catch((e) => { if (!signal.aborted) setError(e.message) }).finally(() => { if (!signal.aborted) setBusy(false) })
+    return () => controller.abort()
   }, [revision, tab, workspaceSelected])
 
   useEffect(() => {
-    if (!runId) { setDetail(null); return }
-    let active = true
+    if (!runId) { setDetail(null); setLoadingDetail(false); return }
+    const controller = new AbortController()
+    const { signal } = controller
     setLoadingDetail(true); setError(''); setDetail(null)
-    const load = runId.startsWith('workspace:') ? platformApi.quantWorkspaceResult(runId.slice(10), page * PAGE_SIZE, PAGE_SIZE) : platformApi.quantBacktest(runId, page * PAGE_SIZE, PAGE_SIZE)
-    load.then((r) => { if (active) setDetail(r) }).catch((e) => { if (active) setError(e.message) }).finally(() => { if (active) setLoadingDetail(false) })
-    return () => { active = false }
-  }, [runId, page, revision])
+    const load = workspaceSelected ? platformApi.quantWorkspaceResult(runId.slice(10), page * PAGE_SIZE, PAGE_SIZE, { signal }) : platformApi.quantBacktest(runId, page * PAGE_SIZE, PAGE_SIZE, { signal })
+    load.then((r) => { if (!signal.aborted) setDetail(r) }).catch((e) => { if (!signal.aborted) setError(e.message) }).finally(() => { if (!signal.aborted) setLoadingDetail(false) })
+    return () => controller.abort()
+  }, [runId, page, revision, workspaceSelected])
 
   const names = Object.fromEntries(strategies.map((s) => [s.id, s.name]))
   const metrics = detail?.metrics
@@ -71,7 +73,7 @@ export default function QuantDashboard() {
   return <div className="quant-page">
     <header className="quant-header"><div><div className="quant-eyebrow">ALPHA FINANCE RADAR / QUANT</div><h1>策略创作工作台</h1></div><nav className="quant-tabs" aria-label="量化工作区"><button aria-pressed={tab === 'workspace'} onClick={() => setTab('workspace')}>创作策略</button><button aria-pressed={tab === 'results'} onClick={() => setTab('results')}>回测报告</button></nav>{tab === 'results' && <div className="quant-workspace-actions"><button className="btn ghost" disabled={busy} onClick={() => setRevision((v) => v + 1)}>{busy ? '读取中…' : '刷新结果'}</button>{workspaceSelected && <button className="btn ghost" onClick={() => { setRunId(''); setPage(0) }}>浏览历史研究</button>}</div>}</header>
 
-    <div hidden={tab !== 'workspace'}><StrategyWorkspace onView={(task) => { setRunId(`workspace:${task.id}`); setPage(0); setTab('results') }} /></div>
+    <div hidden={tab !== 'workspace'}><StrategyWorkspace active={tab === 'workspace'} onView={(task) => { setRunId(`workspace:${task.id}`); setPage(0); setTab('results') }} /></div>
     {tab === 'results' && <>
     {error && <div className="quant-notice error" role="alert">{error}</div>}
     <details className="quant-library"><summary>查看历史策略库 · 保留原定义与研究对照</summary><section className="quant-strategies" aria-label="策略库">{strategies.filter((s) => s.generation !== 'rules').map((s) => <article key={s.id}><span>{['v8', 'v9'].includes(s.generation) ? '主板60F信号 / 盘后执行' : ['v5', 'v6', 'v7'].includes(s.generation) ? '60F趋势 / 日K入场' : '历史策略 · 60F / 日K'} · {s.version}</span><h2>{s.name}</h2><p>{s.description}</p><small>{['v5', 'v6', 'v7', 'v8', 'v9'].includes(s.generation) ? 'M8/M13/M21 · 次日开盘模型' : '保留原参数与原回测，供对照'}</small></article>)}</section></details>

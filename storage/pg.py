@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import pandas as pd
 import psycopg2
 import psycopg2.extras
+from psycopg2 import sql
 from psycopg2.pool import ThreadedConnectionPool
 from core.logger import get_logger
 
@@ -321,70 +322,49 @@ class PgClient:
 
     def upsert_df(self, df: pd.DataFrame, schema: str, table: str,
                   conflict_keys: Sequence[str]) -> int:
-        """
-        DataFrame UPSERT (update on primary-key conflict)
-        df column names must match the table's column names
-        """
-        if df is None or df.empty:
-            return 0
-        df = df.copy()
-        columns = list(df.columns)
-        columns_quoted = ", ".join(f'"{c}"' for c in columns)
-        placeholders = ", ".join(["%s"] * len(columns))
-        conflict_cols = ", ".join(f'"{c}"' for c in conflict_keys)
-        update_cols = ", ".join(
-            f'"{c}" = EXCLUDED."{c}"' for c in columns if c not in conflict_keys
-        )
-
-        # NaN -> None (PG rejects NaN floats)
-        df = df.where(pd.notna(df), None)
-        rows = [tuple(r) for r in df[columns].itertuples(index=False, name=None)]
-        # Convert pandas types to native Python types (int64 -> int etc.)
-        rows = [_normalize_row(r) for r in rows]
-
-        if update_cols:
-            sql = (
-                f'INSERT INTO "{schema}"."{table}" ({columns_quoted}) '
-                f"VALUES ({placeholders}) "
-                f"ON CONFLICT ({conflict_cols}) DO UPDATE SET {update_cols}"
-            )
-        else:
-            sql = (
-                f'INSERT INTO "{schema}"."{table}" ({columns_quoted}) '
-                f"VALUES ({placeholders}) ON CONFLICT ({conflict_cols}) DO NOTHING"
-            )
-
-        psycopg2.extras.execute_batch(self.cur, sql, rows, page_size=5000)
-        return len(rows)
+        """Insert in input order, updating non-key columns on conflict."""
+        return self._write_frame(df, schema, table, conflict_keys)
 
     def insert_df(self, df: pd.DataFrame, schema: str, table: str) -> int:
-        """DataFrame batch insert (conflicts ignored; for idempotent backfill)"""
+        """Insert in input order and propagate constraint errors."""
+        return self._write_frame(df, schema, table, None)
+
+    def _write_frame(self, df: pd.DataFrame, schema: str, table: str,
+                     conflict_keys: Sequence[str] | None) -> int:
         if df is None or df.empty:
             return 0
-        df = df.copy()
-        columns = list(df.columns)
-        columns_quoted = ", ".join(f'"{c}"' for c in columns)
-        placeholders = ", ".join(["%s"] * len(columns))
-
-        df = df.where(pd.notna(df), None)
-        rows = [_normalize_row(tuple(r)) for r in df[columns].itertuples(index=False, name=None)]
-
-        sql = (
-            f'INSERT INTO "{schema}"."{table}" ({columns_quoted}) '
-            f"VALUES ({placeholders})"
+        comma = sql.SQL(", ")
+        statement = sql.SQL("INSERT INTO {} ({}) VALUES ({})").format(
+            sql.Identifier(schema, table),
+            comma.join(sql.Identifier(str(name)) for name in df.columns),
+            comma.join([sql.Placeholder()] * len(df.columns)),
         )
-        psycopg2.extras.execute_batch(self.cur, sql, rows, page_size=5000)
-        return len(rows)
+        if conflict_keys is not None:
+            statement += sql.SQL(" ON CONFLICT ({}) ").format(comma.join(map(sql.Identifier, conflict_keys)))
+            updates = [
+                sql.SQL("{0} = EXCLUDED.{0}").format(sql.Identifier(str(name)))
+                for name in df.columns if name not in conflict_keys
+            ]
+            action = sql.SQL("DO UPDATE SET ") + comma.join(updates) if updates else sql.SQL("DO NOTHING")
+            statement += action
+
+        clean = df.where(pd.notna(df), None)
+        rows = (_normalize_row(row) for row in clean.itertuples(index=False, name=None))
+        # Render identifiers once. The driver only buffers one page of row parameters.
+        psycopg2.extras.execute_batch(self.cur, statement.as_string(self.cur), rows, page_size=5000)
+        return len(df)
 
 
 def _normalize_row(row: Tuple) -> Tuple:
     """Convert pandas/numpy scalars to native Python types"""
     out = []
     for v in row:
-        if isinstance(v, (pd.Timestamp, pd.Timedelta)):
+        if v is pd.NA or v is pd.NaT:
+            v = None
+        elif isinstance(v, pd.Timestamp):
             v = v.to_pydatetime()
-        elif isinstance(v, (pd.Int64Dtype,)):
-            v = int(v)
+        elif isinstance(v, pd.Timedelta):
+            v = v.to_pytimedelta()
         elif hasattr(v, "item"):
             try:
                 v = v.item()

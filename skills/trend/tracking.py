@@ -95,10 +95,11 @@ def follow_up(signal_date=None, now=None):
     else:
         # Prefer a cohort with at least one completed follow-up session.
         chosen = next((d for d in available if d["date"] < end[:10]), available[0])
-    snapshot = load_dashboard(chosen["run_id"])
+    minimum = 60
+    snapshot = load_dashboard(chosen["run_id"], min_numeric_score=minimum)
     if not snapshot:
         raise LookupError("历史快照不可用")
-    rows = select_stocks(snapshot, minimum=60., observations=True)
+    rows = select_stocks(snapshot, minimum=minimum, observations=True)
     calendar = tracking_calendar(chosen["date"], end[:10])
     frame = scan_daily_inputs([r["ts_code"] for r in rows], chosen["date"], end) if rows else None
     grouped = {code: part.to_dict(orient="records") for code, part in frame.groupby("ts_code")} if frame is not None and not frame.empty else {}
@@ -113,7 +114,7 @@ def follow_up(signal_date=None, now=None):
 
 
 def follow_up_chart(code, run_id, timeframe="1D", now=None):
-    snapshot = load_dashboard(run_id)
+    snapshot = load_dashboard(run_id, code=code)
     if not snapshot or not any(r["ts_code"] == code for r in select_stocks(snapshot)):
         raise LookupError("该股票不在所选快照的60分候选名单中")
     end = completed_end(now)

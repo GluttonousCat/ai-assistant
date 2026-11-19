@@ -8,11 +8,14 @@ export const platformApi = {
   quantSaveDraft: (draft) => request('POST', '/api/v1/quant/workspace/drafts', draft),
   quantGenerate: (body) => request('POST', '/api/v1/quant/workspace/generate', body),
   quantSubmit: (body) => request('POST', '/api/v1/quant/workspace/tasks', body),
-  quantWorkspaceResult: (taskId, offset = 0, limit = 30) => request('GET', `/api/v1/quant/workspace/tasks/${encodeURIComponent(taskId)}/result?${new URLSearchParams({ offset, limit })}`),
-  quantStrategies: () => request('GET', '/api/v1/quant/strategies'),
-  quantBacktests: () => request('GET', '/api/v1/quant/backtests?limit=100'),
-  quantBacktest: (runId, offset = 0, limit = 30) => request('GET', `/api/v1/quant/backtests/${encodeURIComponent(runId)}?${new URLSearchParams({offset, limit})}`),
-  marketDashboard: (options) => request('GET', '/api/v1/market/dashboard', undefined, options),
+  quantWorkspaceResult: (taskId, offset = 0, limit = 30, options) => request('GET', `/api/v1/quant/workspace/tasks/${encodeURIComponent(taskId)}/result?${new URLSearchParams({ offset, limit })}`, undefined, options),
+  quantStrategies: (options) => request('GET', '/api/v1/quant/strategies', undefined, options),
+  quantBacktests: (options) => request('GET', '/api/v1/quant/backtests?limit=100', undefined, options),
+  quantBacktest: (runId, offset = 0, limit = 30, options) => request('GET', `/api/v1/quant/backtests/${encodeURIComponent(runId)}?${new URLSearchParams({offset, limit})}`, undefined, options),
+  marketDashboard: ({ minNumericScore, signal } = {}) => {
+    const query = minNumericScore == null ? '' : `?${new URLSearchParams({ min_numeric_score: minNumericScore })}`
+    return request('GET', `/api/v1/market/dashboard${query}`, undefined, { signal })
+  },
   marketIndustries: (options) => request('GET', '/api/v1/market/industries', undefined, options),
   marketFreshness: (options) => request('GET', '/api/v1/market/freshness', undefined, options),
   marketIntraday: (options = {}) => request('GET', '/api/v1/market/intraday', undefined, options),

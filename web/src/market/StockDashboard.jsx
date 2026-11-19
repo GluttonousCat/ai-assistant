@@ -46,6 +46,8 @@ export default function StockDashboard({ user }) {
   const [sort, setSort] = useState('score')
   const [code, setCode] = useState('')
   const [chartRevision, setChartRevision] = useState(0)
+  const [refreshRequest, setRefreshRequest] = useState(0)
+  const refreshSnapshot = () => setRefreshRequest((v) => v + 1)
   const [resetChartView, setResetChartView] = useState(0)
   const { detail, error: chartError, busy: chartBusy } = useStockChart(section === 'screen' ? code : '', snapshot?.run_id, chartTimeframe, chartRevision)
   const [rulesOpen, setRulesOpen] = useState(false)
@@ -54,24 +56,40 @@ export default function StockDashboard({ user }) {
     try { const saved = JSON.parse(localStorage.getItem(starKey) || '[]'); return Array.isArray(saved) ? saved : [] } catch { return [] }
   })
 
-  async function load() {
-    setBusy(true); setError('')
-    try { setSnapshot(await platformApi.marketDashboard()); setChartRevision((v) => v + 1) } catch (e) { setError(e.message) }
-    finally { setBusy(false) }
-  }
-  useEffect(() => { let active = true; platformApi.marketDashboard().then((r) => { if (active) setSnapshot(r) }).catch((e) => { if (active) setError(e.message) }).finally(() => { if (active) setBusy(false) }); return () => { active = false } }, [])
   useEffect(() => {
-    setFreshness(snapshot?.freshness || null)
-    return startPolling(async (signal) => {
+    const controller = new AbortController()
+    let stopPolling
+    let runId
+    async function readSnapshot(signal) {
+      const next = await platformApi.marketDashboard({ minNumericScore: MIN_DISPLAY_SCORE, signal })
+      if (signal.aborted) return
+      runId = next.run_id
+      setSnapshot(next)
+      setFreshness(next.freshness || null)
+      setError('')
+    }
+    async function poll(signal) {
       const next = await platformApi.marketFreshness({ signal })
       if (signal.aborted) return
       setFreshness(next)
-      if (next.snapshot_run_id && next.snapshot_run_id !== snapshot?.run_id) {
-        const updated = await platformApi.marketDashboard({ signal })
-        if (!signal.aborted) setSnapshot(updated)
-      }
-    }, { pauseWhenHidden: true, initialDelay: 60000 })
-  }, [snapshot?.run_id, snapshot?.freshness])
+      if (next.snapshot_run_id && next.snapshot_run_id !== runId) await readSnapshot(signal)
+    }
+    setBusy(true)
+    setError('')
+    readSnapshot(controller.signal).then(() => {
+      if (refreshRequest && !controller.signal.aborted) setChartRevision((v) => v + 1)
+    }).catch((e) => {
+      if (!controller.signal.aborted) setError(e.message)
+    }).finally(() => {
+      if (controller.signal.aborted) return
+      setBusy(false)
+      stopPolling = startPolling(poll, { pauseWhenHidden: true, initialDelay: 60000 })
+    })
+    return () => {
+      controller.abort()
+      stopPolling?.()
+    }
+  }, [refreshRequest])
   const rows = useMemo(() => {
     const search = query.trim().toUpperCase()
     return (snapshot?.data || []).filter((r) => meetsDisplayScore(r) && (!search || stockSearchText(r, industries).includes(search))
@@ -109,11 +127,11 @@ export default function StockDashboard({ user }) {
   return <div className="trend-board">
     <header className="trend-header">
       <div><div className="trend-eyebrow">ALPHA FINANCE RADAR / MARKET</div><h1>股票行情</h1><p>{meta?.parent_context_version ? '日K母趋势背景 · 60F反转 / 回调再起 · 盘后观察' : mtfMode ? riskMode ? '60F结构机会 · 低位反转 / 趋势回调 / 缺口守稳' : freshMode ? '60F低位早期反转 · 日K确认入场 · M8 / M13 / M21' : '60F确定趋势 · 日K确认入场 · M8 / M13 / M21' : dualMode ? '60F趋势筛选 · 趋势回调 · 阴跌与砸坑反弹' : '以主趋势筛选机会，让每一次关注都有依据。'}</p></div>
-      <div className="trend-header-actions"><span className="trend-offline">● 盘后研究</span><button className="btn ghost" disabled={busy} onClick={load}>{busy ? '读取中…' : '刷新快照'}</button></div>
+      <div className="trend-header-actions"><span className="trend-offline">● 盘后研究</span><button className="btn ghost" disabled={busy} onClick={refreshSnapshot}>{busy ? '读取中…' : '刷新快照'}</button></div>
     </header>
     <nav className="market-section-tabs" aria-label="股票行情功能"><button className={section === 'screen' ? 'active' : ''} aria-pressed={section === 'screen'} onClick={() => setSection('screen')}>趋势筛选</button><button className={section === 'tracking' ? 'active' : ''} aria-pressed={section === 'tracking'} onClick={() => setSection('tracking')}>信号跟踪 <small>入选之后</small></button><button className={section === 'intraday' ? 'active' : ''} aria-pressed={section === 'intraday'} onClick={() => setSection('intraday')}>盘中观察</button></nav>
     {section === 'intraday' ? <Suspense fallback={<div className="trend-placeholder">正在打开盘中观察…</div>}><IntradayWatch industries={industries} /></Suspense> : section === 'tracking' ? <Suspense fallback={<div className="trend-placeholder">正在打开信号跟踪…</div>}><SignalTracking revision={`${snapshot?.run_id || ''}:${chartRevision}`} industries={industries} /></Suspense> : <>
-    {error && <div className="trend-notice error" role="alert">{error}<button className="btn ghost" onClick={load}>重试</button></div>}
+    {error && <div className="trend-notice error" role="alert">{error}<button className="btn ghost" onClick={refreshSnapshot}>重试</button></div>}
     {busy && !snapshot && <div className="trend-placeholder">正在读取行情与筛选结果…</div>}
     <MarketFreshness value={freshness} />
     {snapshot && <>

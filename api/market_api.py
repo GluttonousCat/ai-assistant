@@ -1,6 +1,7 @@
 """Minute bars are served from PG, never fetched from suppliers in HTTP requests."""
 
 import asyncio
+import re
 from datetime import date
 from uuid import UUID
 from typing import Literal
@@ -13,6 +14,11 @@ from skills.trend.episodes import episode_tracking
 from skills.trend.intraday import dashboard as intraday_dashboard, chart as intraday_chart
 
 market_router = APIRouter(prefix="/api/v1/market", tags=["market"])
+
+
+def _validate_stock_code(code: str):
+    if not re.fullmatch(r"\d{6}\.(SH|SZ|BJ)", code):
+        raise HTTPException(422, "股票代码必须包含SH/SZ/BJ后缀")
 
 
 @market_router.get("/industries")
@@ -29,10 +35,7 @@ async def market_intraday():
 
 @market_router.get("/intraday/{code}")
 async def market_intraday_chart(code: str, run_id: str = Query(pattern=r"^\d{4}-\d{2}-\d{2}_(1030|1130|1400|1500)$"), timeframe: Literal["1D", "60F"] = "60F"):
-    import re
-
-    if not re.fullmatch(r"\d{6}\.(SH|SZ|BJ)", code):
-        raise HTTPException(422, "股票代码必须包含SH/SZ/BJ后缀")
+    _validate_stock_code(code)
     try:
         return await asyncio.to_thread(intraday_chart, code, run_id, timeframe)
     except LookupError as error:
@@ -56,10 +59,7 @@ async def signal_episodes(view: Literal["active", "archive"] = "active"):
 async def signal_tracking_chart(
     code: str, run_id: UUID, timeframe: Literal["1D", "60F"] = "1D",
 ):
-    import re
-
-    if not re.fullmatch(r"\d{6}\.(SH|SZ|BJ)", code):
-        raise HTTPException(422, "股票代码必须包含SH/SZ/BJ后缀")
+    _validate_stock_code(code)
     try:
         return await asyncio.to_thread(follow_up_chart, code, str(run_id), timeframe)
     except LookupError as error:
@@ -73,8 +73,10 @@ async def market_freshness():
 
 
 @market_router.get("/dashboard")
-async def trend_dashboard():
-    result = await asyncio.to_thread(dashboard)
+async def trend_dashboard(min_numeric_score: int | None = Query(
+    default=None, ge=0, le=100, description="仅对 JSON 数字评分预筛。历史格式由客户端按原规则处理。",
+)):
+    result = await asyncio.to_thread(dashboard, min_numeric_score=min_numeric_score)
     if result is None:
         raise HTTPException(503, "尚未生成趋势快照，请运行 python -m jobs.scan_trend")
     return result
@@ -84,10 +86,7 @@ async def trend_dashboard():
 async def trend_stock(
     code: str, run_id: UUID | None = None, timeframe: Literal["60F", "1D"] = "60F"
 ):
-    import re
-
-    if not re.fullmatch(r"\d{6}\.(SH|SZ|BJ)", code):
-        raise HTTPException(422, "股票代码必须包含SH/SZ/BJ后缀")
+    _validate_stock_code(code)
     snapshot = await asyncio.to_thread(
         dashboard, str(run_id) if run_id else None, False
     )

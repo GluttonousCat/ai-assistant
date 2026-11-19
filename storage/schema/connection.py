@@ -22,3 +22,17 @@ def ddl_cursor():
         yield conn.cursor()
     finally:
         conn.close()
+
+
+def create_indexes_concurrently(schema, definitions):
+    """Deploy module-owned index definitions on a dedicated autocommit connection."""
+    with ddl_cursor() as cur:
+        cur.execute("SET lock_timeout='5s'")
+        cur.execute("SET statement_timeout='10min'")
+        for name, definition in definitions.items():
+            cur.execute(f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {name} {definition}")
+            qualified_name = f"{schema}.{name}"
+            cur.execute("SELECT indisvalid AND indisready FROM pg_index WHERE indexrelid=to_regclass(%s)",
+                        (qualified_name,))
+            if cur.fetchone() != (True,):
+                raise RuntimeError(f"行情索引 {qualified_name} 无效，请检查后重建")

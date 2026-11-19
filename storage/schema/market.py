@@ -1,5 +1,5 @@
 """Market ingestion schema. All DDL uses a separate autocommit connection."""
-from storage.schema.connection import ddl_cursor
+from storage.schema.connection import create_indexes_concurrently, ddl_cursor
 
 DDL_INDEX_DAILY = """
 CREATE TABLE IF NOT EXISTS stock.index_daily (
@@ -99,11 +99,4 @@ def ensure_index_daily_schema() -> None:
 
 def deploy_cutoff_indexes() -> None:
     """Run explicitly after the market tables exist, outside application startup."""
-    with ddl_cursor() as cur:
-        cur.execute("SET lock_timeout='5s'")
-        cur.execute("SET statement_timeout='10min'")
-        for name, definition in _CUTOFF_INDEXES.items():
-            cur.execute(f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {name} {definition}")
-            cur.execute("SELECT indisvalid FROM pg_index WHERE indexrelid=to_regclass(%s)", (f"stock.{name}",))
-            if cur.fetchone() != (True,):
-                raise RuntimeError(f"行情索引 stock.{name} 无效，请检查后重建")
+    create_indexes_concurrently("stock", _CUTOFF_INDEXES)

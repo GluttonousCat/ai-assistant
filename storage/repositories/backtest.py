@@ -1,6 +1,5 @@
 """Quant SQL boundary. No provider calls, calculation, or request-time DDL."""
 
-import json
 from psycopg2.extras import Json, execute_values
 from storage.pg import PgClient
 
@@ -179,14 +178,5 @@ def load_run(run_id, offset=0, limit=100):
             "SELECT payload FROM stock.backtest_trade WHERE run_id=%s ORDER BY trade_no LIMIT %s OFFSET %s",
             (run_id, limit, offset),
         )
-    return json.loads(
-        json.dumps(
-            {
-                **row["payload"],
-                "trades": [r["payload"] for r in trades],
-                "offset": offset,
-                "limit": limit,
-            },
-            default=str,
-        )
-    )
+    return {**row["payload"], "trades": [r["payload"] for r in trades],
+            "offset": offset, "limit": limit}

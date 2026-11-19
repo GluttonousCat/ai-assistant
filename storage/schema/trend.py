@@ -1,6 +1,17 @@
 """Versioned scan snapshots, published only after the entire scan succeeds."""
 
-from storage.schema.connection import ddl_cursor
+from storage.schema.connection import create_indexes_concurrently, ddl_cursor
+
+
+TRACKING_SCORE_PREDICATE = """CASE WHEN (payload->>'score') ~ '^[0-9]+([.][0-9]+)?$'
+    THEN (payload->>'score')::numeric >= 60 ELSE false END"""
+
+
+def deploy_tracking_index():
+    """Run once after the trend tables exist. Reads and publication also work without it."""
+    create_indexes_concurrently("stock", {
+        "idx_trend_signal_tracking": f"ON stock.trend_signal (run_id, ts_code) WHERE {TRACKING_SCORE_PREDICATE}",
+    })
 
 
 def ensure_trend_schema():

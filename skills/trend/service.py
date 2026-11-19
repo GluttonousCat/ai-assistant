@@ -18,8 +18,8 @@ from skills.trend.parent_context import (
 )
 
 
-def dashboard(run_id=None, include_rows=True):
-    snapshot = load_dashboard(run_id, include_rows)
+def dashboard(run_id=None, include_rows=True, *, min_numeric_score=None):
+    snapshot = load_dashboard(run_id, include_rows, min_numeric_score=min_numeric_score)
     if snapshot and run_id is None:
         from skills.trend.mtf import DUAL_VERSION
 
