@@ -40,10 +40,14 @@ class MarketDigestScheduler(ScheduledTask):
     def next_slot(cls, now=None):
         now = market_time(now or market_now())
         slot = datetime.combine(now.date(), cls.send_time, SHANGHAI)
-        return slot if now < slot else slot + timedelta(days=1)
+        if now >= slot:
+            slot += timedelta(days=1)
+        while not is_trading_day(slot.date()):
+            slot += timedelta(days=1)
+        return slot
 
     def initial_due(self, now):
-        return now.time() >= self.send_time
+        return is_trading_day(now.date()) and now.time() >= self.send_time
 
     def deliver(self, *, delay_notice=False):
         return deliver_once(delay_notice=delay_notice)
@@ -119,7 +123,6 @@ class MiddayDigestScheduler(MarketDigestScheduler):
     send_time = midday.SEND_TIME
     retry_until = midday.RETRY_UNTIL
     retry_seconds = 60
-    send_delay_notice = False
     label = "午间60F邮件"
 
     @property
@@ -128,18 +131,12 @@ class MiddayDigestScheduler(MarketDigestScheduler):
         value = cfg.env("MIDDAY_DIGEST_ENABLED", cfg.get("email_digest.midday_enabled", True))
         return super().enabled and str(value).lower() in ("true", "1", "yes")
 
-    @classmethod
-    def next_slot(cls, now=None):
-        slot = super().next_slot(now)
-        while not is_trading_day(slot.date()):
-            slot += timedelta(days=1)
-        return slot
-
     def initial_due(self, now):
         return is_trading_day(now.date()) and self.send_time <= now.time() <= self.retry_until
 
     def deliver(self, *, delay_notice=False):
-        return midday.deliver_midday_once()
+        now = market_now()
+        return midday.deliver_midday_once(now, deadline_notice=delay_notice or now.time() >= self.retry_until)
 
 
 _scheduler = None

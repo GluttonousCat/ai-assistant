@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from core.config import get_config
 from core.local_state import file_lock, write_json
+from core.offpeak import OffPeakEnded
 
 _current = ContextVar("observed_task", default=None)
 _SECRET = re.compile(
@@ -144,6 +145,9 @@ def observed(key, label):
                 if parent and status in ("partial", "failed"):
                     parent.update(warning=f"{label}未完全成功，请查看子任务")
                 return result
+            except OffPeakEnded:
+                task.update("等待下个模型闲时窗口", status="skipped", ended_at=_now())
+                raise
             except BaseException as error:
                 task.update(
                     warning=f"{type(error).__name__}: {error}",

@@ -16,17 +16,27 @@ from core.local_state import read_json, write_json, file_lock
 from core.logger import get_logger
 from core.observability import observed, task_progress
 from workflows.market.collect_intraday import SLOTS
-from skills.trend.intraday import observe, rank_candidates
-from skills.trend.intraday_followup import build_followup
+from skills.trend.intraday import mark_watch_entries, observe, rank_candidates
+from skills.trend.intraday_followup import apply_followup, build_followup
 from skills.trend.chart_history import stock_chart
 from skills.trend.digest import export_csv
 from skills.trend.mtf import MtfConfig, minute_context
 from skills.trend.parent_context import annotate_chart
 from storage.repositories.intraday_watch import publish_report
 from tools.market.chart_image import render_pair
-from tools.market.trend_data import load_dashboard, scan_inputs, scan_daily_inputs, adjust_prices
+from tools.kline.calendar import get_last_trading_day
+from tools.market.trend_data import intraday_report, load_dashboard, scan_inputs, scan_daily_inputs, adjust_prices
 
 logger = get_logger(__name__)
+
+
+def _previous_rounds(day, clock, config):
+    slots = [(str(get_last_trading_day(day)), "15:00")]
+    slots.extend((day, slot) for slot in SLOTS if slot < clock)
+    for date, slot in slots:
+        report = intraday_report(f"{date}_{slot.replace(':', '')}")
+        if report and report.get("as_of") == f"{date} {slot}:00" and report.get("config") == config:
+            yield report
 
 
 def batch(members, start, cutoff, daily_cutoff, config):
@@ -89,7 +99,9 @@ def run(day, clock="11:30", wait=False, render_static=False):
             raise RuntimeError("已有同批盘中扫描在运行")
         audit = read_json(folder / "audit.json", strict=True)
         manifest = read_json(folder / "collection.json", strict=True)
-        if not audit or audit["complete"] < .95 * audit["total"]:
+        if manifest.get("limited"):
+            raise ValueError("限量采集仅供抽查，盘中发布需要全池采集")
+        if not audit or not audit["total"] or audit["complete"] < .95 * audit["total"]:
             raise ValueError("今日60F采集覆盖不足95%，不发布看似完整的推荐")
         snapshot = load_dashboard(manifest["snapshot_run_id"], False)
         daily_cutoff = snapshot["metadata"].get("timeframes", {}).get("1D", {}).get("as_of", snapshot["as_of"])
@@ -108,6 +120,7 @@ def run(day, clock="11:30", wait=False, render_static=False):
                 if len(results) % 250 == 0 or len(results) == len(members):
                     logger.info("盘中扫描进度 %s/%s", len(results), len(members))
         candidates = rank_candidates([r for r in results if r["status"] == "candidate"])
+        mark_watch_entries(candidates, _previous_rounds(day, clock, snapshot["metadata"]["config"]), cutoff)
         report = {"run_id": folder.name, "as_of": cutoff, "daily_as_of": daily_cutoff,
             "start": snapshot["metadata"]["start"],
             "created_at": datetime.now(ZoneInfo("Asia/Shanghai")).isoformat(), "source": "akshare-sina",
@@ -121,9 +134,17 @@ def run(day, clock="11:30", wait=False, render_static=False):
         report["scan_status"] = {**dict.fromkeys(bad, "data_missing"),
                                  **{row["ts_code"]: row["status"] for row in results}}
         try:
-            report["follow_up"] = build_followup(report)
+            apply_followup(report, build_followup(report))
         except Exception as error:
-            logger.warning("盘中历史标的跟踪暂缺: %s", type(error).__name__)
+            message = "历史信号审核未完成，等待重试"
+            write_json(folder / "analysis_progress.json", {
+                "completed": len(results), "total": len(members), "status": "followup_pending",
+                "reason": message, "error_type": type(error).__name__,
+            })
+            task_progress(warning=message)
+            raise RuntimeError(message) from error
+        report["followup_status"] = "complete"
+        candidates = report["data"]
         write_json(folder / "report.json", report)
         (folder / "candidates.csv").write_text(export_csv(candidates), encoding="utf-8-sig")
         if render_static:

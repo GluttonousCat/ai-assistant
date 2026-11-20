@@ -38,7 +38,7 @@ web/         React 前端及其 Node 测试
 python -m pip install -e ".[dev]"
 npm --prefix web ci
 npm --prefix web run build
-ai-assistant --host 127.0.0.1 --port 8208
+ai-assistant --host 127.0.0.1 --port 9001
 ```
 
 现有启动脚本可继续使用 `python run_server.py`。部署使用仓库内已构建的 `web/dist`。离线回归运行 `python -m pytest`，真实库测试运行 `python -m pytest -m integration`，前端测试运行 `npm --prefix web test`。

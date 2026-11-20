@@ -1,17 +1,20 @@
-import { Fragment, memo, useEffect, useRef, useState } from 'react'
+import { Fragment, memo, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { platformApi } from '../platformApi'
 import ResultChart from './ResultChart'
 import { buildChartSpec, COL_LABELS, parseNum, fmtDateCol } from './resultData'
 import Markdownish from '../components/Markdownish'
 import useChatWorkspace from './useChatWorkspace'
+import brandMark from '../assets/favicon.svg?no-inline'
 import './chat.css'
 
 const EXAMPLES = [
-  { icon: '🤖', text: '中际旭创2025年报净利润多少？' },
-  { icon: '🔗', text: 'AI算力产业链有哪些环节' },
-  { icon: '🎯', text: '中际旭创的预期差' },
-  { icon: '🛡️', text: '中际旭创有没有财务风险' },
+  { label: '查财务', text: '中际旭创 2025 年净利润是多少？' },
+  { label: '看产业链', text: 'AI 算力产业链有哪些环节？' },
+  { label: '读研报', text: '近期研报如何看待中际旭创的业绩？' },
+  { label: '做对比', text: '中际旭创和新易盛的毛利率有何差异？' },
 ]
+
+const AnswerMarkdown = memo(Markdownish)
 
 // Answer type badge: SSE data events carry intent; frontend shows an icon per type
 const INTENT_META = {
@@ -105,15 +108,54 @@ export default function AgentChat() {
   const [busy, setBusy] = useState(false)
   const [atBottom, setAtBottom] = useState(true)
   const scrollRef = useRef(null)
+  const transcriptRef = useRef(null)
+  const historyToggleRef = useRef(null)
+  const historyRef = useRef(null)
+  const positions = useRef(new Map())
   const stickRef = useRef(true) // follow new content while user is at bottom; don't disturb while scrolled up
   const sessionId = 'web-' + workspace.chat.id
+  const empty = !messages.length && !busy
 
   useEffect(() => () => streamRef.current?.abort(), [])
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = inputRef.current
-    if (el) { el.style.height = 'auto'; el.style.height = `${Math.min(el.scrollHeight, 200)}px` }
-  }, [input])
-  useEffect(() => { stickRef.current = true; scrollToBottom() }, [workspace.chat.id])
+    el.style.height = 'auto'
+    el.style.height = `${el.scrollHeight}px`
+  }, [input, empty])
+
+  useLayoutEffect(() => {
+    const el = scrollRef.current
+    const offset = positions.current.get(workspace.chat.id)
+    el.scrollTop = offset ?? el.scrollHeight
+    stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= 16
+    setAtBottom(stickRef.current)
+    setCopied(null)
+    setCopyError('')
+  }, [workspace.chat.id])
+
+  useLayoutEffect(() => {
+    const el = scrollRef.current
+    const follow = () => { if (stickRef.current) el.scrollTop = el.scrollHeight }
+    const observer = new ResizeObserver(follow)
+    observer.observe(el)
+    observer.observe(transcriptRef.current)
+    return () => observer.disconnect()
+  }, [])
+
+  useEffect(() => {
+    if (historyOpen) historyRef.current?.querySelector('.selected button:enabled')?.focus()
+  }, [historyOpen])
+
+  useEffect(() => {
+    if (!historyOpen && !busy) return
+    function onEscape(e) {
+      if (e.key !== 'Escape' || e.isComposing || e.keyCode === 229 || e.defaultPrevented) return
+      if (historyOpen) closeHistory()
+      else streamRef.current?.abort()
+    }
+    document.addEventListener('keydown', onEscape)
+    return () => document.removeEventListener('keydown', onEscape)
+  }, [busy, historyOpen])
 
   async function copyAnswer(text, index) {
     try { await navigator.clipboard.writeText(text); setCopied(index); setCopyError('') }
@@ -135,27 +177,36 @@ export default function AgentChat() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const scrollToBottom = (smooth = false) => {
-    const el = scrollRef.current
-    if (!el) return
+  function scrollToBottom() {
     stickRef.current = true
-    el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' })
+    setAtBottom(true)
+    scrollRef.current.scrollTop = scrollRef.current.scrollHeight
   }
-
-  // Stick to bottom while streaming; stop forcing back down once the user scrolls up
-  useEffect(() => {
-    if (stickRef.current) {
-      const el = scrollRef.current
-      if (el) el.scrollTop = el.scrollHeight
-    }
-  }, [messages, busy])
 
   function onScroll() {
     const el = scrollRef.current
-    if (!el) return
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+    if (el.hidden) return
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= 16
     stickRef.current = nearBottom
     setAtBottom(nearBottom)
+  }
+
+  function closeHistory() {
+    setHistoryOpen(false)
+    historyToggleRef.current?.focus({ preventScroll: true })
+  }
+
+  function openChat(id) {
+    const offsets = positions.current
+    for (const key of offsets.keys()) {
+      if (!workspace.chats.some((chat) => chat.id === key)) offsets.delete(key)
+    }
+    if (stickRef.current) offsets.delete(workspace.chat.id)
+    else offsets.set(workspace.chat.id, scrollRef.current.scrollTop)
+    if (id) workspace.select(id)
+    else workspace.create()
+    if (historyOpen) closeHistory()
+    if (window.matchMedia('(hover: hover) and (pointer: fine)').matches) inputRef.current?.focus({ preventScroll: true })
   }
 
   async function send(text) {
@@ -163,13 +214,11 @@ export default function AgentChat() {
     if (!q || streamRef.current) return
     if (!messages.length) workspace.rename(q.slice(0, 28))
     setCopied(null)
-    setInput('')
+    setCopyError('')
+    if (text == null) setInput('')
     scrollToBottom()
-    setMessages((m) => [...m, { role: 'user', text: q }])
+    setMessages((m) => [...m, { role: 'user', text: q }, { role: 'assistant', text: '', stage: '' }])
     setBusy(true)
-
-    // Streaming message: text grows chunk by chunk, stage shows the current phase
-    setMessages((m) => [...m, { role: 'assistant', text: '', stage: '' }])
 
     const updateLast = (fn) => {
       setMessages((m) => {
@@ -224,7 +273,7 @@ export default function AgentChat() {
         } else if (ev.type === 'delta') {
           updateLast((msg) => ({
             ...msg, text: msg.text + ev.text, stage: '',
-            stages: msg.stages?.length
+            stages: msg.stage && msg.stages?.length
               ? msg.stages.map((s, j) => ({ ...s, ok: j < msg.stages.length - 1 }))
               : msg.stages,
           }))
@@ -239,7 +288,11 @@ export default function AgentChat() {
     streamRef.current = stream
     try {
       await stream.promise
-      if (!receivedDone && !failed) updateLast((msg) => ({ ...msg, notice: '生成已停止或连接中断，可以继续提问。' }))
+      if (!receivedDone && !failed) {
+        updateLast((msg) => stream.signal.aborted
+          ? { ...msg, notice: '已停止生成' }
+          : { ...msg, error: '连接中断，回答可能不完整。' })
+      }
     } catch (err) {
       if (err.name === 'AbortError') updateLast((msg) => ({ ...msg, notice: '已停止生成' }))
       else updateLast((msg) => ({ ...msg, error: err.message, stage: '' }))
@@ -250,18 +303,20 @@ export default function AgentChat() {
       }))
       streamRef.current = null
       setBusy(false)
-      inputRef.current?.focus()
     }
   }
 
   return (
     <div className="chat-workspace">
-      <aside className={`chat-history ${historyOpen ? 'visible' : ''}`} aria-label="对话历史">
-        <div className="history-heading"><span>研究对话</span><button disabled={busy} onClick={workspace.create} title="新建对话" aria-label="新建对话">＋</button></div>
+      {historyOpen && <button type="button" className="history-backdrop" aria-label="关闭对话历史" tabIndex={-1} onClick={closeHistory} />}
+      <aside ref={historyRef} id="chat-history" className={`chat-history ${historyOpen ? 'visible' : ''}`} aria-label="对话历史">
+        <div className="history-heading"><span>研究对话</span><button disabled={busy} onClick={() => openChat()} title="新建对话" aria-label="新建对话">＋</button></div>
         <p className="history-caption">最近对话 · 当前标签页</p>
         <div className="history-list">
           {workspace.chats.map((chat) => <div key={chat.id} className={`history-item ${chat.id === workspace.chat.id ? 'selected' : ''}`}>
-            <button disabled={busy} onClick={() => { workspace.select(chat.id); setHistoryOpen(false) }}>{chat.title}</button>
+            <button disabled={busy} title={chat.title} aria-current={chat.id === workspace.chat.id ? 'true' : undefined} onClick={() => openChat(chat.id)}>
+              <span className="history-title">{chat.title}</span>
+            </button>
             <button className="history-delete" disabled={busy} aria-label={`删除对话 ${chat.title}`} onClick={() => workspace.remove(chat.id)}>×</button>
           </div>)}
         </div>
@@ -269,32 +324,23 @@ export default function AgentChat() {
       </aside>
       <div className="chat-page">
       <header className="chat-toolbar">
-        <div><button className="history-toggle" aria-label="切换对话历史" aria-expanded={historyOpen} onClick={() => setHistoryOpen(!historyOpen)}>☰</button><span className="chat-product">Alpha Radar</span><span className="chat-toolbar-sub">智能对话</span></div>
-        <button className="chat-new" disabled={busy} onClick={workspace.create}>＋ 新对话</button>
+        <div><button ref={historyToggleRef} className="history-toggle" aria-label="切换对话历史" aria-controls="chat-history" aria-expanded={historyOpen} onClick={() => setHistoryOpen(!historyOpen)}>☰</button><span className="chat-product">Alpha Radar</span><span className="chat-toolbar-sub">智能对话</span></div>
+        <button className="chat-new" disabled={busy} onClick={() => openChat()}>＋ 新对话</button>
       </header>
-      <div className="chat-window" ref={scrollRef} onScroll={onScroll}>
-        {messages.length === 0 && !busy && (
-          <div className="chat-empty">
-            <div className="chat-empty-icon">✦</div>
-            <div className="chat-eyebrow">从一个好问题开始</div><h3>今天，想研究什么？</h3>
-            <p>连接财务数据、研报与产业链，陪你把问题研究清楚。</p>
-            <div className="chat-examples">
-              {EXAMPLES.map((ex) => (
-                <button key={ex.text} onClick={() => send(ex.text)}>
-                  <span className="ex-icon">{ex.icon}</span>{ex.text}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
+      <div className={`chat-session${empty ? ' is-empty' : ''}`}>
+        {empty && <div className="chat-intro">
+          <img src={brandMark} alt="" width="44" height="44" />
+          <h1>今天，想研究什么？</h1>
+        </div>}
+      <div className="chat-window" ref={scrollRef} hidden={empty} onScroll={onScroll} role="region" aria-label="对话消息" tabIndex={0}>
+        <div className="chat-transcript" ref={transcriptRef}>
         {messages.map((m, i) => {
           const streaming = busy && i === messages.length - 1 && m.role === 'assistant'
           return (
             <div key={i} className={`chat-msg ${m.role}`}>
               {m.role === 'assistant' ? (
                 <>
-                  <div className="chat-avatar">✦</div>
+                  <img className="chat-avatar" src={brandMark} alt="Alpha Radar" width="28" height="28" />
                   <div className="chat-body">
                     {INTENT_META[m.intent] && (
                       <div className={`chat-type-badge ${m.intent}`}>
@@ -327,7 +373,7 @@ export default function AgentChat() {
                     ))}
                     {(m.text || (streaming && !m.stage)) && (
                       <div className={`chat-bubble md${streaming ? ' streaming' : ''}`}>
-                        {m.text ? <Markdownish text={m.text} /> : (
+                        {m.text ? <AnswerMarkdown text={m.text} /> : (
                           <div className="chat-bubble typing"><span></span><span></span><span></span></div>
                         )}
                       </div>
@@ -344,14 +390,14 @@ export default function AgentChat() {
             </div>
           )
         })}
-        <div className="chat-window-pad" />
+        </div>
       </div>
 
-      {!atBottom && (
-        <button className="chat-jump" title="回到底部" onClick={() => scrollToBottom(true)}>↓</button>
-      )}
-
       <div className="chat-inputbar">
+        {!empty && !atBottom && <button className="chat-jump" onClick={() => {
+          scrollToBottom()
+          scrollRef.current.focus({ preventScroll: true })
+        }}>↓ 回到最新</button>}
         <form className="chat-input-shell" onSubmit={(e) => { e.preventDefault(); send() }}>
           <textarea
             ref={inputRef}
@@ -365,16 +411,22 @@ export default function AgentChat() {
                 e.preventDefault()
                 send()
               }
-              if (e.key === 'Escape') streamRef.current?.abort()
             }}
-            placeholder="提出问题，或接着聊聊你的想法…"
+            placeholder={empty ? '输入股票名称、代码或研究问题…' : '继续追问…'}
           />
-          <div className="composer-tools"><span>财务 · 研报 · 产业链</span>
-            {busy ? <button type="button" className="chat-send stop" onClick={() => streamRef.current?.abort()} aria-label="停止生成">■</button>
-              : <button type="submit" className="chat-send" disabled={!input.trim()} aria-label="发送问题">↑</button>}
+          <div className="composer-tools">
+            <span className="composer-shortcut">{busy ? 'Esc 停止' : 'Enter 发送 · Shift + Enter 换行'}</span>
+            {busy ? <button type="button" className="chat-send stop" onClick={() => streamRef.current?.abort()} aria-label="停止生成" title="停止生成"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" /></svg></button>
+              : <button type="submit" className="chat-send" disabled={!input.trim()} aria-label="发送问题" title="发送问题"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5m-7 7 7-7 7 7" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg></button>}
           </div>
         </form>
-        <div className="composer-note" role="status">{copyError || (workspace.storageError ? '浏览器存储不可用，对话仅在本页面保留' : busy ? '正在研究 · Esc 停止' : 'Enter 发送 · Shift + Enter 换行')}</div>
+        <div className="composer-note" role="status">{copyError || (workspace.storageError ? '浏览器存储不可用，对话仅在本页面保留' : busy ? '正在生成回答…' : '')}</div>
+      </div>
+      {empty && <div className="chat-examples" role="group" aria-label="示例问题">
+        {EXAMPLES.map((ex) => <button key={ex.label} onClick={() => send(ex.text)}>
+          <span className="example-label">{ex.label}</span><span>{ex.text}</span>
+        </button>)}
+      </div>}
       </div>
       </div>
     </div>

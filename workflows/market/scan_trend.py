@@ -18,6 +18,9 @@ from core.config import get_config
 from core.logger import get_logger
 from storage.pg import retry_on_disconnect
 from tools.market.universe import board_of, risk_name
+from skills.trend import MIN_CANDIDATE_SCORE
+from skills.trend.digest import select_stocks
+from skills.trend.episodes import retired_signals
 from skills.trend.strategy import VERSION, TrendConfig, screen
 from skills.trend.parent_context import annotate_summary, VERSION as CONTEXT_VERSION
 from skills.trend.mtf import (
@@ -259,6 +262,15 @@ def scan(
     finally:
         pool.shutdown(wait=True, cancel_futures=True)
     rows.sort(key=lambda r: r["ts_code"])
+    config = asdict(cfg)
+    if fresh:
+        candidates = select_stocks({"metadata": {"config": config}, "data": rows}, minimum=0)
+        retired = retired_signals(candidates, cutoff, version=version_for(cfg), config=config)
+        for row in candidates:
+            if row["ts_code"] in retired:
+                row.update(eligible=False, setup_watch=False, state="原机会已失效",
+                           reason="同一60F起点已连续两根收盘低于首次入选防守位")
+                row["trend60"] = {**row.get("trend60", {}), "fresh": False, "ready": False, "state": "原机会已失效"}
     metadata = {
         "parent_context_version": CONTEXT_VERSION,
         "opportunity_patterns": dict(
@@ -268,7 +280,8 @@ def scan(
                 if r["eligible"]
             )
         ),
-        "config": asdict(cfg),
+        "config": config,
+        "tracking_min_score": MIN_CANDIDATE_SCORE,
         "cutoffs_source": available.get("snapshot_run_id", "local_latest"),
         "universe": len(members),
         "eligible": sum(r["eligible"] for r in rows),

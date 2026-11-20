@@ -257,34 +257,38 @@ def add_report(ts_code, title, content):
     return {"status": "ok", "report_id": row["report_id"]}
 
 
-def search_research(keyword="", stock=None, days=180, limit=10):
+def search_research(keyword="", stock=None, days=180, limit=10, *, keywords=None):
     conds = ["COALESCE(rm.source,'') NOT IN ('zsxq_topic','zsxq_topic_pdf_absent')"]
-    args = []
+    args = [keywords or [keyword or ""]]
     if stock:
         hit = stock
         conds.append("(rm.ts_code=%s OR rm.title ILIKE %s OR rm.tags_targets ILIKE %s)")
         name = hit["name"]
         args += [hit["ts_code"], f"%{name}%", f"%{name}%"]
-    if keyword:
-        kw = f"%{keyword}%"
-        conds.append(
-            "(rm.title ILIKE %s OR rm.tags_industries ILIKE %s OR rm.tags_themes ILIKE %s OR rm.tags_commodities ILIKE %s OR rm.target ILIKE %s OR rm.analysis_json ILIKE %s)"
-        )
-        args += [kw, kw, kw, kw, kw, kw]
+    pattern = "('%%' || q.term || '%%')"
+    fields = ("title", "tags_industries", "tags_themes", "tags_commodities", "target", "analysis_json")
+    if keyword or keywords:
+        conds.append("(" + " OR ".join(f"rm.{field} ILIKE {pattern}" for field in fields) + ")")
     if days and days > 0:
         conds.append("rm.publish_date >= current_date - %s")
         args.append(int(days))
-    where = " AND ".join(conds) or "TRUE"
+    where = " AND ".join(conds)
+    # Overview candidates compete within each topic. Preserve chronological
+    # ordering for existing single-key and stock-only callers.
+    rank = f"CASE WHEN rm.title ILIKE {pattern} THEN 0 ELSE 1 END" if keywords else "0"
     with PgClient(read_only=True) as pg:
         rows = pg.fetch_all(
-            (
-                "SELECT report_id, title, org_name, publish_date, market, target,"
-                "        symbols, tags_targets, analysis_json FROM fin.report_meta rm"
-                " WHERE "
-                f"{where}"
-                " ORDER BY rm.publish_date DESC NULLS LAST LIMIT %s"
-            ),
-            tuple(args) + (min(int(limit), 30),),
+            f"""SELECT q.term AS matched_keyword, hit.*
+                FROM unnest(%s::text[]) WITH ORDINALITY AS q(term, seq)
+                CROSS JOIN LATERAL (
+                    SELECT report_id, title, org_name, publish_date, market, target,
+                           symbols, tags_targets, analysis_json, file_id,
+                           md5(NULLIF(file_path, '')) AS copy_key, {rank} AS topic_rank
+                    FROM fin.report_meta rm WHERE {where}
+                    ORDER BY topic_rank, publish_date DESC NULLS LAST, report_id DESC
+                    LIMIT %s
+                ) hit ORDER BY q.seq, hit.topic_rank, hit.publish_date DESC NULLS LAST, hit.report_id DESC""",
+            (*args, min(int(limit), 30)),
         )
     return rows
 
@@ -294,7 +298,8 @@ def report_body(report_id):
         row = pg.fetch_one(
             (
                 "SELECT report_id, title, org_name, publish_date, market, target,"
-                "        industry, content_text, analysis_json, source, extraction_status, file_path "
+                "        industry, symbols, content_text, content_chars, analysis_json, source, "
+                "        extraction_status, file_name, file_path "
                 "FROM fin.report_meta WHERE report_id=%s "
                 "AND COALESCE(source,'') NOT IN ('zsxq_topic','zsxq_topic_pdf_absent')"
             ),

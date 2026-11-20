@@ -70,7 +70,25 @@ test('SSE preserves Chinese and final unterminated frames across byte chunks', a
   }))
   const stream = sseStream('/stream', {}, (event) => received.push(event))
   await stream.promise
+  assert.equal(stream.signal.aborted, false)
   assert.deepEqual(received, [{ type: 'delta', text: '中文' }, { type: 'done' }])
+})
+
+test('a user stop remains distinguishable from an early end of the response', async () => {
+  globalThis.fetch = async (_path, { signal }) => new Response(new ReadableStream({
+    start(controller) {
+      signal.addEventListener('abort', () => controller.error(signal.reason), { once: true })
+    },
+  }))
+  const stopped = sseStream('/stream', {}, () => {})
+  stopped.abort()
+  await stopped.promise
+  assert.equal(stopped.signal.aborted, true)
+
+  globalThis.fetch = async () => new Response('')
+  const interrupted = sseStream('/stream', {}, () => {})
+  await interrupted.promise
+  assert.equal(interrupted.signal.aborted, false)
 })
 
 test('report list and details forward AbortSignal without changing query contracts', async () => {

@@ -2,7 +2,7 @@
 
 > 智能投研助手平台公网访问方案（Cloudflare Tunnel）
 > 平台本地服务 → 公网域名 `<your-domain>`
-> 文档更新：2026-08-30
+> 文档更新：2026-11-20
 
 ## 一、方案概述
 
@@ -12,7 +12,7 @@
 用户浏览器 ──HTTPS──> Cloudflare 边缘节点 ──加密隧道──> 本机 cloudflared 服务
                                                       │
                                                       ▼
-                                              127.0.0.1:8208 (uvicorn)
+                                              127.0.0.1:9001 (uvicorn)
 ```
 
 **选型理由**（相对其他方案的对比结论）：
@@ -38,21 +38,21 @@
 | 主域名 | `<your-domain>`（Cloudflare Registrar 注册，真实地址见本地 .env/hosts） |
 | 访问地址 | **<your-domain>** |
 | Public Hostname | Subdomain `app` + Domain `<your-domain>` |
-| Service | `HTTP` → `localhost:8208` |
+| Service | `HTTP` → `localhost:9001` |
 | SSL | Cloudflare 自动签发（Edge Certificates，全额 TLS） |
 
 ### 本机组件
 
 | 组件 | 配置 | 开机自启 |
 |------|------|:-:|
-| 后端服务 | uvicorn `app:app`，监听 **127.0.0.1:8208**（仅回环） | ✅ 计划任务 `AIAssistantServer`（登录时触发） |
+| 后端服务 | uvicorn `app:app`，监听 **127.0.0.1:9001**（仅回环） | 计划任务 `AIAssistantServer` 已配置 9001，目前禁用 |
 | 隧道客户端 | cloudflared 2026.8.2，Windows 服务 `cloudflared` | ✅ StartType=Automatic（随系统启动，无需登录） |
 | 隧道凭证 | token 存于 `C:\ProgramData\cloudflared\token`（token-file 方式） | — |
 | 隧道连接器 | ID `d2a2a474-7f4e-4733-b09c-c11195d2f371`，HA 连接 ×4 | — |
 
 ### 安全状态
 
-- 后端只监听 `127.0.0.1`：**局域网内其他设备无法直接访问 8208**，公网流量只能经 Cloudflare 隧道进入
+- 后端只监听 `127.0.0.1`：**局域网内其他设备无法直接访问 9001**，公网流量只能经 Cloudflare 隧道进入
 - 平台自带 JWT 登录鉴权（所有 `/api/*` 需 Bearer Token，详见 `api/middleware.py` 白名单）
 - HTTPS 由 Cloudflare 边缘终结，浏览器到边缘全程加密
 
@@ -67,7 +67,7 @@
 curl http://127.0.0.1:20241/ready
 
 # 2. 本地服务是否在跑
-curl http://127.0.0.1:8208/health
+curl http://127.0.0.1:9001/health
 ```
 
 公网验证：浏览器访问 `<your-domain>/health` 返回 `{"status":"ok",...}`。
@@ -78,22 +78,22 @@ curl http://127.0.0.1:8208/health
 # 隧道服务
 Get-Service cloudflared            # 状态查看
 Restart-Service cloudflared        # 重启隧道（改 Public Hostname 后一般不需要）
-Start-ScheduledTask AIAssistantServer   # 手动拉起后端（开机登录后自动执行）
+.venv/Scripts/python.exe run_server.py
 ```
 
 ### 开机时序
 
 1. 系统启动 → Windows 服务 `cloudflared` 自启（无需登录，隧道先就绪）
-2. 用户登录 → 计划任务 `AIAssistantServer` 拉起后端（uvicorn）
+2. 用户登录 → 在任务已启用时由 `AIAssistantServer` 拉起后端，当前可使用上面的命令启动
 3. 两者就绪后域名可达（预计开机后 1~2 分钟内）
 
 ### 常见问题
 
 | 现象 | 排查 |
 |------|------|
-| 域名打不开 | ① `curl http://127.0.0.1:8208/health`——不通则后端没起（看计划任务/重启电脑后是否登录）② `curl http://127.0.0.1:20241/ready`——不通则隧道断了（`Restart-Service cloudflared`）③ 都通则查 Cloudflare 控制台 Tunnel 状态与 Public Hostname 配置 |
+| 域名打不开 | ① `curl http://127.0.0.1:9001/health`——不通则后端没起（看计划任务/重启电脑后是否登录）② `curl http://127.0.0.1:20241/ready`——不通则隧道断了（`Restart-Service cloudflared`）③ 都通则查 Cloudflare 控制台 Tunnel 状态与 Public Hostname 配置 |
 | 电脑重启后域名慢 | cloudflared 无需登录即自启，但后端要等用户登录计划任务；1~2 分钟后自愈 |
-| 想换端口 | 改两处：计划任务 `AIAssistantServer` 参数的 `--port`，以及 Cloudflare 控制台 Service 的 URL |
+| 想换端口 | 更新 `config.yaml` 的 `app.port`、Vite 的 `/api` 代理和 Cloudflare 控制台 Service URL。若启动命令显式传入 `--port`，也要同步更新。 |
 | 忘记 admin 密码 | 见下文「账号安全」的 reset 方法 |
 
 ---
@@ -111,6 +111,18 @@ Start-ScheduledTask AIAssistantServer   # 手动拉起后端（开机登录后�
 > 桌面图标既是启动器也是**日志查看器**。
 > 注意：bat 内容为纯 ASCII（中文会导致 GBK 控制台断句错误）；计时用 `ping`（`timeout` 命令
 > 会被 Git Bash 环境劫持失效）。
+
+### 健康哨兵
+
+投研平台监听本机 9001，健康哨兵监听本机 9000，供本机管理监控使用。
+哨兵独立运行，读取 `config.yaml` 中的 `app.port`，定期访问平台的 `/health`。
+访问 `http://127.0.0.1:9000/` 可查看最新状态，`/state` 返回 JSON，`/ws` 推送心跳和状态变化。
+
+```powershell
+.venv/Scripts/python.exe -m workflows.runtime.health_sentinel --no-auto-restart --no-wecom-guard
+```
+
+以上启动命令只监控投研平台。允许哨兵自动拉起平台时，可移除 `--no-auto-restart`，并由哨兵所在部署目录的 `run_server.py` 启动服务。
 
 ## 四、账号安全（重要）
 
@@ -144,7 +156,7 @@ Start-ScheduledTask AIAssistantServer   # 手动拉起后端（开机登录后�
    ```
    装完即 Windows 服务，随开机自启
 4. **配路由**：控制台该隧道 → Public Hostname → Add：
-   Subdomain `app` / Domain `<your-domain>` / Type `HTTP` / URL `localhost:8208`
+   Subdomain `app` / Domain `<your-domain>` / Type `HTTP` / URL `localhost:9001`
 5. **后端加固**：后端只绑回环 `--host 127.0.0.1`（本仓库的 `AIAssistantServer` 计划任务已是此配置）
 6. 验证：`https://app.<域名>/health` 返回 ok
 

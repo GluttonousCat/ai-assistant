@@ -2,8 +2,7 @@
 """
 Report body Chinese translation (English original → report_meta.content_text_cn)
 
-- Ingestion path: after deep extraction, spawn_translate() starts a background
-  thread (same pattern as chain extraction; failure does not affect the main flow);
+- The ingestion and backfill paths enqueue translations for the off-peak worker.
 - Translation scope: the first _MAX_SRC_CHARS characters of the body, aligned with
   the deep-extraction window (the frontend detail page only shows the first 8000
   chars; translating the tail of an overlong original adds no reading value and
@@ -17,10 +16,10 @@ from __future__ import annotations
 
 import re
 import threading
-from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional
 
 from core.logger import get_logger
+from core.offpeak import OffPeakEnded
 from tools.finance import report_text
 from skills.report.prompts import TRANSLATE_PROMPT
 
@@ -86,6 +85,8 @@ def translate_body(text: str) -> str:
                     or ""
                 ).strip()
                 break
+            except OffPeakEnded:
+                raise
             except Exception as e:
                 if attempt == 3:
                     raise
@@ -123,16 +124,9 @@ def translate_report(report_id: int) -> bool:
 
 
 def spawn_translate(report_id: int) -> None:
-    """Background translation on the ingestion path (fire-and-forget, failures only logged)"""
-
-    def _job():
-        try:
-            if translate_report(report_id):
-                logger.info(f"#{report_id} 正文中文翻译完成")
-        except Exception as e:
-            logger.warning(f"#{report_id} 正文翻译失败: {e}")
-
-    threading.Thread(target=_job, daemon=True, name=f"translate-{report_id}").start()
+    """Submit translation for the next off-peak worker pass."""
+    from core.offpeak_queue import enqueue
+    enqueue("report_translate", report_id=report_id)
 
 
 def backfill(limit: int = 0, workers: int = 3) -> None:
@@ -142,24 +136,9 @@ def backfill(limit: int = 0, workers: int = 3) -> None:
     todo = [r["report_id"] for r in rows if is_en_text(r["head"])]
     if limit:
         todo = todo[:limit]
-    logger.info(f"正文待补译 {len(todo)} 篇 (workers={workers})")
-
-    def _safe(rid: int) -> bool:
-        # a single failure (timeout ceiling/gateway jitter) is only logged, the
-        # whole batch continues
-        try:
-            return translate_report(rid)
-        except Exception as e:
-            logger.warning(f"#{rid} 补译异常跳过: {str(e)[:80]}")
-            return False
-
-    done = 0
-    with ThreadPoolExecutor(max_workers=workers) as ex:
-        for ok in ex.map(_safe, todo):
-            done += 1 if ok else 0
-    print(
-        f"补译完成: {done}/{len(todo)} 篇写入 content_text_cn (失败篇目可重跑本命令续译)"
-    )
+    for report_id in todo:
+        spawn_translate(report_id)
+    print(f"已提交 {len(todo)} 篇正文，等待闲时补译。")
 
 
 if __name__ == "__main__":
@@ -169,6 +148,6 @@ if __name__ == "__main__":
     get_config()  # load .env into the process environment (prerequisite for storage/LLM standalone use)
     ap = argparse.ArgumentParser(description="研报正文存量补译 (英文→content_text_cn)")
     ap.add_argument("--limit", type=int, default=0, help="最多处理篇数 (0=全部)")
-    ap.add_argument("--workers", type=int, default=3, help="并发翻译线程数")
+    ap.add_argument("--workers", type=int, default=3, help="兼容旧命令，实际并发由闲时执行器管理")
     a = ap.parse_args()
     backfill(a.limit, a.workers)

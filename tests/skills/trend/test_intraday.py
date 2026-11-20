@@ -107,3 +107,40 @@ def test_chart_does_not_interpolate_missing_today_factor(monkeypatch):
     monkeypatch.setattr(intraday, "scan_inputs", lambda *args: minute)
     result = intraday.chart("600000.SH", "2026-11-17_1130")
     assert result["data"] == [] and "因子缺失" in result["issue"]
+
+
+def test_new_watch_is_first_verified_qualification_of_an_existing_structure():
+    origin = {"origin": "2026-11-16T11:30:00"}
+    rows = [{"ts_code": code, "score": 72., "trend60": origin} for code in "ABCD"]
+    yesterday = {"as_of": "2026-11-16 15:00:00", "data": [
+        {**rows[0], "score": 71.9}, rows[1]
+    ]}
+    earlier = {"as_of": "2026-11-17 10:30:00", "data": [rows[0]],
+               "scan_status": {"B": "data_missing", "C": "filtered", "D": "data_missing"}}
+    intraday.mark_watch_entries(rows, [yesterday, earlier], "2026-11-17 11:30:00")
+    assert [(r["new_today"], r["watch_status"], r["watch_since"]) for r in rows] == [
+        (True, "newly_qualified", earlier["as_of"]), (False, "continued", yesterday["as_of"]),
+        (True, "newly_qualified", "2026-11-17 11:30:00"), (False, "unknown", None)
+    ]
+
+
+def test_watch_time_is_separate_from_origin_and_uses_no_later_round():
+    row = {"ts_code": "A", "score": 72., "trend60": {"origin": "2026-11-17T10:30:00"}}
+    earlier = {"as_of": "2026-11-17 10:30:00", "data": [{**row, "score": 71.9}]}
+    later = {"as_of": "2026-11-17 14:00:00", "data": [row]}
+    intraday.mark_watch_entries([row], [earlier, later], "2026-11-17 11:30:00")
+    assert row["new_today"] and row["watch_since"] == "2026-11-17 11:30:00"
+    assert row["trend60"]["origin"] == "2026-11-17T10:30:00"
+    row["score"] = 71.9
+    intraday.mark_watch_entries([row], [earlier], "2026-11-17 11:30:00")
+    assert not row["new_today"] and row["watch_status"] == "below_threshold"
+
+
+def test_falling_adjusted_short_average_skips_full_structure_scan(monkeypatch):
+    minute, daily = inputs()
+    minute = pd.concat([minute.iloc[[0]]] * 9, ignore_index=True)
+    minute["bar_end"] = pd.date_range(end="2026-11-17 11:30", periods=9, freq="h")
+    minute["close"] = range(20, 11, -1)
+    monkeypatch.setattr(intraday, "minute_context", lambda *args: pytest.fail("unnecessary reconstruction"))
+    row = intraday.observe(minute, daily, "2026-11-17 11:30", "2026-11-16 15:00", {"fresh_reversal": True})
+    assert row["status"] == "filtered" and "短均线" in row["issue"]

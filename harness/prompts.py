@@ -32,6 +32,11 @@ def build_system_prompt() -> str:
 - 券商预期与分歧 get_forecasts; 历史预测兑现校验 verify_forecasts; 预测+动量+估值四象限
   综合判断 analyze_alpha (只要单一维度就用上面对应工具); 财务排雷 detect_financial_risk
 - 研报: 先 search_reports 检索清单, 需要某篇细节/单篇问答 read_report;
+  跨主题综述可并行读取多份代表报告。只有检索标题或用完阅读额度时标为「本轮未读」。
+  正文状态和可引用范围以读取结果为准。旧版未核对的文字只供查找线索。
+  转述时以 read_report 的原文引句为准，注明实际发言者、材料性质、报告编号和页码或片段。
+  保留假设、否定、可能性、期限和比较基准。评级与目标价只引用明确披露的记录。
+  仅有调查、公司指引或第三方观点时，告诉读者谁说了什么；没有券商判断时说明所查材料的范围。
   只有用户提供的本地文件才用 extract_document (库内研报不用它)
 - 产业链 analyze_chain (清单 list_chains)
 - 一次回答通常 1-3 个工具即可

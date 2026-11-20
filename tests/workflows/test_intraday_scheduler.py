@@ -188,3 +188,33 @@ def test_after_eod_start_selects_prior_daily_snapshot(tmp_path, monkeypatch):
     manifest = session_manifest(tmp_path, "2026-11-17")
     assert manifest["snapshot_run_id"] == "prior" and len(manifest["universe"]) == 1
     assert seen == ["2026-11-16 23:59:59"]
+
+
+def test_scan_requires_full_universe_and_successful_followup_before_publish(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from workflows.market import scan_intraday as scan
+
+    folder = tmp_path / "output/market/intraday_watch/2026-11-17_1130"
+    member = {"ts_code": "600000.SH", "name": "标的"}
+    manifest = {"limited": True, "snapshot_run_id": "prior", "universe": [member]}
+    write_json(folder / "collection.json", manifest)
+    write_json(folder / "audit.json", {"total": 1, "complete": 1, "failed": []})
+    monkeypatch.setattr(scan, "get_config", lambda: SimpleNamespace(root_dir=tmp_path))
+    with pytest.raises(ValueError, match="限量"):
+        scan.run.__wrapped__("2026-11-17")
+    write_json(folder / "collection.json", {**manifest, "limited": False})
+    monkeypatch.setattr(scan, "load_dashboard", lambda *a: {"metadata": {"start": "2026-01-01", "config": {}},
+                                                            "run_id": "prior", "as_of": "2026-11-16 15:00:00"})
+    monkeypatch.setattr(scan, "batch", lambda *a: [{**member, "status": "filtered"}])
+    monkeypatch.setattr(scan, "intraday_report", lambda run_id: None)
+    monkeypatch.setattr(scan, "publish_report", lambda *a: pytest.fail("unreviewed report published"))
+
+    def unavailable(report):
+        raise ConnectionError("backend unavailable")
+
+    monkeypatch.setattr(scan, "build_followup", unavailable)
+    with pytest.raises(RuntimeError, match="历史信号审核未完成"):
+        scan.run.__wrapped__("2026-11-17")
+    progress = read_json(folder / "analysis_progress.json")
+    assert progress["status"] == "followup_pending" and progress["error_type"] == "ConnectionError"
+    assert not (folder / "report.json").exists()

@@ -39,6 +39,7 @@ from tools.finance.report_extractor import get_extractor
 from core.helpers import strip_zsxq_tags, is_chinese_translated
 
 from core.paths import PathManager
+from core.offpeak_queue import enqueue
 
 # Max length of extracted report text (avoids oversized files filling the PG
 # column; keeps only the head with the core content)
@@ -76,8 +77,7 @@ class ZSXQ2PGSync:
     def run(self) -> list:
         """
         Incremental sync sqlite -> PG. Returns the list of report_ids newly ingested
-        this run (for the download pipeline to run per-report LLM analysis on them
-        immediately).
+        this run. Ready documents are queued after each committed attachment.
         """
         if not os.path.exists(self.db_path) and self.files_db is None:
             logger.error(f"话题库/文件库均不存在: {self.db_path}")
@@ -189,6 +189,8 @@ class ZSXQ2PGSync:
                 )
                 if report_id:
                     self._new_ids.append(report_id)
+                    if path and name.lower().endswith((".pdf", ".docx", ".doc")):
+                        enqueue("report_extract", report_id=report_id)
                 processed += 1
                 if limit and processed >= limit:
                     return

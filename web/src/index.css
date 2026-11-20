@@ -236,7 +236,7 @@ table.grid tbody td:last-child { border-right: 1px solid var(--border); border-r
   padding: 36px 36px 26px;
 }
 .login-brand { text-align: center; margin-bottom: 22px; }
-.login-brand .logo-mark { font-size: 30px; color: var(--accent); }
+.login-brand .logo-mark { display: block; margin: 0 auto 10px; }
 .login-brand h1 {
   margin: 8px 0 12px; font-size: 24px; letter-spacing: 1px;
   background: linear-gradient(90deg, #d99178, #ad5e48);
@@ -258,9 +258,9 @@ table.grid tbody td:last-child { border-right: 1px solid var(--border); border-r
 .login-msg.ok { background: rgba(16, 185, 129, 0.12); color: #34d399; }
 
 /* ---------- 平台主框架 ---------- */
-.platform { display: flex; height: 100vh; height: 100dvh; overflow: hidden; }
+.platform { --nav-rail-width: 78px; display: flex; height: 100vh; height: 100dvh; overflow: hidden; }
 .sidebar {
-  width: 216px; flex-shrink: 0;
+  width: 260px; flex-shrink: 0;
   display: flex; flex-direction: column;
   background: linear-gradient(180deg, #131a24, #0e1117);
   border-right: 1px solid var(--border);
@@ -270,7 +270,7 @@ table.grid tbody td:last-child { border-right: 1px solid var(--border); border-r
   display: flex; align-items: center; gap: 8px; min-height: 82px; flex-shrink: 0;
   padding: 16px 10px 16px 14px; border-bottom: 1px solid var(--border);
 }
-.side-brand .logo-mark { color: var(--accent); font-size: 20px; flex-shrink: 0; }
+.side-brand .logo-mark { color: var(--accent-soft); font-size: 20px; flex-shrink: 0; }
 .brand-copy { flex: 1; min-width: 0; }
 .side-brand .brand-name { font-weight: 700; font-size: 15px; }
 .side-brand .brand-sub { font-size: 11px; color: var(--text-dim); }
@@ -287,6 +287,8 @@ table.grid tbody td:last-child { border-right: 1px solid var(--border); border-r
 .side-nav button:hover { background: var(--bg-3); color: var(--text); }
 .side-nav button.on { background: rgba(74, 163, 255, 0.14); color: var(--accent); font-weight: 600; }
 .nav-icon { width: 18px; flex-shrink: 0; text-align: center; }
+.sidebar-expanded .side-nav button { justify-content: flex-start; padding-inline-start: 50px; gap: 16px; }
+.side-nav .nav-label { font-size: 16px; line-height: 1.5; letter-spacing: .08em; }
 .side-foot { padding: 14px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 10px; }
 .user-chip { display: flex; align-items: center; gap: 10px; }
 .user-meta { min-width: 0; }
@@ -302,19 +304,23 @@ table.grid tbody td:last-child { border-right: 1px solid var(--border); border-r
 .logout-icon { flex-shrink: 0; }
 .main { flex: 1; min-width: 0; overflow: auto; }
 .sidebar-backdrop { display: none; }
-.sidebar.is-collapsed { width: 64px; }
+.sidebar.is-collapsed { width: var(--nav-rail-width); }
 .sidebar.is-collapsed .brand-copy, .sidebar.is-collapsed .side-brand .logo-mark,
 .sidebar.is-collapsed .nav-label, .sidebar.is-collapsed .user-meta { display: none; }
 .sidebar.is-collapsed .side-brand { justify-content: center; padding: 16px 8px; }
 .sidebar.is-collapsed .side-nav { padding: 14px 8px; }
-.sidebar.is-collapsed .side-nav button { justify-content: center; padding: 11px 0; }
+.sidebar.is-collapsed .side-nav button { justify-content: center; min-height: 44px; padding: 11px 0; }
 .sidebar.is-collapsed .nav-icon { font-size: 18px; }
 .sidebar.is-collapsed .side-foot { padding: 14px 8px; }
 .sidebar.is-collapsed .user-chip { justify-content: center; }
 .sidebar.is-collapsed .logout-btn { padding: 8px 0; }
+@media (min-width: 1201px) {
+  .platform { --nav-rail-width: 88px; }
+  .sidebar.is-collapsed .side-nav, .sidebar.is-collapsed .side-foot { padding-inline: 12px; }
+}
 @media (max-width: 700px) {
   .platform.sidebar-expanded .sidebar { position: fixed; inset: 0 auto 0 0; z-index: 40; box-shadow: 12px 0 32px #0008; }
-  .platform.sidebar-expanded .main { margin-left: 64px; }
+  .platform.sidebar-expanded .main { margin-left: var(--nav-rail-width); }
   .sidebar-backdrop { display: block; position: fixed; inset: 0; z-index: 39; border: 0; padding: 0; background: #0008; cursor: pointer; }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -347,31 +353,6 @@ table.grid tbody td:last-child { border-right: 1px solid var(--border); border-r
   padding: 18px 6px 8px;
   display: flex; flex-direction: column; gap: 16px;
 }
-.chat-window-pad { height: 4px; flex-shrink: 0; }
-/* 空状态 */
-.chat-empty {
-  text-align: center; padding: 9vh 20px 40px; color: var(--text-dim);
-  animation: msg-in 0.3s ease-out;
-}
-.chat-empty-icon {
-  width: 58px; height: 58px; margin: 0 auto 16px;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 24px; color: var(--accent-soft);
-  background: rgba(173, 94, 72, 0.12);
-  border: 1px solid rgba(217, 145, 120, 0.25);
-  border-radius: 18px;
-}
-.chat-empty h3 { margin: 0 0 6px; font-size: 20px; color: var(--text); }
-.chat-empty p { margin: 0; font-size: 13px; }
-.chat-examples { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; margin-top: 18px; }
-.chat-examples button {
-  display: inline-flex; align-items: center; gap: 7px;
-  background: var(--bg-2); border: 1px solid var(--border); color: var(--text);
-  border-radius: 20px; padding: 9px 16px; font-size: 13px; cursor: pointer;
-  transition: border-color 0.15s, transform 0.1s, background 0.15s;
-}
-.chat-examples .ex-icon { font-size: 14px; }
-.chat-examples button:hover { border-color: var(--accent); background: var(--bg-3); transform: translateY(-1px); }
 /* 回答类型徽章 (SSE intent -> 图标) */
 .chat-type-badge {
   display: inline-flex; width: fit-content; align-items: center; gap: 6px;
@@ -498,16 +479,6 @@ table.grid tbody td:last-child { border-right: 1px solid var(--border); border-r
 .chat-table tbody td:last-child { border-right: none; border-radius: 0; }
 .chat-table tbody tr:last-child td { border-bottom: none; }
 /* 回到底部按钮 (上翻查看历史时出现) */
-.chat-jump {
-  position: absolute; right: 34px; bottom: 96px;
-  width: 36px; height: 36px; border-radius: 50%;
-  background: var(--bg-3); border: 1px solid var(--border);
-  color: var(--accent-soft); font-size: 15px; cursor: pointer;
-  box-shadow: var(--shadow); z-index: 5;
-  transition: transform 0.12s, border-color 0.15s;
-  animation: msg-in 0.15s ease-out;
-}
-.chat-jump:hover { transform: translateY(-2px); border-color: var(--accent); }
 /* 输入区 */
 .chat-inputbar { padding: 12px 2px 18px; }
 .chat-input-shell {
@@ -521,12 +492,6 @@ table.grid tbody td:last-child { border-right: 1px solid var(--border); border-r
   border-color: rgba(217, 145, 120, 0.65);
   box-shadow: 0 0 0 3px rgba(173, 94, 72, 0.14), 0 10px 28px rgba(0, 0, 0, 0.35);
 }
-.chat-input-shell input {
-  flex: 1; min-width: 0; background: transparent; border: none; outline: none;
-  color: var(--text); font-size: 14px; padding: 10px 0;
-}
-.chat-input-shell input::placeholder { color: var(--text-dim); opacity: 0.75; }
-.chat-input-shell .btn { border-radius: 10px; padding: 9px 18px; }
 
 /* ---------- 研报中心 ---------- */
 .report-modal { width: 900px; }
@@ -548,6 +513,7 @@ table.grid tbody td:last-child { border-right: 1px solid var(--border); border-r
 .research-insights dt, .research-insights summary { color: var(--text-dim); font-size: 12px; }
 .research-insights dt { flex: none; }
 .research-insights dd { margin: 0; }
+.claim-labels { font-size: 12px; color: var(--accent-soft); font-weight: 600; margin-bottom: 2px; }
 .report-meta {
   display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
   color: var(--text-dim); font-size: 13px; margin: 6px 0 14px;
@@ -676,7 +642,6 @@ table.grid tbody td:last-child { border-right: 1px solid var(--border); border-r
   background: linear-gradient(180deg, #141010, #0a0a0a);
   border-right: 1px solid var(--border);
 }
-.side-brand .logo-mark { color: var(--accent-soft); }
 .side-nav button.on {
   background: rgba(173, 94, 72, 0.16); color: var(--accent-soft);
 }

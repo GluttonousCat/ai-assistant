@@ -3,6 +3,7 @@
 from workflows.market.daily_scheduler import get_scheduler
 from workflows.market.digest_scheduler import get_digest_scheduler, get_midday_scheduler
 from workflows.market.intraday_scheduler import get_intraday_scheduler
+from workflows.reports.morning_scheduler import get_report_digest_scheduler
 
 
 class BackendOperations:
@@ -14,6 +15,7 @@ class BackendOperations:
             **get_scheduler().status(),
             "mail_digest": get_digest_scheduler().status(),
             "midday_digest": get_midday_scheduler().status(),
+            "report_digest": get_report_digest_scheduler().status(),
             "intraday_watch": get_intraday_scheduler().status(),
         }
 

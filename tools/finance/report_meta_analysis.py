@@ -34,6 +34,7 @@ import re
 from typing import Any, Dict, Optional
 
 from core.config import get_config
+from core.offpeak import OffPeakEnded, check_model_window
 from core.logger import get_logger
 from storage.pg import PgClient
 from storage.pg_schema import ensure_report_analysis_columns
@@ -160,6 +161,8 @@ def analyze_report_meta(report_id: int, pg: Optional[PgClient] = None,
             return False
 
         client, model = _get_llm()
+        if check_model_window():
+            client = client.with_options(max_retries=0)
         # Thinking switch/budget sourced identically to LLMClient (config llm.enable_thinking / llm.max_tokens)
         resp = client.chat.completions.create(
             model=model,
@@ -221,6 +224,8 @@ def analyze_pending(limit: int = 50, force: bool = False,
         try:
             if analyze_report_meta(rid, force=force):
                 n += 1
+        except OffPeakEnded:
+            raise
         except Exception as e:
             logger.warning(f"#{rid} LLM Analysis 失败: {e}")
     return n

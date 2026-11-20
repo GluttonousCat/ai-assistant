@@ -7,7 +7,8 @@ from functools import lru_cache
 import pandas as pd
 
 from core.logger import get_logger
-from skills.trend.intraday_followup import build_followup
+from skills.trend import MIN_CANDIDATE_SCORE
+from skills.trend.intraday_followup import build_followup, visible_followup
 from skills.trend.mtf import MtfConfig, minute_context
 from skills.trend.parent_context import annotate_summary
 from skills.trend.chart_history import five_year_start
@@ -20,12 +21,53 @@ def rank_candidates(rows):
     return sorted(rows, key=lambda row: (-row["score"], row["ts_code"]))
 
 
+def mark_watch_entries(rows, previous_rounds, cutoff):
+    """Date the current watch using only confirmed observations available at the cutoff."""
+    day = cutoff[:10]
+    state = {}
+    codes = {row["ts_code"] for row in rows}
+
+    def record(row, stamp):
+        code = row["ts_code"]
+        if row["score"] < MIN_CANDIDATE_SCORE:
+            state[code] = ("below_threshold", None, None)
+            return
+        origin = str((row.get("trend60") or {}).get("origin") or "").replace("T", " ")
+        prior, _, old_origin = state.get(code, ("unknown", None, None))
+        if origin and origin == old_origin:
+            return
+        if origin[:10] == stamp[:10]:
+            state[code] = ("new_structure", stamp, origin)
+        elif prior == "below_threshold":
+            state[code] = ("newly_qualified", stamp, origin)
+        else:
+            state[code] = ("continued" if stamp[:10] < day else "unknown", None, origin)
+
+    for report in previous_rounds:
+        stamp = report["as_of"]
+        if stamp >= cutoff:
+            continue
+        statuses = report.get("scan_status", {})
+        for code in codes:
+            if statuses.get(code) == "filtered":
+                state[code] = ("below_threshold", None, None)
+        for row in report["data"]:
+            if row["ts_code"] in codes:
+                record(row, stamp)
+    for row in rows:
+        record(row, cutoff)
+        status, since, _ = state[row["ts_code"]]
+        new_today = bool(since and since[:10] == day)
+        row.update(new_today=new_today, watch_since=since,
+                   watch_status="continued" if since and not new_today else status)
+
+
 @lru_cache(maxsize=4)
 def _legacy_followup(run_id, created_at):
     report = intraday_report(run_id)
     if not report or report.get("created_at") != created_at:
         return None
-    return build_followup(report)
+    return visible_followup(build_followup(report), report["as_of"])
 
 
 def dashboard():
@@ -99,6 +141,13 @@ def observe(minute, daily, cutoff, daily_cutoff, config):
     if pd.Timestamp(daily.bar_end.max()) >= pd.Timestamp(cutoff).normalize():
         raise ValueError("盘中观察只能使用此前已完成的日K背景")
     cfg = MtfConfig(**config)
+    # A rising M8 is mandatory for a fresh reversal. Its one-bar change equals
+    # (close[t] - close[t-8]) / 8. Skip full state reconstruction on clear declines.
+    if cfg.fresh_reversal and len(minute) > cfg.fast:
+        recent = minute.tail(cfg.fast + 1)
+        prior_close = float(recent.close.iloc[0])
+        if minute.bar_end.is_unique and recent.close.iloc[-1] < prior_close * (1 - 1e-10):
+            return {"status": "filtered", "issue": "60F短均线尚未转升"}
     evaluated = minute_context(minute, cfg)
     last = evaluated.iloc[-1]
     if not cfg.fresh_reversal or not bool(last.get("reversal_fresh", False)):

@@ -1,9 +1,5 @@
 # -*- encoding: utf-8 -*-
-"""
-@date: 2026/03/25
-@file: calendar.py
-@author: GluttonousCat
-"""
+"""Trading calendar helpers."""
 from __future__ import annotations
 
 import pandas as pd

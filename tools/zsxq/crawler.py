@@ -1,9 +1,5 @@
 # -*- encoding: utf-8 -*-
-"""
-@file: crawler.py
-@date: 2026/04/10
-@author: GluttonousCat
-"""
+"""Collect and store group topics."""
 import logging
 
 import requests

@@ -75,16 +75,18 @@ def collect(day, cutoff="11:30", workers=4, limit=0):
     now = datetime.now(ZoneInfo("Asia/Shanghai"))
     if cutoff not in SLOTS or day != str(now.date()) or pd.Timestamp(f"{day} {cutoff}") > pd.Timestamp(now).tz_localize(None):
         raise ValueError("仅采集今天已经完成的原生60F时点")
-    folder = Path(cfg.root_dir) / "output" / "market" / "intraday_watch" / f"{day}_{cutoff.replace(':', '')}"
+    root = Path(cfg.root_dir) / "output" / "market" / "intraday_watch"
+    run_id = f"{day}_{cutoff.replace(':', '')}"
+    folder = root / "samples" / f"{run_id}_{limit}" if limit else root / run_id
     folder.mkdir(parents=True, exist_ok=True)
     with file_lock(folder / "collection.lock") as acquired:
         if not acquired:
             raise RuntimeError("已有同批盘中采集在运行")
         manifest = read_json(folder / "collection.json", strict=True)
-        if manifest:
+        if manifest and (limit or not manifest.get("limited")):
             members = manifest["universe"]
         else:
-            session = session_manifest(folder.parent, day)
+            session = session_manifest(root, day)
             members = session["universe"]
             if limit:
                 members = members[:limit]

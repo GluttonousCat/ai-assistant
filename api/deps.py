@@ -14,12 +14,14 @@ Depends; these dependencies are for endpoints that need user identity/role.
 
 from __future__ import annotations
 
+from asyncio import to_thread
 from typing import Optional, Protocol
 
 from fastapi import Depends, HTTPException, Request, WebSocket
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from core.security import TokenPayload, decode_token
+from tools.auth.users import active_role
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -46,30 +48,38 @@ def _extract_token(authorization: Optional[str]) -> Optional[str]:
     return None
 
 
+def resolve_session(token: str) -> Optional[TokenPayload]:
+    payload = decode_token(token)
+    if payload is None:
+        return None
+    try:
+        row = active_role(payload.user_id)
+    except Exception as error:
+        raise HTTPException(503, "暂时无法核验账户，请稍后重试") from error
+    if not row or row["username"] != payload.username:
+        return None
+    payload.role = row["role"]
+    return payload
+
+
 def get_current_user(
+    request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
 ) -> TokenPayload:
     """Validate the Bearer token; raises 401 on failure"""
     token = credentials.credentials if credentials else None
     if not token:
         raise HTTPException(status_code=401, detail="未登录")
-    payload = decode_token(token)
+    payload = getattr(request.state, "current_user", None) or resolve_session(token)
     if payload is None:
         raise HTTPException(status_code=401, detail="登录已失效, 请重新登录")
     return payload
 
 
 def require_admin(current: TokenPayload = Depends(get_current_user)) -> TokenPayload:
-    """Admin check: the live DB role is authoritative (token role is not trusted, so demotion takes effect immediately)"""
-    from tools.auth.users import active_role
-
-    try:
-        row = active_role(current.user_id)
-    except Exception:
-        row = None
-    if not row or row.get("role") != "admin":
+    """The role was read from the active account for this request."""
+    if current.role != "admin":
         raise HTTPException(status_code=403, detail="需要管理员权限")
-    current.role = "admin"
     return current
 
 
@@ -80,4 +90,4 @@ async def ws_auth(websocket: WebSocket) -> Optional[TokenPayload]:
         token = websocket.query_params.get("token")
     if not token:
         return None
-    return decode_token(token)
+    return await to_thread(resolve_session, token)

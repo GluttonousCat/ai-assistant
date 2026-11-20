@@ -28,17 +28,20 @@ def _render(panels, *, stop=None, overview=()):
     from matplotlib.collections import LineCollection, PolyCollection
     from matplotlib.figure import Figure
     from matplotlib.font_manager import FontProperties
+    from matplotlib.ticker import MaxNLocator
 
     font_path = Path("C:/Windows/Fonts/msyh.ttc")
     font = FontProperties(fname=str(font_path)) if font_path.exists() else FontProperties(family="DejaVu Sans")
     single = len(panels) == 1
-    height = (6.2 if overview else 5) if single else 9
-    fig = Figure(figsize=(14, height), dpi=110, facecolor="#11100f")
+    # Use a phone-sized composition at high pixel density so tick labels stay
+    # readable when an email client fits the full chart to its viewing width.
+    width, height, dpi = (7, 5.5 if overview else 4.35, 220) if single else (14, 9, 110)
+    fig = Figure(figsize=(width, height), dpi=dpi, facecolor="#11100f")
     canvas = FigureCanvasAgg(fig)
     ratios = [3.8, .85] * len(panels) + ([1.05] if overview else [])
-    grid = fig.add_gridspec(len(ratios), 1, height_ratios=ratios, hspace=.5 if overview else .34,
-                           left=.045, right=.89, top=.91 if single else .95,
-                           bottom=.11 if single else .065)
+    grid = fig.add_gridspec(len(ratios), 1, height_ratios=ratios, hspace=.62 if overview else .34,
+                           left=.045, right=.84 if single else .89, top=.90 if single else .95,
+                           bottom=.10 if single else .065)
     for slot, (detail, title, size, daily) in enumerate(panels):
         rows = detail["data"] if size is None else detail["data"][-size:]
         if not rows:
@@ -48,7 +51,7 @@ def _render(panels, *, stop=None, overview=()):
         for axis in (ax, volume):
             axis.set_facecolor("#11100f")
             axis.yaxis.tick_right()
-            axis.tick_params(colors="#a29a90", labelsize=10, length=0, pad=8)
+            axis.tick_params(colors="#c4c0bc", labelsize=14 if single else 10, length=0, pad=4 if single else 8)
             axis.grid(axis="y", color="#29251f", linewidth=.5)
             axis.set_axisbelow(True)
             for spine in axis.spines.values():
@@ -76,7 +79,7 @@ def _render(panels, *, stop=None, overview=()):
         if daily and stop is not None and ymin <= stop <= ymax:
             ax.axhline(stop, color="#e5a579", linewidth=.8, linestyle="--", alpha=.8)
             ax.text(.01, (stop-ymin)/(ymax-ymin), f"参考止损 {stop:.2f}", transform=ax.transAxes,
-                    color="#e5a579", fontsize=9, fontproperties=font, va="bottom")
+                    color="#e5a579", fontsize=13 if single else 9, fontproperties=font, va="bottom")
         for i, row in enumerate(rows):
             entry = daily and row.get("eligible") is True
             watch = not daily and bool(row.get("reversal_ignition") or row.get("resume_watch"))
@@ -86,23 +89,36 @@ def _render(panels, *, stop=None, overview=()):
                 ax.scatter(i, low[i]-span*.055, color=color, s=40, marker="^" if entry else "o", zorder=6,
                            edgecolors="#11100f", linewidths=.6)
         ax.axhline(close[-1], color="#82745d", linewidth=.65, linestyle=":")
-        ax.text(1.075, (close[-1]-ymin)/(ymax-ymin), f"{close[-1]:.2f}", transform=ax.transAxes,
-                color="#dfb671", fontsize=11, va="center", bbox={"facecolor": "#282115", "edgecolor": "none", "pad": 3})
+        if single:
+            ax.yaxis.set_major_locator(MaxNLocator(nbins=4))
+            volume.yaxis.set_major_locator(MaxNLocator(nbins=2, prune="both"))
+            ax.set_title(f"收盘 {close[-1]:.2f}", fontproperties=font, fontsize=15, color="#f1d29c", loc="left", pad=7)
+        else:
+            ax.text(1.075, (close[-1]-ymin)/(ymax-ymin), f"{close[-1]:.2f}", transform=ax.transAxes,
+                    color="#dfb671", fontsize=11, va="center", bbox={"facecolor": "#282115", "edgecolor": "none", "pad": 3})
+            ax.set_title(title, fontproperties=font, fontsize=13, color="#e9e1d6", loc="left", pad=12)
         ax.set_ylim(ymin, ymax)
         ax.set_xlim(-1, len(rows)+.7)
-        ax.set_title(title, fontproperties=font, fontsize=13, color="#e9e1d6", loc="left", pad=12)
-        ax.legend(loc="upper right", frameon=False, labelcolor="#b9b0a3", fontsize=10, ncol=3)
+        if single:
+            ax.legend(loc="lower right", bbox_to_anchor=(1, 1), borderaxespad=0, frameon=False,
+                      labelcolor="#e5ded2", fontsize=13, ncol=3, handlelength=1, handletextpad=.3, columnspacing=.8)
+        else:
+            ax.legend(loc="upper right", frameon=False, labelcolor="#b9b0a3", fontsize=10, ncol=3)
         ax.tick_params(labelbottom=False)
         amounts = np.asarray([float(r.get("volume") or 0)/10000 for r in rows])
         volume.bar(x, amounts, width=.65, color=colors, alpha=.7)
         volume.set_ylim(0, max(float(amounts.max())*1.25, 1))
-        volume.text(.005, .80, "成交量 / 万股", transform=volume.transAxes, color="#8e867b", fontsize=9, fontproperties=font)
-        ticks = np.unique(np.linspace(0, len(rows)-1, 6).astype(int))
+        volume.text(.005, .80, "成交量 / 万股", transform=volume.transAxes, color="#c4c0bc",
+                    fontsize=13 if single else 9, fontproperties=font)
+        ticks = np.unique(np.linspace(0, len(rows)-1, 3 if single else 6).astype(int))
         volume.set_xticks(ticks)
         volume.set_xticklabels([
             str(rows[i]["bar_end"])[5:16].replace("T", " ") if not daily else
             str(rows[i]["bar_end"])[:(10 if single else 7)] for i in ticks
         ])
+        if single:
+            # The first label otherwise extends beyond the left image edge.
+            volume.get_xticklabels()[0].set_horizontalalignment("left")
     if overview:
         ax = fig.add_subplot(grid[-1], facecolor="#11100f")
         x = np.arange(len(overview))
@@ -111,12 +127,13 @@ def _render(panels, *, stop=None, overview=()):
         ax.plot(x, [r["close"] for r in overview], color="#ac8a55", linewidth=.8)
         ax.axvspan(len(overview) - DIGEST_DAILY_BARS - .5, len(overview) - .5, color="#564630", alpha=.35)
         ax.set_xlim(-.5, len(overview) - .5)
-        ticks = np.unique(np.linspace(0, len(overview) - 1, 6).astype(int))
+        ticks = np.unique(np.linspace(0, len(overview) - 1, 3).astype(int))
         ax.set_xticks(ticks, [str(overview[i]["bar_end"])[:7] for i in ticks])
         ax.set_yticks([])
-        ax.tick_params(axis="x", length=0, labelsize=9, colors="#a29a90", pad=5)
-        ax.set_title("日K历史概览 · 近5年（上市不足按实际）", fontproperties=font,
-                     fontsize=10, color="#b9b0a3", loc="left", pad=6)
+        ax.get_xticklabels()[0].set_horizontalalignment("left")
+        ax.tick_params(axis="x", length=0, labelsize=13, colors="#c4c0bc", pad=5)
+        ax.set_title("日 K 历史概览 · 最长五年", fontproperties=font,
+                     fontsize=13, color="#d5cec3", loc="left", pad=6)
         for spine in ax.spines.values():
             spine.set_visible(False)
     if not single:

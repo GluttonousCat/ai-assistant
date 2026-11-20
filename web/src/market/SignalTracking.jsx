@@ -41,7 +41,7 @@ function TrackingRow({ row, selected, onSelect, daily, signalDate, industries })
   return <tr className={selected ? 'selected' : ''} onClick={onSelect}>
     <td><button className="tracking-stock" onClick={onSelect} aria-pressed={selected}><span className="stock-name-line"><b>{row.name}</b><IndustryLabel code={row.ts_code} industries={industries} /></span><small>{row.ts_code} · {row.board}</small></button>
       <span className={`tracking-state ${row.eligible || row.ever_eligible ? 'entry' : ''}`}>{row.eligible ? '初次入场候选' : row.ever_eligible ? '观察 → 已确认' : '观察候选'}</span>
-      {!daily && <small>{row.in_latest_scan ? '最新扫描仍入选' : '已离开候选 · 继续复盘'}</small>}
+      {!daily && <small>{row.retired_at ? `${row.retired_at.slice(0, 16)} 连续两根60F收破参考位` : row.in_latest_scan ? '最新扫描仍入选' : '已离开候选 · 继续复盘'}</small>}
     </td>
     <td><b>{row.first_seen || signalDate}</b>
       {daily ? <small>单日原始快照</small> : <><small>最近 {row.last_seen} · {row.age_sessions}个交易日</small><small>{row.round_reason}</small><details className="tracking-history" onClick={(e) => e.stopPropagation()}>
@@ -127,7 +127,7 @@ export default function SignalTracking({ revision, industries }) {
     {error && <div className="trend-notice error" role="alert">{error} <button className="btn ghost" onClick={() => setRetry((n) => n + 1)}>重试</button></div>}
     {loading && !error ? <div className="trend-placeholder">正在整理机会轮次与后续行情…</div> : report?.summary && !error ? <>
       <div className="tracking-stats">
-        <div><span>{daily ? '当日候选' : view === 'active' ? '跟踪中的机会' : '已归档机会'}</span><strong>{report.summary.count}<small>{daily ? '只' : '轮'}</small></strong><p>{daily ? '当时评分 ≥60 · 保留原始状态' : `${report.summary.stocks}只股票 · 基准不随每日刷新重置`}</p></div>
+        <div><span>{daily ? '当日候选' : view === 'active' ? '跟踪中的机会' : '已归档机会'}</span><strong>{report.summary.count}<small>{daily ? '只' : '轮'}</small></strong><p>{daily ? `当时评分 ≥${report.tracking_min_score ?? 60} · 保留原始状态` : `${report.summary.stocks}只股票 · 基准不随每日刷新重置`}</p></div>
         <div><span>已有后续行情</span><strong>{report.summary.measured}<small>{daily ? '只' : '轮'}</small></strong><p>未到期与缺数据分别显示</p></div>
         <div><span>最新收盘较首见日上涨</span><strong>{report.summary.positive}<small>/ {report.summary.measured}</small></strong><p>价格方向统计，非交易胜率</p></div>
         <div><span>最新收盘平均变化</span><strong className={tone(report.summary.mean_return_pct)}>{percent(report.summary.mean_return_pct)}</strong><p>不同观察期 · 非组合收益</p></div>
@@ -144,7 +144,7 @@ export default function SignalTracking({ revision, industries }) {
         <th>股票 / 本轮状态</th><th>{daily ? '入选日期' : '首见 / 最近入选'}</th><th>机会 / 首见评分</th><th>后续走势</th>
         {HORIZONS.map((h) => <th key={h}>T+{h}<small>交易日收盘</small></th>)}<th>最新变化<small>实际行情日期</small></th><th>期间最高<small>相对首见日收盘</small></th><th>期间最低<small>相对首见日收盘</small></th>
       </tr></thead><tbody>{rows.map((r) => <TrackingRow key={rowKey(r)} row={r} selected={selection === rowKey(r)} onSelect={() => setSelection(rowKey(r))} daily={daily} signalDate={report.signal_date} industries={industries} />)}</tbody></table>
-        {!rows.length && <div className="trend-placeholder">{view === 'archive' ? '满20个交易日的机会会自动归档；当前没有匹配记录。' : '没有匹配记录，可切换视图或调整筛选条件。'}</div>}
+        {!rows.length && <div className="trend-placeholder">{view === 'archive' ? '暂无符合条件的归档机会。' : '没有匹配记录，可切换视图或调整筛选条件。'}</div>}
       </div>
       {selected && <section className="tracking-chart-panel">
         <header><div><h3>{selected.name} <small>{selected.ts_code}</small><IndustryLabel code={selected.ts_code} industries={industries} /></h3><p>{selected.first_seen || report.signal_date} 首见 · 首次{selected.eligible ? '入场候选' : '观察候选'} · {Number(selected.score).toFixed(1)}分 <OpportunityBadge value={selected} /></p></div>
@@ -159,7 +159,7 @@ export default function SignalTracking({ revision, industries }) {
       </section>}
       <details className="tracking-method"><summary>合并规则、统计口径与快照信息</summary>
         <p>同一股票、策略版本/参数、60F起点在连续已有扫描日入选，合为一轮。观察升级为入场保留在本轮，不重置基准；起点或策略改变、已有扫描日中断后重新入选，会新建一轮。缺失整个扫描日不会臆造退出。</p>
-        <p>默认查看近120个扫描日中未满20个交易日的轮次；满20日自动归档，离开候选的记录仍跟踪，避免只留下持续上涨的股票。窗口首日已有的候选只是窗口内首见。展开每日记录可核对原始状态，按日复盘保留每日完整名单。</p>
+        <p>跟踪最长20个交易日。首次入选后，连续两根已完成60F收盘跌破当时的参考位，本轮提前归档。价格按真实复权因子换算，缺失的K线会打断计数。归档后仍可复盘后续走势。</p>
         <p>价格从本轮首见日收盘起，以交易所日历及真实复权因子计算T+1/3/5/10；停牌不顺延、不填零。期间最高/最低为后续有效日K高低价相对首见日收盘的变化，不是可成交收益或峰值回撤。各轮起点和实际报价截止可能不同，平均值不代表组合收益。</p>
         <p>只读取历史保存的名单；历史行情修订时复盘价格可以更新。日K展示近5年实际可用历史，上市不足5年不补造旧K线；显示区间扩展不重算旧信号。当前所选版本：{selected?.source_version || report.version || '—'}，实际首次发布：{String(selected?.first_published_at || report.published_at || '未知').replace('T', ' ').slice(0, 19)}。回填快照不代表当时已可取得信号。</p>
       </details>

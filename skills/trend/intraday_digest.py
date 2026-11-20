@@ -3,12 +3,15 @@ import csv
 from html import escape
 from io import StringIO
 
+from skills.trend import MIN_CANDIDATE_SCORE
 from skills.trend.digest import opportunity
-from skills.trend.intraday_followup import build_followup, new_observations
+from skills.trend.intraday_followup import build_followup, new_observations, visible_followup
 
 
 def _tracking_line(row):
     events = "、".join(row["events"]) or row["state"]
+    if row.get("retired_at"):
+        events = f'{row["retired_at"][11:16]} 连续两根60F收破参考位，移出本轮'
     parts = [f"{row['name']} {row['ts_code']}", events, f"上次入选 {row['last_seen']}"]
     if row.get("previous_state"):
         parts[-1] += f" {row['previous_state']}"
@@ -22,29 +25,37 @@ def _tracking_line(row):
 def _observation_line(row):
     label, _ = opportunity(row)
     origin = (row.get("trend60") or {}).get("origin")
-    clock = str(origin).replace("T", " ")[11:16] if origin else ""
     parts = [f"{row['name']} {row['ts_code']}", label, f"{row['score']:g}/80 分"]
-    if clock:
-        parts.append(f"起点 {clock}")
+    if row.get("watch_since"):
+        parts.append(f"本轮达标 {str(row['watch_since']).replace('T', ' ')[:16]}")
+    if origin:
+        parts.append(f"结构起点 {str(origin).replace('T', ' ')[:16]}")
     if row.get("reason"):
         parts.append(row["reason"])
     return " · ".join(parts)
 
 
-def render(report):
+def render(report, *, minimum=MIN_CANDIDATE_SCORE):
     tracked = report.get("follow_up")
     if tracked is None:
-        tracked = build_followup(report)
-    observations = new_observations(report)
-    changes = [row for row in tracked if row["events"]]
-    unknown = sum(not row.get("scan_verified", True) for row in tracked)
+        tracked = visible_followup(build_followup(report), report["as_of"])
+    earlier = report.get("opening_follow_up") or []
+    earlier_events = {row["ts_code"]: row["events"] for row in earlier if row.get("events")}
+    if earlier_events:
+        tracked = [{**row, "events": [*(f"10:30 {event}" for event in earlier_events.get(row["ts_code"], ())),
+                                      *(f"11:30 {event}" for event in row["events"])]} for row in tracked]
+    observations = [row for row in new_observations(report) if row["score"] >= minimum]
+    retired = [row for row in tracked if row.get("retired_at")]
+    active = [row for row in tracked if not row.get("retired_at")]
+    changes = retired + [row for row in active if row["events"]]
+    unknown = sum(not row.get("scan_verified", True) for row in active)
     headline = "午间 60F 简报"
     cutoff = f"60F 截至 {report['as_of']} · 日 K 背景截至 {report['daily_as_of']}"
-    summary = f"跟踪 {len(tracked)} 只，记录变化 {len(changes)} 只，逐股扫描结果待核验 {unknown} 只。"
+    summary = f"仍在跟踪 {len(active)} 只，早盘移出 {len(retired)} 只，记录变化 {len(changes)} 只，扫描待核验 {unknown} 只。"
     prior_lines = [_tracking_line(row) for row in changes] or ["本轮暂无已记录的信号变化。"]
     new_lines = [_observation_line(row) for row in observations] or ["本轮暂无符合条件的当日新观察。"]
     footnote = "观察信号等待完整日 K 确认。附件含所有跟踪标的和新观察清单。"
-    sections = (("历史标的跟踪", summary, prior_lines), ("盘中新观察", f"当日新起点 {len(observations)} 只", new_lines))
+    sections = (("历史标的跟踪", summary, prior_lines), ("盘中新观察", f"今日新达标 {len(observations)} 只 · 盘中评分 ≥ {minimum:g}/80", new_lines))
     text = "\n".join([headline, cutoff, *[part for title, line, items in sections for part in (title, line, *items)], footnote])
     body = "".join(
         f'<h2 style="font-size:19px;margin:22px 0 6px">{title}</h2><p>{escape(summary)}</p>'
@@ -60,9 +71,10 @@ def render(report):
     csv_file = StringIO(newline="")
     writer = csv.writer(csv_file)
     writer.writerow(["分组", "代码", "名称", "信号状态", "备注"])
-    for group, rows in (("历史跟踪", tracked), ("盘中新观察", observations)):
+    for group, rows in (("历史跟踪", active), ("早盘移出", retired), ("盘中新观察", observations)):
         for row in rows:
             fields = [group, row["ts_code"], row["name"], row["state"],
+                      row["retired_at"] if group == "早盘移出" else
                       "、".join(row["events"]) if group == "历史跟踪" else row.get("reason", "")]
             writer.writerow([f"'{value}" if str(value).startswith(("=", "+", "-", "@")) else value
                              for value in fields])

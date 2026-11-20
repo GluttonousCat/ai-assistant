@@ -7,24 +7,22 @@ Field normalization and queued OCR live in their own domain modules.
 from __future__ import annotations
 
 from core.json_response import parse_json_response
-import json
 from pathlib import Path
 import re
 from typing import Any, Dict, Iterator, List, Optional
 
 from core.config import get_config
 from core.logger import get_logger
+from core.offpeak import OffPeakEnded
+from core.offpeak_queue import enqueue
 from tools.finance import report_analysis
 from skills.report import normalization as normalize
-from skills.report.document import load_document, qa_context
+from skills.report.answers import answer_from_sources, cited_passages, comparison_passages
+from skills.report.document import load_document, qa_context, reading_status
 from skills.report.extraction import ANALYSIS_VERSION, InvalidExtraction, analyze_document, saved_analysis_version
 from skills.report.ocr import queue_ocr
 
 from skills.base import BaseSkill, SkillContext
-from skills.report.prompts import (
-    REPORT_QA_PROMPT,
-    REPORT_SUMMARY_PROMPT,
-)
 
 logger = get_logger(__name__)
 
@@ -66,6 +64,8 @@ class ReportSkill(BaseSkill):
                 self._run_analyze(context, params)
             else:  # qa
                 self._run_qa(context, params)
+        except OffPeakEnded:
+            raise
         except Exception as e:
             logger.exception("ReportSkill 执行失败")
             context.error = f"研报分析失败: {e}"
@@ -126,6 +126,8 @@ class ReportSkill(BaseSkill):
                     context.log(f"研报 #{rid} 已转后台视觉 OCR")
                     continue
                 summary = self._extract_one(row, document)
+            except OffPeakEnded:
+                raise
             except Exception:
                 failed.append(rid)
                 logger.exception("研报 #%s 提取异常", rid)
@@ -173,12 +175,7 @@ class ReportSkill(BaseSkill):
                 yield _ev(
                     "stage",
                     stage="ocr",
-                    message="图片型 PDF, 已提交后台视觉 OCR (每册 2-5 分钟)",
-                )
-                yield _ev(
-                    "error",
-                    message="正文尚未就绪 (视觉 OCR 进行中), "
-                    "完成后会自动回到列表, 可再次点击 AI 分析",
+                    message="已排队，将在北京时间 22:00–08:00 提取正文并自动分析。",
                 )
             else:
                 report_analysis.mark_failed(row)
@@ -210,9 +207,8 @@ class ReportSkill(BaseSkill):
         yield _ev(
             "stage",
             stage="save",
-            message=(f"解读材料及转述预测 {summary['forecast_count']} 条已保存"
-                     if summary.get("material_type") == "commentary"
-                     else f"分析结果及盈利预测 {summary['forecast_count']} 条已入库"),
+            message=(f"分析已保存，材料列出预测 {summary['forecast_count']} 条，"
+                     f"其中计入券商预测 {summary['broker_forecast_count']} 条"),
         )
         self._after_extract(row["report_id"])
         yield _ev("data", data=summary)
@@ -244,30 +240,21 @@ class ReportSkill(BaseSkill):
 
     def _after_extract(self, report_id: int) -> None:
         """Only start dependent work after metadata and forecasts commit."""
-        self._spawn_chain_extract(report_id)
-        from skills.report.translate import spawn_translate
-
-        spawn_translate(report_id)
-
-    @staticmethod
-    def _spawn_chain_extract(report_id: int) -> None:
-        """After deep extraction completes, extract industry-chain links in a
-        background thread (beta_alpha module; failure does not affect the main flow)"""
         try:
-            from skills.beta_alpha.analysis.chain_extract import spawn_chain_extract
-
-            spawn_chain_extract(report_id)
-        except Exception as e:
-            logger.warning(f"链抽取调度失败 report_id={report_id}: {e}")
+            enqueue("report_chain", report_id=report_id)
+            enqueue("report_translate", report_id=report_id)
+        except OSError:
+            logger.exception("研报 #%s 已保存，后续任务排队失败", report_id)
 
     def _apply_extract_result(
         self, row: Dict[str, Any], data: Dict[str, Any]
     ) -> Optional[Dict[str, Any]]:
         fields, forecasts, summary = normalize.prepare_extraction(row, data)
         if data.get("analysis_version") and not any(
-            summary.get(key) for key in ("core_view", "key_points", "risks", "evidence", "forecasts")
+            summary.get(key) for key in ("core_view", "key_points", "risks", "evidence", "forecasts", "rating_source")
         ):
-            raise InvalidExtraction("未提取到研究观点、可核对的证据或有效预测，原有分析已保留")
+            if row.get("analysis_json") or not summary["forecast_excerpts"]:
+                raise InvalidExtraction("未提取到研究观点、可核对的证据或有效预测，原有分析已保留")
         if report_analysis.save_extraction(row, fields, forecasts):
             return summary
         logger.info("#%s 提取完成但记录已被更新或去重, 结果丢弃", row["report_id"])
@@ -301,6 +288,8 @@ class ReportSkill(BaseSkill):
 
         # prefer the already-extracted analysis_json; extract on the spot when missing
         llm = self._llm()
+        question = params.get("question") or context.user_input or str(target)
+        materials = []
         reports_payload: List[Dict[str, Any]] = []
         for r in reports:
             data = self._parse_json(r.get("analysis_json") or "")
@@ -311,13 +300,20 @@ class ReportSkill(BaseSkill):
                 if not isinstance(data, dict):
                     data = {}
             insights = data.get("research_insights")
+            meta = {
+                "report_id": r["report_id"], "title": r["title"],
+                "material_type": data.get("material_type") or "unknown",
+                "org": r.get("org_name") or data.get("org_name") or "",
+                "publish_date": str(r.get("publish_date") or ""),
+            }
+            document = load_document(r)
+            meta["source_basis"] = "document" if document.segments else "saved_excerpt"
+            materials.append((meta, comparison_passages(data, question, document)))
             reports_payload.append(
                 {
-                    "report_id": r["report_id"],
-                    "material_type": data.get("material_type") or "unknown",
-                    "title": r["title"],
+                    **meta,
+                    "analysis_version": data.get("analysis_version"),
                     "market": r.get("market") or (data.get("market") or ""),
-                    "org": r.get("org_name") or (data.get("org_name") or ""),
                     "rating": data.get("rating") or "无",
                     "core_view": data.get("core_view") or "",
                     "key_points": data.get("key_points") or [],
@@ -328,34 +324,11 @@ class ReportSkill(BaseSkill):
                     "research_insights": insights if isinstance(insights, dict) else {},
                     "partial_coverage": (data.get("coverage") or {}).get("partial")
                     if isinstance(data.get("coverage"), dict) else None,
-                    "publish_date": str(r.get("publish_date") or ""),
                 }
             )
 
-        question = params.get("question") or ""
-        prompt_reports = []
-        for report in reports_payload:
-            # Keep the full forecasts in the response. Bound each report's share of
-            # the synthesis prompt and retain anchors for attribution.
-            comparisons = {
-                kind: entries[:2] for kind, entries in report["research_insights"].items()
-                if isinstance(entries, list) and entries
-            }
-            prompt_reports.append({
-                **report, "research_insights": comparisons,
-                "evidence": [] if comparisons else report["evidence"][:4],
-                "forecasts": report["forecasts"][:12],
-                "total_forecasts": len(report["forecasts"]),
-            })
-        summary = llm.invoke(
-            REPORT_SUMMARY_PROMPT.format(
-                reports_json=json.dumps(prompt_reports, ensure_ascii=False),
-                user_question=question or "(无)",
-            )
-        )
-
         context.result = {
-            "summary": summary,
+            **answer_from_sources(llm, materials, question, compare=True),
             "target": target,
             "report_count": len(reports_payload),
             "reports": reports_payload,
@@ -372,18 +345,19 @@ class ReportSkill(BaseSkill):
             context.result = {"summary": f"研报 #{report_id} 不存在"}
             return
         analysis = self._parse_json(row.get("analysis_json") or "")
-        passages = qa_context(load_document(row), question, analysis)
+        document = load_document(row)
+        passages = qa_context(document, question, analysis)
+        if not passages and isinstance(analysis, dict):
+            passages = cited_passages(analysis, question, document)
         if not passages:
-            context.result = {"summary": "该研报无文本内容"}
+            context.result = {"summary": reading_status(row, document)["body_note"]}
             return
-        answer = self._llm().invoke(
-            REPORT_QA_PROMPT.format(
-                title=row["title"], report_text="\n\n".join(p.render() for p in passages),
-                material_type=analysis.get("material_type", "unknown") if isinstance(analysis, dict) else "unknown",
-                question=question,
-            )
-        )
-        context.result = {"summary": answer, "report_id": row["report_id"]}
+        meta = {"report_id": row["report_id"], "title": row["title"], "org": row.get("org_name"),
+                "publish_date": str(row.get("publish_date") or ""),
+                "material_type": analysis.get("material_type", "unknown") if isinstance(analysis, dict) else "unknown",
+                "source_basis": "document" if document.segments else "saved_excerpt"}
+        answer = answer_from_sources(self._llm(), [(meta, passages)], question)
+        context.result = {**answer, "report_id": row["report_id"]}
 
     def _keyword_fallback(self, text: str) -> Optional[str]:
         """When dictionary/regex both miss: strip common command words and use the

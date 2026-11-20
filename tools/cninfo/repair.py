@@ -18,14 +18,15 @@ TOC traps / atypical numbering (A+H governance-code style) / unnumbered
 subsections and other structural variants are all digested semantically by
 the Agent.
 
-The LLM is injected by the caller (same convention as the evidence core; the
-module body has zero project dependencies); the CLI is the injection point:
+The CLI queues files. The off-peak worker injects the model:
     python -m tools.cninfo.repair --stock 600036 [--attempts 3] [--dry-run]
     python -m tools.cninfo.repair --all [--limit 10]     # sweep all violating files in MD_ROOT
 """
 from __future__ import annotations
 
 from core.json_response import parse_json_response
+from core.local_state import write_json
+from core.offpeak import OffPeakEnded
 import argparse
 import json
 import re
@@ -108,6 +109,8 @@ def _locate(llm, kind: str, key: str, md: str, feedback: str) -> Optional[Dict]:
         feedback=feedback, outline=_outline(md, key))
     try:
         resp = llm.invoke([{"role": "user", "content": prompt}])
+    except OffPeakEnded:
+        raise
     except Exception as e:  # noqa: BLE001 an LLM failure is treated as "not found this round"; never breaks the batch
         return {"found": False, "error": str(e)[:80]}
     loc = _parse_json(resp or "")
@@ -127,6 +130,8 @@ def _segment(llm, block_lines: List[str], feedback: str) -> Optional[List[Dict]]
     try:
         resp = llm.invoke([{"role": "user", "content": SEGMENT_PROMPT.format(
             feedback=feedback, block=numbered)}])
+    except OffPeakEnded:
+        raise
     except Exception as e:  # noqa: BLE001
         return None
     t = (resp or "").strip()
@@ -241,10 +246,9 @@ def repair_file(path: Path, llm, attempts: int = 3,
         if ok and not dry_run:
             d[bucket][key] = entry
         repairs[key] = {"attempts": len(log), "ok": ok, "log": log}
-    if not dry_run:
-        d["repairs"] = repairs
-        path.write_text(json.dumps(d, ensure_ascii=False, indent=1),
-                        encoding="utf-8")
+        if not dry_run:
+            d["repairs"] = repairs
+            write_json(path, d)
     after = check_data(d)
     return {"file": str(path), "fails_before": before["fails"],
             "fails_after": after["fails"], "repairs": repairs}
@@ -286,22 +290,25 @@ if __name__ == "__main__":
 
     from core.config import get_config
     get_config()
-    from harness.llm import get_extract_llm
-    _llm = get_extract_llm(timeout=120.0)
+    if args.stock or args.all:
+        from core.offpeak_queue import enqueue
+        from .parse import normalize_ts_code
 
-    if args.stock:
-        r = repair_stock(args.stock, _llm, attempts=args.attempts,
-                         dry_run=args.dry_run)
-        print(json.dumps(r, ensure_ascii=False, indent=1))
-    elif args.all:
-        rs = repair_all(_llm, attempts=args.attempts, limit=args.limit,
-                        dry_run=args.dry_run)
-        n_ok = sum(1 for r in rs if not r.get("fails_after"))
-        print(f"\n修复批次: {len(rs)} 文件, 复检全过 {n_ok}")
-        for r in rs:
-            mark = "✔" if not r.get("fails_after") else "✘"
-            rel = "/".join(Path(r["file"]).parts[-2:])
-            print(f"{mark} {rel}: {list(r.get('fails_before', {}))} → "
-                  f"{list(r.get('fails_after', {}))}")
-    else:
-        print(__doc__)
+        if args.stock:
+            stock = normalize_ts_code(args.stock.strip())
+            if not stock:
+                ap.error("无效证券代码")
+            files = sorted(MD_ROOT.glob(f"{stock}/*_items.json"))[:1]
+        else:
+            files = [p for p in sorted(MD_ROOT.glob("*/*_items.json"))
+                     if check_data(json.loads(p.read_text(encoding="utf-8")))["fails"]]
+            if args.limit:
+                files = files[:args.limit]
+        if args.stock and not files:
+            ap.error("未找到已提取的年报文件，请先运行 tools.cninfo.parse")
+        for path in files:
+            enqueue("annual_repair", path=str(path.resolve()),
+                    attempts=args.attempts, dry_run=args.dry_run)
+        print(f"已排队 {len(files)} 份年报，等待闲时修复。")
+        sys.exit(0)
+    ap.error("需提供 --stock 或 --all")

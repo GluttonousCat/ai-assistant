@@ -24,6 +24,9 @@ def test_midday_waits_for_exact_morning_round_and_only_sends_once(tmp_path, monk
                   "score": 77, "new_today": True, "trend60": {"origin": "2026-11-19T10:30:00"}}],
     }
     lookup, sent = {}, []
+    monkeypatch.setattr(midday, "minimum_score", lambda: 72)
+    report["data"].extend([{**report["data"][0], "ts_code": "600003.SH", "name": "边界样本", "score": 72},
+                           {**report["data"][0], "ts_code": "600004.SH", "name": "低分样本", "score": 71.9}])
     monkeypatch.setattr(midday, "get_config", lambda: SimpleNamespace(env=lambda *args: "reader@example.com"))
     monkeypatch.setattr(midday, "_root", lambda: tmp_path)
     monkeypatch.setattr(midday, "intraday_report", lookup.get)
@@ -34,6 +37,8 @@ def test_midday_waits_for_exact_morning_round_and_only_sends_once(tmp_path, monk
     now = datetime(2026, 11, 19, 11, 55)
     lookup[report["run_id"]] = {**report, "as_of": "2026-11-19 10:30:00"}
     assert midday.deliver_midday_once(now)["status"] == "waiting_data" and not sent
+    lookup["2026-11-19_1030"] = {**report, "run_id": "2026-11-19_1030", "as_of": "2026-11-19 10:30:00",
+                                 "follow_up": [{**report["follow_up"][0], "events": ["结构起点变化"]}]}
     lookup[report["run_id"]] = report
     assert midday.deliver_midday_once(now)["status"] == "sent"
     lookup.clear()
@@ -42,5 +47,22 @@ def test_midday_waits_for_exact_morning_round_and_only_sends_once(tmp_path, monk
     assert len(sent) == 1
     html = sent[0].get_body(preferencelist=("html",)).get_content()
     assert "历史标的跟踪" in html and "跌破历史参考位" in html and "盘中新观察" in html and "低位回升" in html
+    assert "10:30 结构起点变化" in html and "11:30 跌破历史参考位" in html
+    assert "边界样本" in html and "低分样本" not in html and "≥ 72" in html
     assert list(tmp_path.glob("midday/*/*/delivery.json"))
     assert midday._morning_report(date(2026, 11, 20)) is None
+
+
+def test_missing_morning_snapshot_at_deadline_sends_one_status_email(tmp_path, monkeypatch):
+    monkeypatch.setattr(midday, "get_config", lambda: SimpleNamespace(env=lambda *args: "reader@example.com"))
+    monkeypatch.setattr(midday, "_root", lambda: tmp_path)
+    monkeypatch.setattr(midday, "intraday_report", lambda run_id: None)
+    monkeypatch.setattr(midday.SmtpSettings, "load",
+                        lambda: SmtpSettings("smtp.example.com", 465, "sender@example.com", "", "sender@example.com"))
+    sent = []
+    monkeypatch.setattr(delivery, "send", lambda msg, settings: sent.append(msg))
+    now = datetime(2026, 11, 19, 13, 30, 1)
+    result = midday.deliver_midday_once(now, deadline_notice=True)
+    assert result["status"] == "sent" and result["delay_notice"]
+    assert midday.deliver_midday_once(now, deadline_notice=True)["already_processed"]
+    assert len(sent) == 1 and "午间行情更新延迟" in str(sent[0]["Subject"])

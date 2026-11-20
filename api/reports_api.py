@@ -20,10 +20,11 @@ from time import monotonic
 from typing import Any, Dict, Optional
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
 
 from core.logger import get_logger
+from core.offpeak_queue import enqueue
 from core.security import TokenPayload
 from api.events import sse as _sse
 from api.deps import get_current_user, require_admin
@@ -200,17 +201,8 @@ async def analyze_report_stream(
 
 @reports_router.post("/analyze")
 async def analyze_batch(
-    limit: int = 10, current: TokenPayload = Depends(require_admin)
+    limit: int = Query(10, ge=1, le=100), current: TokenPayload = Depends(require_admin)
 ):
-    """Batch-extract unanalyzed reports (background thread, returns immediately)"""
-
-    def _job():
-        try:
-            _run_extract(None, limit)
-        except Exception as e:
-            logger.warning(f"批量研报提取失败: {e}")
-
-    import threading
-
-    threading.Thread(target=_job, daemon=True, name="report-extract").start()
-    return {"status": "started", "limit": limit}
+    """Queue a durable batch for the nightly worker."""
+    job_id = await asyncio.to_thread(enqueue, "report_batch", limit=limit)
+    return {"status": "queued", "job_id": job_id, "limit": limit}

@@ -1,86 +1,83 @@
-# ============================================================
-# Agent 统一配置
-# ============================================================
-
 app:
   name: finance-agent
   version: 2.0.0
-  host: 0.0.0.0
-  port: 8208
+  host: 127.0.0.1
+  port: 9001
 
-# LLM 多模型路由
-# 约定: 文本模型统一 deepseek-v4.1-flash; 多模态(视觉)统一 qwen3.8-flash.
-# 每个用途可单独覆盖 model / api_key / base_url.
+# Per-purpose model settings.
 llm:
   enable_thinking: true
   max_tokens: 32768
   models:
     default:
-      model: deepseek-v4.1-flash
+      model: deepseek-v4.1-flash-1017
     agent:
-      model: deepseek-v4.1-flash
+      model: deepseek-v4.1-flash-1017
     extract:
-      model: deepseek-v4.1-flash
+      model: deepseek-v4.1-flash-1017
     nl2sql:
-      model: deepseek-v4.1-flash
+      model: deepseek-v4.1-flash-1017
       enable_thinking: false
       max_tokens: 4096
     analysis:
-      model: deepseek-v4.1-flash
+      model: deepseek-v4.1-flash-1017
     vision:
-      model: qwen3.8-flash
+      model: qwen3.8-omni-flash
       enable_thinking: false
     embedding:
       model: text-embedding-v3
 
 
-# 每日增量同步调度 (后端常驻即自动执行)
 schedule:
   sync_hour: 17               # Trading days at 17:00 Asia/Shanghai
   sync_minute: 0
-  enabled: true               # false 则关闭调度器
+  enabled: true
 
 intraday_watch:
   enabled: true               # Trading days: 10:32/11:32/14:02/15:02 Asia/Shanghai
   workers: 4                 # Native 60F closes + 120 seconds for provider settlement
 
-# 知识星球反检测间隔参数 (FileDownloader / ZSXQCrawler 启动时读取, 修改后重启服务生效)
+# Collection intervals in seconds.
 zsxq:
-  crawl_interval_min: 1.5        # 话题爬取最小间隔(秒)
-  crawl_interval_max: 2.5        # 话题爬取最大间隔(秒)
-  download_long_sleep_min: 60    # 每个文件下载后的长休眠最小(秒) — 逐篇流水的节奏来源
-  download_long_sleep_max: 120   # 每个文件下载后的长休眠最大(秒)
+  crawl_interval_min: 1.5
+  crawl_interval_max: 2.5
+  download_long_sleep_min: 60
+  download_long_sleep_max: 120
 
-# 知识星球研报抓取调度 (每天两轮: 爬话题+文件 -> 同步PG -> LLM提取; hour 取值 0-23, 0=午夜)
+# Collection times in Asia/Shanghai.
 zsxq_schedule:
   enabled: true
   run_hours: [0, 12]
 
-# 日志
+offpeak_processing:
+  enabled: true                # Background model work, 22:00–08:00 Asia/Shanghai
+
+report_digest:
+  enabled: true                # Daily at 07:30 Asia/Shanghai, including weekends
+
 logging:
   level: INFO
   dir: logs
   backup_count: 30
 
-# Agent 对话循环 (core/agent) — DSH "组合进配置" 范式: 改这些不再动代码 (重启生效)
 agent:
   fast_lane:
-    enabled: false             # 快车道(高置信简单查询直连 SQL)总开关 — 当前关闭:
-                               # 先做面再做点, 优先把全工具 Agent 链路做全; 恢复改 true
-  sandbox:                      # 沙盒参数 (loop.py 默认值与此一致)
-    max_rounds: 8               # LLM 决策轮数上限
-    max_result_chars: 4000      # 工具结果注入 LLM 的字符上限
-    repeat_limit: 3             # 相同 (工具,参数) 最多调用次数
-    max_same_tool_calls: 4      # 同名工具 (任意参数) 最多调用次数
-    default_tool_timeout: 120   # 工具超时默认 (秒)
-    tool_timeouts:              # 个别工具超时覆盖 (秒)
-      extract_document: 600     # 扫描件 OCR
-      read_report: 180          # 带 question 时内部走 LLM
+    enabled: false             # Route simple queries directly to SQL.
+  sandbox:
+    max_rounds: 8
+    max_result_chars: 4000      # Characters per tool result.
+    repeat_limit: 3             # Identical tool and arguments.
+    max_same_tool_calls: 4      # Report lookups count once per batch.
+    max_report_batch_size: 12   # Requests per report tool per batch.
+    default_tool_timeout: 120   # Seconds.
+    tool_timeouts:
+      extract_document: 600
+      read_report: 180          # Includes optional model Q&A.
       analyze_chain: 300
-  trajectory:                   # 每轮对话全量事件落 logs/trajectories/*.jsonl (可 replay/归因)
+  trajectory:
     enabled: true
-    retention_days: 30          # 0=不清理
-  domains:                      # 域子Agent 定义 (subagent.py 内置同款兜底)
+    retention_days: 30          # Zero keeps all traces.
+  domains:
     financial:
       label: 财务数据
       tools: [query_financials, query_main_business, valuation_percentile,
@@ -114,7 +111,8 @@ agent:
                  卖方观点, 一致预期, 券商怎么看, 覆盖机构]
       prompt: |-
         你是研报观点子Agent。先 search_reports 检索清单 (关键词或标的),
-        需要某篇细节/单篇问答用 read_report;
+        跨篇综述先按用户关注的主题选取代表报告，并行用 read_report 读正文后再归纳。相同附件只计一份观点。
+        只有标题命中或达到阅读额度时说明本轮未读。按读取结果标注已识别页数、历史文字待核对或附件待处理。
         未来期间盈利预测与分歧度用 get_forecasts (历史兑现校验是域外工具, 需要就升级);
         多家机构观点/目标价汇总用 summarize_sell_side。
         综合多篇观点时标注机构与日期; 平台无覆盖时如实说明, 不臆造观点。

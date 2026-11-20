@@ -3,6 +3,7 @@
 import json
 from typing import Dict, List, Optional
 import pandas as pd
+from skills.report.attribution import core_statement, lead_evidence, reported_rating
 
 _UNIT_FACTOR = {
     "亿元": 100000000.0,
@@ -167,12 +168,14 @@ def report_views(rows) -> List[Dict]:
     for r in rows:
         rating = core_view = None
         material_type = "unknown"
+        claim = rating_source = None
         try:
             aj = json.loads(r["analysis_json"] or "{}")
-            rating = aj.get("rating")
+            rating = reported_rating(aj)
+            rating_source = aj.get("rating_source")
             material_type = aj.get("material_type") or "unknown"
-            cv = aj.get("core_view") or aj.get("summary")
-            core_view = str(cv)[:120] + "…" if cv and len(str(cv)) > 120 else cv
+            core_view = core_statement(aj)
+            claim = lead_evidence(aj)
         except Exception:
             pass
         out.append(
@@ -181,8 +184,10 @@ def report_views(rows) -> List[Dict]:
                 "org": r["org_name"],
                 "date": str(r["publish_date"]),
                 "rating": rating,
+                "rating_source": rating_source,
                 "material_type": material_type,
                 "core_view": core_view,
+                "lead_evidence": claim,
             }
         )
     return out

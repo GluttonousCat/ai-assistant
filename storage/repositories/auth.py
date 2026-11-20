@@ -4,7 +4,7 @@ from storage.pg import PgClient
 
 def active_role(user_id):
     with PgClient(read_only=True) as pg:
-        return pg.fetch_one("SELECT role FROM auth.users WHERE user_id=%s AND is_active", (user_id,))
+        return pg.fetch_one("SELECT username, role FROM auth.users WHERE user_id=%s AND is_active", (user_id,))
 
 
 def find_user(username):

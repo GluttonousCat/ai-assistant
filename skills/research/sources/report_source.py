@@ -40,6 +40,8 @@ from typing import Any, Dict, List, Optional
 
 from core.helpers import normalize_org_name
 from core.logger import get_logger
+from skills.report.attribution import attributed_statement, reported_rating, source_location
+from skills.report.extraction import saved_analysis_version
 from skills.research.contracts import (
     EvidenceShard,
     View,
@@ -171,22 +173,32 @@ def build_views_from_report(detail: Optional[Dict[str, Any]], brief: Dict[str, A
     pieces: List[tuple] = []
     if analysis.get("material_type") == "commentary" or brief.get("material_type") == "commentary":
         context_prefix += "【材料转述】"
-    core = str(analysis.get("core_view") or "").strip()
+    attributed = saved_analysis_version(analysis) >= 4
+    summary = analysis.get("summary_evidence") if attributed else {}
+    if not isinstance(summary, dict):
+        summary = {}
+    core = (attributed_statement(summary.get("core_view")) if attributed
+            else str(analysis.get("core_view") or "").strip())
     if core:
         pieces.append(("viewpoint", core, ""))
-    for kp in (analysis.get("key_points") or [])[:max_points]:
-        s = str(kp).strip()
+    for kp in ((summary if attributed else analysis).get("key_points") or [])[:max_points]:
+        s = attributed_statement(kp) if attributed else str(kp).strip()
         if s:
             pieces.append(("viewpoint", s, ""))
-    rating = str(analysis.get("rating") or brief.get("rating") or "").strip()
+    rating = reported_rating(analysis) if attributed else analysis.get("rating") or brief.get("rating")
     if rating and rating != "无":
-        pieces.append(("rating", f"评级为「{rating}」", ""))
+        location = source_location(analysis.get("rating_source"))
+        pieces.append(("rating", f"评级为「{rating}」" + (f"（{location}）" if location else ""), ""))
     for fc in (analysis.get("forecasts") or []):
         cat, stmt, period = _forecast_parts(fc if isinstance(fc, dict) else {})
         if cat:
+            if attributed:
+                stmt = attributed_statement(fc, stmt)
+                if stmt and fc.get("stance") == "conditional":
+                    stmt += f" 原文「{fc['source']['quote']}」"
             pieces.append((cat, stmt, period))
-    for rk in (analysis.get("risks") or [])[:max_risks]:
-        s = str(rk).strip()
+    for rk in ((summary if attributed else analysis).get("risks") or [])[:max_risks]:
+        s = attributed_statement(rk) if attributed else str(rk).strip()
         if s:
             pieces.append(("risk", s, ""))
 
@@ -197,6 +209,9 @@ def build_views_from_report(detail: Optional[Dict[str, Any]], brief: Dict[str, A
             entries = insights.get(kind)
             for item in entries[:2] if isinstance(entries, list) else ():
                 if not isinstance(item, dict) or not isinstance(item.get("source"), dict):
+                    continue
+                if attributed:
+                    pieces.append(("viewpoint", attributed_statement(item), ""))
                     continue
                 source = item["source"]
                 page, segment = source.get("page"), source.get("segment")
@@ -305,6 +320,23 @@ def finalize_vids(views: List[View]) -> List[View]:
     return views
 
 
+def _qa_answer_views(qa, report_id, org, date, ts_code, prefix):
+    if "citations" not in qa:
+        return parse_qa_views(qa.get("answer") or "", report_id, org, date,
+                              ts_code=ts_code, context_prefix=prefix)
+    views = []
+    for claim in qa.get("citations") or []:
+        if (not isinstance(claim, dict) or claim.get("material_type") != "original"
+                or claim.get("attribution") != "broker" or not source_location(claim.get("source"))):
+            continue
+        for view in parse_qa_views(claim.get("statement") or "", report_id, org, date, ts_code=ts_code, max_views=1):
+            view.statement = prefix + attributed_statement(claim, view.statement)
+            views.append(view)
+        if len(views) >= 6:
+            break
+    return views
+
+
 def validate_views(views: List[View]) -> List[str]:
     """T04 semantic self-check (category/caliber rules beyond T01's validate_shard);
     returns the problem list (empty = pass): category within the closed set; forecast
@@ -394,18 +426,16 @@ def collect_report_views(stock: str, days: int = 365, out_dir: Path | None = Non
             analysis = detail.get("analysis") or {}
             has_core = bool(str(analysis.get("core_view") or "").strip()
                             or (analysis.get("key_points") or []))
-            if qa_fallback and qa_used < qa_fallback and not has_core:
+            if qa_fallback and qa_used < qa_fallback and not has_core and saved_analysis_version(analysis) < 4:
                 qa = _call(reg, "read_report", report_id=rid, question=_QA_QUESTION)
                 if qa is not None:
                     qa_used += 1
                     qa_prefix = prefix
                     if analysis.get("material_type") == "commentary" or b.get("material_type") == "commentary":
                         qa_prefix += "【材料转述】"
-                    got += parse_qa_views(qa.get("answer") or "", rid,
-                                          detail.get("org") or b.get("org") or "",
-                                          detail.get("publish_date")
-                                          or b.get("publish_date") or "",
-                                          ts_code=ts_code, context_prefix=qa_prefix)
+                    got += _qa_answer_views(qa, rid, detail.get("org") or b.get("org") or "",
+                                            detail.get("publish_date") or b.get("publish_date") or "",
+                                            ts_code, qa_prefix)
         views += got
 
     # report_forecast table fill-in: only fill same report+period+metric gaps (includes

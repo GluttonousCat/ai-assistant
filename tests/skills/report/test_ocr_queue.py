@@ -1,64 +1,46 @@
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import Mock
 
 import pytest
 
+from core.offpeak import OffPeakEnded
 from skills.report import ocr
 
 
-def test_existing_text_and_pending_ocr_do_not_enqueue_duplicate_work(monkeypatch):
-    thread = MagicMock()
-    monkeypatch.setattr(ocr.threading, "Thread", thread)
+def test_ocr_submissions_recover_pending_records_and_use_same_key(monkeypatch):
+    submit = Mock()
+    monkeypatch.setattr(ocr, "enqueue", submit)
     assert ocr.queue_ocr({"content_chars": 20}) is True
-    assert (
-        ocr.queue_ocr({"file_path": "report.pdf", "extraction_status": "pending_ocr"})
-        is False
-    )
-    thread.assert_not_called()
+    submit.assert_not_called()
+    for state in ("pending", "pending_ocr"):
+        assert not ocr.queue_ocr({"report_id": 7, "file_path": "scan.pdf", "extraction_status": state})
+    assert submit.call_count == 2
+    submit.assert_called_with("report_ocr", report_id=7)
 
 
-@pytest.mark.parametrize(
-    "saved,raises,failed,empty",
-    [
-        (1, False, False, False),
-        (0, False, False, False),
-        (1, True, True, False),
-        (1, False, True, True),
-    ],
-)
-def test_ocr_write_and_resume_preserve_orphan_and_failure_guards(
-    monkeypatch, saved, raises, failed, empty
-):
-    from skills.report import skill
-    import harness.llm
-    import tools.pdf
-
-    pending, save, mark_failed = MagicMock(), MagicMock(return_value=saved), MagicMock()
-    monkeypatch.setattr(ocr.report_text, "mark_ocr_pending", pending)
+@pytest.mark.parametrize("outcome", ("saved", "orphan", "empty", "error", "cutoff", "resumed"))
+def test_ocr_is_resumable_and_preview_text_is_not_a_source(monkeypatch, tmp_path, outcome):
+    path = tmp_path / "scan.pdf"
+    path.touch()
+    row = {"report_id": 7, "file_path": str(path), "content_chars": 25}
+    monkeypatch.setattr(ocr.report_analysis, "load_report", lambda _: row)
+    monkeypatch.setattr(ocr, "load_document", lambda _: SimpleNamespace(segments=[1] if outcome == "resumed" else []))
+    monkeypatch.setattr("harness.llm.get_vision_llm", lambda: object())
+    reader = Mock(return_value="" if outcome == "empty" else "正文" * 50)
+    if outcome in ("error", "cutoff"):
+        reader.side_effect = OffPeakEnded() if outcome == "cutoff" else RuntimeError("vision failed")
+    monkeypatch.setattr("tools.pdf.ocr_pdf", reader)
+    save = Mock(return_value=outcome != "orphan")
+    failed, analyze = Mock(), Mock(return_value=True)
+    monkeypatch.setattr(ocr.report_text, "mark_ocr_pending", Mock())
+    monkeypatch.setattr(ocr.report_text, "mark_ocr_failed", failed)
     monkeypatch.setattr(ocr.report_text, "save_ocr_text", save)
-    monkeypatch.setattr(ocr.report_text, "mark_ocr_failed", mark_failed)
-    monkeypatch.setattr(harness.llm, "get_vision_llm", lambda: object())
-    text = "" if empty else "正文" * 300
-    reader = MagicMock(return_value=text)
-    if raises:
-        reader.side_effect = RuntimeError("vision failed")
-    monkeypatch.setattr(tools.pdf, "ocr_pdf", reader)
-    worker = []
-
-    def thread(*, target, **kwargs):
-        return SimpleNamespace(start=lambda: worker.append(target))
-
-    monkeypatch.setattr(ocr.threading, "Thread", thread)
-    analyze = MagicMock(
-        return_value=SimpleNamespace(error=None, result={"processed": [7]})
-    )
-    monkeypatch.setattr(skill, "ReportSkill", lambda: analyze)
-    assert (
-        ocr.queue_ocr({"report_id": 7, "file_path": "report.pdf", "content_chars": 0})
-        is False
-    )
-    pending.assert_called_once_with(7)
-    assert len(worker) == 1
-    worker[0]()
-    assert mark_failed.called is failed
-    assert analyze.called is (not raises and not empty and saved > 0)
+    monkeypatch.setattr("skills.report.skill.ReportSkill", lambda: SimpleNamespace(_extract_one=analyze))
+    if outcome in ("error", "empty", "cutoff"):
+        with pytest.raises(OffPeakEnded if outcome == "cutoff" else RuntimeError):
+            ocr.process_ocr.__wrapped__(7)
+    else:
+        ocr.process_ocr.__wrapped__(7)
+    assert reader.called == (outcome != "resumed")
+    assert failed.called == (outcome in ("error", "empty"))
+    assert analyze.called == (outcome in ("saved", "resumed"))

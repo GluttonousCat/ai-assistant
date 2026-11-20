@@ -1,7 +1,7 @@
 # -*- encoding: utf-8 -*-
 """
 fin-agent unified entrypoint
-Run: uvicorn app:app --reload --port 8208
+Run: python run_server.py
 """
 from pathlib import Path
 

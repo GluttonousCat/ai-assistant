@@ -131,7 +131,8 @@ ALPHA_SUMMARY_PROMPT = """你是个股投研分析师。基于以下「预期差
 3) 估值水位 (daily_basic 近3年分位, 0=最低 100=最高):
 {valuation}
 
-4) 近期材料观点（commentary 须标明来自二手解读，不能计为独立券商观点；unknown 的出处待核实）:
+4) 近期材料观点（按 lead_evidence 的发言者和语气表述，保留假设、否定与时间范围。
+管理层指引、受访者调查和第三方发言各自注明来源。commentary 注明转述，unknown 的出处待核实）:
 {views}
 
 写作要求:

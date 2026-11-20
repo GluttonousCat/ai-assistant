@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, List, Optional
 
 from core.logger import get_logger
+from core.offpeak import OffPeakEnded
 from tools.pdf.render import render_pages_png
 
 logger = get_logger(__name__)
@@ -42,6 +43,8 @@ def ocr_pdf(path: str, prompt: str, vision_llm: Any, max_pages: int = 10,
                 pages.append(f"[[PDF_PAGE:{page_no}]]\n{body}" if page_markers else body)
                 logger.info(f"OCR 第 {page_no}/{len(rendered)} 页识别完成 "
                             f"({len(text)} 字)")
+        except OffPeakEnded:
+            raise
         except Exception as e:  # noqa: BLE001 a single failed page must not abort the whole document
             logger.warning(f"OCR 第 {page_no} 页识别失败: {e}")
 

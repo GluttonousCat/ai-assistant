@@ -9,6 +9,7 @@ integration, involving credentials and outbound confirmation).
 """
 from __future__ import annotations
 
+import json
 import re
 from datetime import date
 from pathlib import Path
@@ -16,6 +17,8 @@ from typing import Any, Dict, Optional
 
 from core.logger import get_logger
 from skills.content.profile import build_company_profile, profile_digest, report_attribution
+from skills.report.attribution import core_statement
+from skills.report.extraction import saved_analysis_version
 from skills.content.prompts import (DISCLAIMER, GZH_STOCK_ARTICLE_PROMPT,
                              GZH_TOPIC_ARTICLE_PROMPT)
 
@@ -133,9 +136,13 @@ def write_topic_article(topic: str, days: int = 90, limit: int = 8) -> Dict[str,
         source = r
         if det.get("ok"):
             source = {**r, **det["data"]}
-            body = (det["data"].get("content_excerpt") or "")[:2500]
-            view = (det["data"].get("analysis") or {}).get("core_view") or ""
-            body = (view + "\n" + body).strip()
+            analysis = det["data"].get("analysis") or {}
+            if saved_analysis_version(analysis) >= 4:
+                # Each entry supplies its own speaker, qualifications and exact quote.
+                body = json.dumps((analysis.get("summary_evidence") or {}), ensure_ascii=False)
+            else:
+                excerpt = (det["data"].get("content_excerpt") or "")[:2500]
+                body = (core_statement(analysis) + "\n" + excerpt).strip()
         blocks.append(f"### {r['title']}\n{report_attribution(source)} | 日期: {r['publish_date']} "
                       f"| 材料所列评级: {source.get('rating') or '—'}\n{body}")
 

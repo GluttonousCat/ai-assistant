@@ -12,7 +12,7 @@ def pipeline(monkeypatch):
     row = dict(
         report_id=1,
         title="公司研究",
-        content_text="报告预计2026年净利润900亿元。\n" + "正文" * 300,
+        content_text="甲证券研究部正式研究报告。\n报告预计2026年净利润900亿元。\n" + "正文" * 300,
         content_chars=622,
         file_path=None,
         analysis_json=None,
@@ -56,6 +56,7 @@ def pipeline(monkeypatch):
     monkeypatch.setattr(skill, "_after_extract", after)
     data = {
         "market": "A股",
+        "material": {"type": "original", "source": {"segment": 1, "quote": "甲证券研究部正式研究报告。"}},
         "ts_codes": ["600519.SH"],
         "rating": "买入",
         "forecasts": [
@@ -65,6 +66,8 @@ def pipeline(monkeypatch):
                 "period": "2026E",
                 "value": 900,
                 "unit": "亿元",
+                "attribution": "broker",
+                "stance": "expectation",
                 "source": {"segment": 1, "quote": "报告预计2026年净利润900亿元。"},
             }
         ],
@@ -148,6 +151,30 @@ def test_metadata_only_retry_preserves_previous_analysis(pipeline):
     assert not any("DELETE" in sql or "analysis_json=%s" in sql for sql, _ in state["sql"])
 
 
+@pytest.mark.parametrize("saved", [False, True])
+def test_unresolved_forecast_table_is_readable_without_overwriting_a_saved_analysis(pipeline, saved):
+    skill, state, _, model = pipeline
+    row = state["rows"][0]
+    table = "营业收入（亿元） 30 25 20"
+    row["content_text"] += "\n" + table
+    if saved:
+        row["analysis_json"] = '{"core_view":"已保存的解读"}'
+    model["forecasts"] = [{
+        "symbol": "600519.SH", "metric": "revenue", "period": "2026E",
+        "value": 25, "unit": "亿元", "source": {"segment": 1, "quote": table},
+    }]
+    events = list(skill.extract_stream(1))
+    if saved:
+        assert events[-1]["type"] == "error"
+        assert not any("analysis_json=%s" in sql for sql, _ in state["sql"])
+    else:
+        summary = next(event["data"] for event in events if event["type"] == "data")
+        assert not summary["forecasts"]
+        assert summary["forecast_excerpts"][0]["quote"] == table
+        _, params = next(entry for entry in state["sql"] if entry[0].startswith("UPDATE"))
+        assert json.loads(params[0])["forecast_excerpts"] == summary["forecast_excerpts"]
+
+
 def test_batch_summary_separates_completed_ocr_and_missing_text(pipeline, monkeypatch, tmp_path):
     skill, state, background, _ = pipeline
     scan = tmp_path / "scan.pdf"
@@ -222,7 +249,7 @@ def test_later_pages_keep_grounded_forecasts_across_synthesis(pipeline, monkeypa
     monkeypatch.setattr(skill, "_extract_llm", LLM)
     events = list(skill.extract_stream(row["report_id"]))
     result = next(e["data"] for e in events if e["type"] == "data")
-    assert result["core_view"] == "合并观点"
+    assert result["core_view"] == ""  # Forecast-only report has no sourced narrative.
     assert result["forecasts"][0]["source"] == {"segment": 6, "page": 6, "quote": quote}
     assert result["forecast_count"] == 1
     assert result["coverage"]["analyzed_segments"] == 6

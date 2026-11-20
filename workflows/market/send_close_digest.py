@@ -22,7 +22,8 @@ from core.config import get_config
 from core.local_state import file_lock, read_json, write_json
 from core.logger import get_logger
 from skills.trend.digest import DEFAULT_EMAIL_MIN_SCORE, export_csv, render_html, select_stocks, stock_cards
-from tools.market.refresh_clock import SHANGHAI, expected_date, market_time
+from tools.kline.calendar import is_trading_day
+from tools.market.refresh_clock import SHANGHAI, market_time
 from tools.market.refresh_state import read_state as market_state
 from tools.market.trend_data import load_dashboard, scan_cutoffs
 from tools.notifications.email import SmtpSettings, MailNotConfigured, DeliveryUncertain, address, message, send
@@ -31,14 +32,19 @@ logger = get_logger(__name__)
 MAX_MESSAGE_BYTES = 8 * 1024 * 1024
 
 
-def options():
+def minimum_score():
     cfg = get_config()
     minimum = float(cfg.env("MARKET_DIGEST_MIN_SCORE", cfg.get("email_digest.min_score", DEFAULT_EMAIL_MIN_SCORE)))
     if not 0 <= minimum <= 100:
         raise ValueError("邮件评分门槛必须为0~100")
+    return minimum
+
+
+def options():
+    cfg = get_config()
     observations = str(cfg.env("MARKET_DIGEST_OBSERVATIONS", cfg.get("email_digest.observations", True))).lower() in ("true", "1", "yes")
     recipient = address(cfg.env("MARKET_DIGEST_TO", ""))
-    return recipient, minimum, observations
+    return recipient, minimum_score(), observations
 
 
 def _root():
@@ -53,6 +59,30 @@ def _profile(recipient, minimum, observations):
     return sha256(f"{recipient}|{minimum}|{observations}".encode()).hexdigest()[:16]
 
 
+def _delivery_folder(day_root, recipient, minimum, observations, delay_notice):
+    """Reuse an existing frozen delivery, including receipts from before score changes."""
+    canonical = day_root / sha256(recipient.encode()).hexdigest()[:16]
+    receipt = "delay.json" if delay_notice else "delivery.json"
+    if (canonical / receipt).exists():
+        return canonical
+    legacy = day_root / _profile(recipient, minimum, observations)
+    if (legacy / receipt).exists():
+        return legacy
+    kind = "delay" if delay_notice else "report"
+    for state_path in sorted(day_root.glob(f"*/{receipt}")):
+        eml = state_path.parent / kind / "part-01.eml"
+        if eml.is_file():
+            headers = bytearray()
+            with eml.open("rb") as stream:
+                for line in stream:
+                    if not line.strip():
+                        break
+                    headers.extend(line)
+            if str(BytesParser(policy=policy.default).parsebytes(headers)["To"]) == recipient:
+                return state_path.parent
+    return canonical
+
+
 def _mail_file(folder, filename):
     if not isinstance(filename, str) or not re.fullmatch(r"part-\d{2,}\.eml", filename):
         raise ValueError("发送记录中的信件文件名无效")
@@ -61,13 +91,16 @@ def _mail_file(folder, filename):
 
 def ready(snapshot, target, status, bounds):
     target = target.isoformat()
-    return bool(snapshot and str(snapshot["as_of"])[:10] == target
-                and all(str(snapshot["metadata"].get("timeframes", {}).get(t, {}).get("as_of", ""))[:10] == target
+    close = f"{target} 15:00:00"
+    def stamp(value):
+        return str(value or "").replace("T", " ")[:19]
+    return bool(snapshot and stamp(snapshot["as_of"]) == close
+                and all(stamp(snapshot["metadata"].get("timeframes", {}).get(t, {}).get("as_of")) == close
                         for t in ("1D", "60F"))
                 and status.get("status") == "complete" and status.get("target") == target
                 and status.get("snapshot", {}).get("run_id") == snapshot["run_id"]
-                and all(bounds.get(key) is not None and str(bounds[key])[:10] >= target
-                        for key in ("bar_end", "daily_end", "factor_date")))
+                and stamp(bounds.get("bar_end")) >= close
+                and all(stamp(bounds.get(key))[:10] >= target for key in ("daily_end", "factor_date")))
 
 
 class DigestTooLarge(ValueError):
@@ -81,7 +114,7 @@ def _message(snapshot, cards, images, report_day, minimum, recipient, sender, *,
     run = snapshot["run_id"] if snapshot else "none"
     message_id = f"<afr.{kind}.{report_day}.{profile}.{run}.1@{sender.split('@')[1]}>"
     subject = ("[测试] " if test else "[预览] " if preview else "") + f"Alpha Finance Radar | {report_day} | "
-    subject += "行情更新延迟" if delayed else f">{minimum:g}分候选 {len(cards)}只"
+    subject += "行情更新延迟" if delayed else f"盘后 · ≥{minimum:g}分候选 {len(cards)}只"
     text = f"{subject}\n数据截止: {snapshot['as_of'] if snapshot else '暂无'}（上海时间）\n"
     text += "正文按入场和观察分组，每只标的在点评后附日 K 与 60F 图。\n"
     for card in cards:
@@ -124,7 +157,7 @@ def preview():
     if not snapshot:
         raise ValueError("尚无已发布快照")
     folder = _root() / "preview" / snapshot["run_id"]
-    rows = select_stocks(snapshot, minimum, observations, exclusive=True)
+    rows = select_stocks(snapshot, minimum, observations)
     cards = stock_cards(snapshot, rows)
     files = _prepare(folder, snapshot, cards, datetime.now(SHANGHAI).date(), minimum, recipient,
                      "radar@example.invalid", preview=True, observations=observations)
@@ -138,6 +171,8 @@ def deliver_once(now=None, *, delay_notice=False, test=False, retry_uncertain_te
     if retry_uncertain_test and not test:
         raise ValueError("仅允许在用户核对未收到后显式重试测试邮件")
     now = market_time(now)
+    if not test and not is_trading_day(now.date()):
+        return {"status": "not_due"}
     if not test and now.time().replace(tzinfo=None) < day_time(18):
         return {"status": "not_due", "next": str(now.date())+" 18:00 Asia/Shanghai"}
     recipient, minimum, observations = options()
@@ -146,20 +181,19 @@ def deliver_once(now=None, *, delay_notice=False, test=False, retry_uncertain_te
     except MailNotConfigured as error:
         return {"status": "blocked", "reason": str(error)}
     report_day = now.date()
-    target = expected_date(now)
-    profile = _profile(recipient, minimum, observations)
-    root = (_root() / "test" if test else _root()) / str(report_day) / profile
+    day_root = (_root() / "test" if test else _root()) / str(report_day)
+    root = _delivery_folder(day_root, recipient, minimum, observations, delay_notice)
 
     def prepare(state, folder):
         snapshot = load_dashboard(state["snapshot_run_id"]) if state.get("snapshot_run_id") else load_dashboard()
         # Explicit tests use the latest published snapshot at any hour; its
         # actual cutoff is displayed. Per-stock chart validation still runs.
-        complete = bool(snapshot) if test else target is not None and ready(snapshot, target, market_state(), scan_cutoffs(now.replace(tzinfo=None)))
+        complete = bool(snapshot) if test else ready(snapshot, report_day, market_state(), scan_cutoffs(now.replace(tzinfo=None)))
         if not complete and not delay_notice:
-            return {"status": "waiting_data", "target": str(target), "as_of": snapshot.get("as_of") if snapshot else None}
+            return {"status": "waiting_data", "target": str(report_day), "as_of": snapshot.get("as_of") if snapshot else None}
         if complete and delay_notice:
             return {"status": "retry", "reason": "数据刚完成，请发送正式日报"}
-        rows = [] if delay_notice else select_stocks(snapshot, minimum, observations, exclusive=True)
+        rows = [] if delay_notice else select_stocks(snapshot, minimum, observations)
         cards = [] if delay_notice else stock_cards(snapshot, rows)
         try:
             parts = _prepare(folder, snapshot, cards, report_day,

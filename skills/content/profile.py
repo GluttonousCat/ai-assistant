@@ -20,6 +20,7 @@ from datetime import datetime
 from typing import Any, Dict, List
 
 from core.logger import get_logger
+from skills.report.attribution import attributed_statement
 
 logger = get_logger(__name__)
 
@@ -205,7 +206,8 @@ def profile_digest(profile: Dict[str, Any], max_chars: int = 6000) -> str:
     rp = s.get("reports") or {}
     if rp.get("reports"):
         parts.append("[近期研报] " + "; ".join(
-            f"{report_attribution(r)}《{str(r.get('title'))[:24]}》{r.get('rating') or ''}"
+            f"{report_attribution(r)}《{r.get('title') or ''}》{r.get('rating') or ''} "
+            f"{attributed_statement(r.get('lead_evidence'))}"
             for r in rp["reports"][:4]))
 
     ind = s.get("industry") or {}

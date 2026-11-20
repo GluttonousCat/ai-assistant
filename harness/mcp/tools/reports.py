@@ -10,15 +10,22 @@ from typing import Any, Dict
 from harness.mcp.registry import REGISTRY
 from harness.mcp.spec import ToolError, obj_schema, param
 from harness.mcp.tools._common import _jsonable, resolve_one
+from skills.report.attribution import lead_evidence, reported_rating
+from skills.report.document import load_document, reading_status
+from skills.report.answers import comparison_passages, indexed_original_quote
 
 
 def _brief(row) -> Dict[str, Any]:
     """report_meta row -> concise summary."""
     rating = None
+    rating_source = None
+    lead = None
     material_type = "unknown"
     try:
         aj = json.loads(row.get("analysis_json") or "{}")
-        rating = aj.get("rating")
+        rating = reported_rating(aj)
+        rating_source = aj.get("rating_source")
+        lead = lead_evidence(aj)
         material_type = aj.get("material_type") or "unknown"
     except Exception:
         pass
@@ -30,6 +37,8 @@ def _brief(row) -> Dict[str, Any]:
         "market": row.get("market"),
         "target": row.get("target"),
         "rating": rating,
+        "rating_source": rating_source,
+        "lead_evidence": lead,
         "material_type": material_type,
         "symbols": row.get("symbols"),
     }
@@ -51,6 +60,8 @@ def _brief(row) -> Dict[str, Any]:
                 "关键词, 匹配标题/标签/观点 (如 'HBM'/'人形机器人')", "string"
             ),
             "stock": param("股票名或代码, 命中绑定标的 (可省)", "string"),
+            "keywords": param("综述的多个检索词，一次查询按主题分别返回候选。与 keyword 二选一。",
+                              "array", items={"type": "string"}, maxItems=6),
             "days": param("只看近 N 天, 0=不限", "integer", default=180),
             "limit": param("返回条数上限", "integer", default=10),
         }
@@ -58,11 +69,21 @@ def _brief(row) -> Dict[str, Any]:
     examples=["最近有哪些HBM的研报", "谁在写中际旭创", "人形机器人行业观点"],
 )
 def search_reports(
-    keyword: str = "", stock: str = "", days: int = 180, limit: int = 10
+    keyword: str = "", stock: str = "", days: int = 180, limit: int = 10, keywords=None
 ) -> Dict[str, Any]:
-    if not keyword and not stock:
-        raise ToolError("keyword 与 stock 至少提供一个")
+    if keywords is not None:
+        if (keyword or not isinstance(keywords, list) or not 1 <= len(keywords) <= 6
+                or not all(isinstance(k, str) and 0 < len(k.strip()) <= 64 for k in keywords)):
+            raise ToolError("keywords 需要 1 至 6 个非空检索词，请单独使用 keywords 或 keyword")
+        keywords = list(dict.fromkeys(k.strip() for k in keywords))
+    if not (keyword or stock or keywords):
+        raise ToolError("请提供研报检索词或股票")
     hit = resolve_one(stock) if stock else None
+    if keywords:
+        rows = report_catalog.search_research("", hit, days, limit, keywords=keywords)
+        return {"count": len({r["report_id"] for r in rows}), "reports": [
+            {**_brief(r), "matched_keyword": r["matched_keyword"], "topic_rank": r["topic_rank"],
+             "file_id": r["file_id"], "copy_key": r["copy_key"]} for r in rows]}
     rows = report_catalog.search_research(keyword, hit, days, limit)
     return {"count": len(rows), "reports": [_brief(r) for r in rows]}
 
@@ -71,14 +92,17 @@ def search_reports(
     name="read_report",
     domain="report",
     description=(
-        "读取单篇研报: 不带 question 返回报告元数据+核心观点+正文节选 (供 Agent 自己综合); "
+        "读取单篇研报: 不带 question 返回元数据、观点来源及正文节选。用 summary_evidence 中的发言人、语气与引文解释观点，"
+        "特别保留条件或限制，区分券商自己的判断、管理层指引及调查结果。"
         "带 question 时由 LLM 针对该篇研报正文做问答 (适合'这篇研报怎么看XX'类精确提问)。"
-        "report_id 来自 search_reports 的结果。正文节选默认前 6000 字。"
+        "report_id 来自 search_reports 的结果。节选默认前 6000 字，body_status 与页数说明覆盖范围。"
+        "legacy_unverified 是待核对的旧文字，仅供查找线索。"
     ),
     params_schema=obj_schema(
         {
             "report_id": param("研报 ID (search_reports 返回)", "integer"),
             "question": param("针对该篇的提问, 可选; 省略则返回原文节选", "string"),
+            "focus": param("按主题定位原文片段，供多篇并行阅读；只读原件，无单篇模型调用。", "string"),
             "excerpt_chars": param("正文节选长度", "integer", default=6000),
         },
         ["report_id"],
@@ -86,7 +110,7 @@ def search_reports(
     examples=["读一下 289 号研报", "这篇研报对光模块怎么看 (report_id=289)"],
 )
 def read_report(
-    report_id: int, question: str = "", excerpt_chars: int = 6000
+    report_id: int, question: str = "", excerpt_chars: int = 6000, focus: str = ""
 ) -> Dict[str, Any]:
     row = report_catalog.report_body(report_id)
     if not row:
@@ -95,11 +119,10 @@ def read_report(
     base = _brief(row)
     base["industry"] = row.get("industry")
     try:
-        base["analysis"] = json.loads(row.get("analysis_json") or "{}")
+        analysis = json.loads(row.get("analysis_json") or "{}")
     except Exception:
-        base["analysis"] = None
+        analysis = None
 
-    content = row.get("content_text") or ""
     if question:
         # Single-report Q&A: goes through ReportSkill qa mode (LLM, Chinese output)
         from skills.report.skill import ReportSkill
@@ -114,19 +137,30 @@ def read_report(
         if ctx.error:
             raise ToolError(f"研报问答失败: {ctx.error}")
         result = ctx.result or {}
-        return {**base, "question": question, "answer": result.get("summary", "")}
+        # The agent reads a bounded prefix of tool results. Keep the checked
+        # answer ahead of the full historical analysis, which can fill that budget.
+        return {"report_id": report_id, "answer": result.get("summary", ""),
+                "citations": result.get("citations", []), "question": question, **base, "analysis": analysis}
 
-    if not content:
-        raise ToolError(
-            f"研报 {report_id} 无正文文本 (可能未提取或为扫描件)。"
-            f"可尝试 extract_document 或等 OCR 完成"
-        )
+    document = load_document(row)
+    status = reading_status(row, document)
+    if focus:
+        index = analysis if isinstance(analysis, dict) else {}
+        passages = comparison_passages(index, focus, document) if document.segments else []
+        return {**base, **status, "indexed_quote": indexed_original_quote(index, document), "passages": [
+            {"number": p.number, "page": p.page, "text": p.text} for p in passages]}
+    # Keep archived, unlocated text distinguishable from original passages.
+    # The catalog has already excluded pending attachments' posting commentary.
+    if status["body_status"] == "legacy_unverified":
+        content = row["content_text"]
+    else:
+        content = "\n\n".join(segment.render() for segment in document.segments)
     n = max(1000, min(int(excerpt_chars), 20000))
     return {
-        **base,
-        "content_chars": len(content),
-        "content_excerpt": content[:n],
+        **base, **status, "content_chars": len(content),
         "truncated": len(content) > n,
+        "content_excerpt": content[:n],
+        "analysis": analysis,
     }
 
 

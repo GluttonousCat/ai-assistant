@@ -56,6 +56,20 @@ def load_report(report_id):
         )
 
 
+def reports_ingested_between(start, end):
+    """Read one half-open issue window, including attachments still awaiting analysis."""
+    # created_at is TIMESTAMP DEFAULT now(): PG stores the writer's database
+    # wall clock. Convert aware bounds to that same clock (UTC in production).
+    with PgClient(read_only=True) as pg:
+        return pg.fetch_all(
+            f"SELECT {_COLUMNS}, target, created_at FROM fin.report_meta WHERE {_REPORT_SOURCE} "
+            "AND created_at >= %s::timestamptz::timestamp "
+            "AND created_at < %s::timestamptz::timestamp "
+            "ORDER BY created_at DESC, report_id DESC",
+            (start, end),
+        )
+
+
 _SNAPSHOT_MATCH = (
     "report_id=%s AND analysis_json IS NOT DISTINCT FROM %s "
     "AND file_path IS NOT DISTINCT FROM %s AND content_text IS NOT DISTINCT FROM %s"

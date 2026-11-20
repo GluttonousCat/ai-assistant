@@ -14,7 +14,7 @@ def test_insights_use_matching_page_and_condition_with_repeated_evidence():
         "kind": "driver", "statement": "利用率超过80%时预计利润率上升。",
         "source": source,
     }
-    insight = {**note, "insight_type": "watchpoints", "indicator": "产能利用率", "condition": "高于80%"}
+    insight = {**note, "insight_type": "watchpoints", "indicator": "利用率", "condition": "超过80%"}
 
     class LLM:
         def invoke(self, prompt):
@@ -29,7 +29,8 @@ def test_insights_use_matching_page_and_condition_with_repeated_evidence():
     document = Document([Segment(1, 2, quote)], "pdf_text", 2, (1,))
     result = list(analyze_document(document, "经营预测", LLM()))[-1]["data"]
     assert result["research_insights"]["watchpoints"] == [{
-        "statement": note["statement"], "indicator": "产能利用率", "condition": "高于80%",
+        "statement": note["statement"], "indicator": "利用率", "condition": "超过80%",
+        "attribution": "unknown", "stance": "conditional",
         "source": {"segment": 1, "page": 2, "quote": quote},
     }]
     assert len(result["evidence"]) == 1
@@ -119,4 +120,4 @@ def test_relocates_only_known_claims_once_and_keeps_verified_results(monkeypatch
     assert len(repair_calls) == result["coverage"]["evidence_repair_attempts"] == 1
     assert result["coverage"]["recovered_evidence"] == (0 if repair_fails else 1)
     statements = [n["statement"] for n in result["evidence"]]
-    assert statements == (["预计利润率改善。"] if repair_fails else ["预计利润率改善。", "利用率达到80%。"])
+    assert statements == [quote]  # Distinct paraphrases of this one Chinese source collapse.

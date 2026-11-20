@@ -25,6 +25,8 @@ def test_topic_preserves_unrelated_documents_and_unpaired_translations():
 
 
 def test_group_and_topic_sources_restore_late_download_without_using_commentary(tmp_path, monkeypatch):
+    enqueue = MagicMock()
+    monkeypatch.setattr("workflows.reports.sync.enqueue", enqueue)
     path = tmp_path / "report.pdf"
     sync = object.__new__(ZSXQ2PGSync)
     sync.download_dir = str(tmp_path)
@@ -47,11 +49,13 @@ def test_group_and_topic_sources_restore_late_download_without_using_commentary(
     sync._sync_attachments([meta], "zsxq")
     assert writes == [("zsxq", "", 0, "pending")]
     assert not sync._new_ids
+    enqueue.assert_not_called()
     path.touch()
     sync._sync_attachments([{**meta, "local_path": str(path)}], "zsxq_file")
     sync._sync_attachments([meta], "zsxq")
     assert writes[1:] == [("zsxq_file", "原始报告", 4, "extracted")]
     assert sync._new_ids == [22]
+    enqueue.assert_called_once_with("report_extract", report_id=22)
     sync.db.get_topic.assert_not_called()
     sync.extractor.extract.assert_called_once_with(str(path))
 
@@ -76,6 +80,7 @@ def test_tombstones_and_completed_entries_skip_new_extraction(monkeypatch):
 
 
 def test_download_callback_budgets_ready_files_and_leaves_legacy_work_explicit(tmp_path, monkeypatch):
+    monkeypatch.setattr("workflows.reports.sync.enqueue", MagicMock())
     sync = object.__new__(ZSXQ2PGSync)
     sync.download_dir = str(tmp_path)
     sync._new_ids, sync.ready_limit = [], 1

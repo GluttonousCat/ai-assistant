@@ -3,7 +3,7 @@ Research report -> industry-chain segment extraction (atomic capability)
 
 - Input: report_id + prompt (injected by the skill layer; domain knowledge lives in beta_alpha/prompts.py)
 - Output: one row per segment in fin.chain_extract (idempotent: delete then insert)
-- Callers: skills/report/skill.py in a background thread after deep extraction / scripts/backfill_chain_extract.py
+- The off-peak worker calls this after report analysis is committed.
 - Must be called outside business transactions (contains second-level LLM calls; never hold a transaction)
 """
 
@@ -14,6 +14,7 @@ import threading
 from typing import Dict, List, Optional
 
 from core.logger import get_logger
+from core.offpeak import OffPeakEnded
 from harness.llm import get_extract_llm
 from tools.finance import chain_extract as chain_store
 
@@ -30,7 +31,7 @@ _inflight_lock = threading.Lock()
 _parse_json = parse_json_response
 
 
-def extract_chain(report_id: int, prompt: str) -> int:
+def extract_chain(report_id: int, prompt: str, *, retry_errors: bool = False) -> int:
     """Extract segments from a single report and persist; returns row count
     (idempotent; call outside transactions)"""
     with _inflight_lock:
@@ -38,13 +39,13 @@ def extract_chain(report_id: int, prompt: str) -> int:
             return 0
         _inflight.add(report_id)
     try:
-        return _extract_chain_inner(report_id, prompt)
+        return _extract_chain_inner(report_id, prompt, retry_errors=retry_errors)
     finally:
         with _inflight_lock:
             _inflight.discard(report_id)
 
 
-def _extract_chain_inner(report_id: int, prompt: str) -> int:
+def _extract_chain_inner(report_id: int, prompt: str, *, retry_errors: bool = False) -> int:
     row = chain_store.extraction_text(report_id)
     if not row or not (row.get("content_text") or "").strip():
         return 0
@@ -53,7 +54,11 @@ def _extract_chain_inner(report_id: int, prompt: str) -> int:
     try:
         raw = get_extract_llm().invoke(prompt.format(report_text=text))
         data = _parse_json(raw) or {}
+    except OffPeakEnded:
+        raise
     except Exception as e:
+        if retry_errors:
+            raise
         logger.warning(f"链抽取 LLM 失败 report_id={report_id}: {e}")
         return 0
 
@@ -90,16 +95,6 @@ def _extract_chain_inner(report_id: int, prompt: str) -> int:
 
 
 def spawn_chain_extract(report_id: int) -> None:
-    """Run chain extraction in a background thread (fire-and-forget hook on the
-    report main pipeline; for long-lived processes only)"""
-
-    def _worker():
-        try:
-            from skills.beta_alpha.prompts import CHAIN_EXTRACT_PROMPT
-
-            extract_chain(report_id, CHAIN_EXTRACT_PROMPT)
-        except Exception as e:
-            logger.warning(f"后台链抽取失败 report_id={report_id}: {e}")
-
-    t = threading.Thread(target=_worker, daemon=True, name=f"chain-extract-{report_id}")
-    t.start()
+    """Submit extraction for the next off-peak worker pass."""
+    from core.offpeak_queue import enqueue
+    enqueue("report_chain", report_id=report_id)

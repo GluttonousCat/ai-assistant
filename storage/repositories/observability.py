@@ -90,6 +90,9 @@ def task_snapshot():
         reverse=True,
     )
     mail = read_json(mail_paths[0]) if mail_paths else {}
+    report_receipt = max((root / "reports/morning_email").glob("????-??-??/*/delivery.json"),
+                         key=lambda p: p.stat().st_mtime, default=None)
+    report_mail = read_json(report_receipt) if report_receipt else {}
     receipts = [
         {
             "label": "盘后行情",
@@ -110,6 +113,12 @@ def task_snapshot():
             or mail.get("updated_at")
             or mail.get("prepared_at"),
             "detail": f"行情截止 {mail.get('as_of', '—')} · {mail.get('count', '—')} 只候选",
+        },
+        {
+            "label": "研报观点早报",
+            "status": report_mail.get("status"),
+            "updated_at": report_mail.get("sent_at") or report_mail.get("prepared_at"),
+            "detail": f"收录截止 {report_mail.get('as_of', '—')} · {report_mail.get('count', '—')} 篇研报",
         },
     ]
     return {

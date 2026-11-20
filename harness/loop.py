@@ -30,7 +30,7 @@ from core.logger import get_logger
 from core.config import get_config
 from core import metrics
 from harness import session, trajectory
-from harness.execution import TOOL_TIMEOUTS, DEFAULT_TOOL_TIMEOUT, run_tool as _run_tool, execute_batch
+from harness.execution import TOOL_TIMEOUTS, DEFAULT_TOOL_TIMEOUT, run_tool as _run_tool, execute_batch, model_tool_result
 from harness.prompts import build_system_prompt
 
 logger = get_logger(__name__)
@@ -44,6 +44,7 @@ MAX_ROUNDS = int(_sb.get("agent.sandbox.max_rounds", 8))
 MAX_RESULT_CHARS = int(_sb.get("agent.sandbox.max_result_chars", 4000))
 REPEAT_LIMIT = int(_sb.get("agent.sandbox.repeat_limit", 3))          # max calls of the same (tool, args)
 MAX_SAME_TOOL_CALLS = int(_sb.get("agent.sandbox.max_same_tool_calls", 4))   # per-tool-name cap, prevents grinding segment by segment
+MAX_REPORT_BATCH_SIZE = int(_sb.get("agent.sandbox.max_report_batch_size", 12))
 
 
 # ---------- System prompt (professional know-how lives here) ----------
@@ -301,7 +302,7 @@ async def _decision_loop(llm, tools, messages: List[Dict[str, Any]],
     from harness.subagent import ESCALATE_TOOL
     allowed = {t["function"]["name"] for t in tools}
     call_counts: Dict[str, int] = {}          # exact (tool, args) dedup
-    name_counts: Dict[str, int] = {}          # per-tool-name call count (prevents grinding segment by segment)
+    name_counts: Dict[str, int] = {}          # report lookups count batches, other tools count calls
     holder.setdefault("tool_events", [])
     holder["final_text"] = ""
     holder["escalated"] = False
@@ -317,6 +318,7 @@ async def _decision_loop(llm, tools, messages: List[Dict[str, Any]],
 
         # ---- Parse this round's calls (escalate pseudo-tool intercepted first) ----
         batch = []          # [(tc, fname, fargs, env_or_None)]  None=pending execution
+        report_batch_counts: Dict[str, int] = {}
         for tc in tool_calls:
             fname = tc.function.name
             try:
@@ -358,12 +360,22 @@ async def _decision_loop(llm, tools, messages: List[Dict[str, Any]],
                              f"若确需该能力请调用 {ESCALATE_TOOL} 说明原因; "
                              f"否则用本域工具完成回答"}))
                 continue
-            name_counts[fname] = name_counts.get(fname, 0) + 1
+            report_lookup = fname in ("search_reports", "read_report")
+            if report_lookup:
+                report_batch_counts[fname] = report_batch_counts.get(fname, 0) + 1
+                if report_batch_counts[fname] > MAX_REPORT_BATCH_SIZE:
+                    batch.append((tc, fname, fargs, {
+                        "ok": False, "tool": fname,
+                        "error": f"本批 {fname} 已满 {MAX_REPORT_BATCH_SIZE} 项，此项尚未执行。"}))
+                    continue
+            if not report_lookup or report_batch_counts[fname] == 1:
+                name_counts[fname] = name_counts.get(fname, 0) + 1
             if name_counts[fname] > MAX_SAME_TOOL_CALLS:
                 batch.append((tc, fname, fargs, {
                     "ok": False, "tool": fname,
-                    "error": f"工具 {fname} 已调用 {name_counts[fname]} 次, "
-                             f"请停止继续分解调用, 基于已有结果直接作答"}))
+                    "error": (f"本次回答的 {fname} 已用完 {MAX_SAME_TOOL_CALLS} 批，该项尚未执行。"
+                              if report_lookup else f"工具 {fname} 已达 {MAX_SAME_TOOL_CALLS} 次调用上限。")
+                             + "请基于已取得的结果作答。"}))
                 continue
             batch.append((tc, fname, fargs, None))
 
@@ -391,6 +403,11 @@ async def _decision_loop(llm, tools, messages: List[Dict[str, Any]],
                 batch[i] = (batch[i][0], batch[i][1], batch[i][2], env)
 
         # ---- Feed results back in original order: messages + events ----
+        messages.append({"role": "assistant", "content": None, "tool_calls": [
+            {"id": tc.id, "type": "function", "function": {
+                "name": fname, "arguments": tc.function.arguments}}
+            for tc, fname, _, _ in batch
+        ]})
         for tc, fname, fargs, env in batch:
             rows = 0
             table = _extract_table(env.get("data")) if env.get("ok") else None
@@ -402,17 +419,8 @@ async def _decision_loop(llm, tools, messages: List[Dict[str, Any]],
                 "elapsed_ms": env.get("elapsed_ms", 0), "rows": rows})
 
             # Feed the tool result back to the LLM (truncation protection)
-            result_json = json.dumps(env, ensure_ascii=False, default=str)
-            if len(result_json) > MAX_RESULT_CHARS:
-                result_json = result_json[:MAX_RESULT_CHARS] + \
-                    '…(截断, 完整结果已在前端展示)'
-            messages.append({"role": "assistant", "content": None,
-                             "tool_calls": [
-                                 {"id": tc.id, "type": "function",
-                                  "function": {"name": fname,
-                                               "arguments": tc.function.arguments}}]})
             messages.append({"role": "tool", "tool_call_id": tc.id,
-                             "content": result_json})
+                             "content": model_tool_result(env, MAX_RESULT_CHARS)})
 
             yield sse("tool_call", {
                 "tool": fname, "args": fargs,
@@ -484,7 +492,11 @@ async def run_agent_stream(text: str, session_id: Optional[str],
     holder["session_id"] = session_id
 
     try:
-        if domain:
+        from harness.report_overview import is_report_overview, run_overview
+        if use_subagent and is_report_overview(text, domain):
+            async for ev in run_overview(llm, messages, text, holder, sse_tee):
+                yield ev
+        elif domain:
             d = DOMAIN_DEFS[domain]
             dtools = domain_manifest(domain)
             yield sse_tee("stage", {"stage": "agent",

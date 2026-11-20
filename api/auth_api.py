@@ -23,6 +23,10 @@ from tools.auth import users as accounts
 auth_router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
+def _is_super_admin(username: str, role: str) -> bool:
+    return role == "admin" and username == get_config().env("SUPER_ADMIN")
+
+
 class LoginRequest(BaseModel):
     username: str = Field(min_length=1, max_length=64)
     password: str = Field(min_length=1, max_length=128)
@@ -48,8 +52,7 @@ def login(req: LoginRequest) -> Dict[str, Any]:
             "username": user["username"],
             "role": user["role"],
             "display_name": user.get("display_name") or user["username"],
-            "is_super_admin": user["role"] == "admin"
-            and user["username"] == get_config().env("SUPER_ADMIN", "Gluttonouscat"),
+            "is_super_admin": _is_super_admin(user["username"], user["role"]),
         },
     }
 
@@ -82,13 +85,12 @@ def me(current: TokenPayload = Depends(get_current_user)) -> Dict[str, Any]:
     user = accounts.get_user(current.username)
     if not user or not user.get("is_active"):
         raise HTTPException(status_code=401, detail="账户不可用，请重新登录")
-    super_name = get_config().env("SUPER_ADMIN", "Gluttonouscat")
     return {
         "user_id": user["user_id"],
         "username": user["username"],
         "display_name": user.get("display_name") or user["username"],
         "role": user["role"],
-        "is_super_admin": user["role"] == "admin" and user["username"] == super_name,
+        "is_super_admin": _is_super_admin(user["username"], user["role"]),
     }
 
 
@@ -110,15 +112,8 @@ def change_password(
     return {"ok": True}
 
 
-# ============================================================
-# User management (super admin Gluttonouscat only): list / role change
-# Other admins can view admin pages but cannot manage users
-# ============================================================
-
-
 def _require_super(current: TokenPayload = Depends(require_admin)) -> TokenPayload:
-    super_name = get_config().env("SUPER_ADMIN", "Gluttonouscat")
-    if current.username != super_name:
+    if not _is_super_admin(current.username, current.role):
         raise HTTPException(status_code=403, detail="仅超级管理员可管理用户")
     return current
 

@@ -10,12 +10,13 @@ Rules:
 """
 from __future__ import annotations
 
-from fastapi import Request
+from asyncio import to_thread
+from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from core.logger import get_logger
-from core.security import decode_token
+from api.deps import resolve_session
 
 logger = get_logger(__name__)
 
@@ -50,9 +51,14 @@ class AuthMiddleware(BaseHTTPMiddleware):
         token = parts[1] if len(parts) == 2 and parts[0].lower() == "bearer" else None
         if not token:
             token = request.query_params.get("token")
-        if not token or decode_token(token) is None:
+        try:
+            current = await to_thread(resolve_session, token) if token else None
+        except HTTPException as exc:
+            return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+        if current is None:
             return JSONResponse(
                 status_code=401,
                 content={"detail": "未登录或登录已失效, 请重新登录"},
             )
+        request.state.current_user = current
         return await call_next(request)

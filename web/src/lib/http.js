@@ -82,5 +82,5 @@ export function sseStream(path, body, onEvent) {
       reader.releaseLock?.()
     }
   })()
-  return { promise, abort: () => ac.abort() }
+  return { promise, signal: ac.signal, abort: () => ac.abort() }
 }

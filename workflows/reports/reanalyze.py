@@ -2,10 +2,10 @@
 
 import argparse
 from pathlib import Path
-import threading
 
 from core.config import get_config
 from core.logger import get_logger
+from core.offpeak_queue import enqueue
 from skills.base import SkillContext
 from skills.report.extraction import ANALYSIS_VERSION, saved_analysis_version
 from skills.report.skill import ReportSkill
@@ -40,12 +40,6 @@ def upgrade(report_id):
     context = ReportSkill()(SkillContext(params={
         "mode": "extract", "report_id": report_id, "upgrade_only": True,
     }))
-    # The service keeps these jobs alive after returning. A standalone invocation
-    # must wait for its OCR continuation, followed by the post-commit workers.
-    for prefix in ("ocr", "chain-extract", "translate"):
-        for worker in threading.enumerate():
-            if worker.name == f"{prefix}-{report_id}":
-                worker.join()
     if context.error:
         raise RuntimeError(context.error)
     result = context.result or {}
@@ -54,9 +48,7 @@ def upgrade(report_id):
     if report_id in result.get("skipped", []):
         return "已跳过（版本或状态已更新）"
     if report_id in result.get("queued_ocr", []):
-        latest = report_analysis.load_report(report_id) or {}
-        if saved_analysis_version(latest.get("analysis_json")) >= ANALYSIS_VERSION:
-            return "已升级（OCR）"
+        return "已排队，等待闲时 OCR 和接续分析"
     raise RuntimeError(result.get("summary") or "未保存新版本")
 
 
@@ -66,7 +58,7 @@ def main(argv=None):
     scope = parser.add_mutually_exclusive_group()
     scope.add_argument("--before-id", type=int, help="按 ID 降序，从该 ID 之前续查")
     scope.add_argument("--report-id", type=int, help="仅预览或重试该篇历史研报")
-    parser.add_argument("--apply", action="store_true", help="逐篇调用模型并保存新版分析")
+    parser.add_argument("--apply", action="store_true", help="逐篇提交闲时升级任务")
     args = parser.parse_args(argv)
     if not 1 <= args.limit <= 50 or any(x is not None and x <= 0 for x in (args.report_id, args.before_id)):
         parser.error("limit 须为 1–50，ID 须为正整数")
@@ -78,7 +70,8 @@ def main(argv=None):
         print(f"#{rid} · {'早期版本' if not version else f'v{version}'} → v{ANALYSIS_VERSION} · {title}", flush=True)
         if args.apply:
             try:
-                print(f"#{rid} {upgrade(rid)}", flush=True)
+                enqueue("report_upgrade", report_id=rid)
+                print(f"#{rid} 已排队", flush=True)
             except Exception as exc:
                 logger.exception("历史研报 #%s 升级失败", rid)
                 print(f"#{rid} 升级失败 · {exc} · 可用 --report-id {rid} --apply 重试", flush=True)

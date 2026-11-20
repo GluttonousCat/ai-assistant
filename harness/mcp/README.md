@@ -135,9 +135,9 @@ env = run_tool_call(tc.name, tc.arguments_json)   # -> 统一信封
 {
   "mcpServers": {
     "alpha-radar": {
-      "command": "C:/Users/GluttonousCat/PycharmProjects/ai-assistant/.venv/Scripts/python.exe",
+      "command": "C:/path/to/ai-assistant/.venv/Scripts/python.exe",
       "args": ["-m", "harness.mcp.server"],
-      "cwd": "C:/Users/GluttonousCat/PycharmProjects/ai-assistant"
+      "cwd": "C:/path/to/ai-assistant"
     }
   }
 }

@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "test": "node --test src/market/stockList.test.js src/lib/polling.test.js src/lib/sse.test.js src/lib/http.test.js src/chat/resultData.test.js src/market/chartData.test.js src/quant/researchPolicy.test.js src/quant/workspaceRules.test.js",
+    "test": "node --test src/market/stockList.test.js src/lib/polling.test.js src/lib/sse.test.js src/lib/http.test.js src/chat/resultData.test.js src/market/chartData.test.js src/quant/researchPolicy.test.js src/quant/workspaceRules.test.js src/reports/claimSections.test.js",
     "dev": "vite",
     "build": "vite build",
     "lint": "oxlint",

@@ -8,7 +8,7 @@ Background: the API service once died silently for 17 days with nobody noticing
 Design:
 - Independent process, periodically GETs /health; broadcasts an alert on any state
   change (up<->down);
-- WebSocket feed: any client connecting to ws://127.0.0.1:8209/ws receives
+- WebSocket feed: any client connecting to ws://127.0.0.1:9000/ws receives
     {type:"hello"}   current state, sent immediately on connect
     {type:"beat"}    heartbeat frame per check (ok/latency)
     {type:"alert"}   up<->down state flip
@@ -16,12 +16,12 @@ Design:
 - Auto-restart (disable-able): after fail-threshold consecutive failures, restart
   the API process; 10-minute cooldown; probes the port before restarting to avoid
   duplicate instances;
-- Opening http://127.0.0.1:8209/ in a browser shows a minimal status page
+- Opening http://127.0.0.1:9000/ in a browser shows a minimal status page
   (inlined in this same file).
 
 Start (detached):
     .venv/Scripts/python.exe -m workflows.runtime.health_sentinel
-CLI: --port 8209 --interval 10 --fail-threshold 3 --no-auto-restart
+CLI: --port 9000 --interval 10 --fail-threshold 3 --no-auto-restart --no-wecom-guard
 """
 from __future__ import annotations
 
@@ -36,12 +36,12 @@ from typing import Dict, Set
 
 import httpx
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from core.config import get_config
 from core.logger import get_logger
 
 logger = get_logger(__name__)
 
 ROOT = Path(__file__).resolve().parents[2]
-API_URL = "http://127.0.0.1:8208/health"
 RESTART_CMD = [str(ROOT / ".venv" / "Scripts" / "python.exe"), "run_server.py"]
 RESTART_COOLDOWN_S = 600
 
@@ -58,8 +58,10 @@ ws.onmessage=e=>{const m=JSON.parse(e.data);
 </script></body></html>"""
 
 
-def build_app(interval: float, fail_threshold: int, auto_restart: bool) -> FastAPI:
+def build_app(interval: float, fail_threshold: int, auto_restart: bool, *, wecom_guard_enabled: bool = True) -> FastAPI:
     app = FastAPI(title="health-sentinel", docs_url=None, redoc_url=None)
+    api_port = get_config().get("app.port", 9001)
+    api_url = f"http://127.0.0.1:{api_port}/health"
     clients: Set[WebSocket] = set()
     state: Dict = {"ok": None, "fails": 0, "t_down": None,
                    "last_restart": 0.0}
@@ -78,7 +80,7 @@ def build_app(interval: float, fail_threshold: int, auto_restart: bool) -> FastA
         import socket
         with socket.socket() as s:
             s.settimeout(1)
-            return s.connect_ex(("127.0.0.1", 8208)) == 0
+            return s.connect_ex(("127.0.0.1", api_port)) == 0
 
     # ---- WeCom bot supervision: liveness via lock-file PID, auto-restart on death
     #      (three silent deaths observed in practice) ----
@@ -125,7 +127,7 @@ def build_app(interval: float, fail_threshold: int, auto_restart: bool) -> FastA
         t0 = time.time()
         try:
             r = await asyncio.to_thread(
-                lambda: httpx.get(API_URL, timeout=5))
+                lambda: httpx.get(api_url, timeout=5))
             ok, ms = r.status_code == 200, int((time.time() - t0) * 1000)
         except Exception:
             ok, ms = False, -1
@@ -191,7 +193,8 @@ def build_app(interval: float, fail_threshold: int, auto_restart: bool) -> FastA
             while True:
                 try:
                     await tick()
-                    await wecom_guard()
+                    if wecom_guard_enabled:
+                        await wecom_guard()
                 except Exception as e:  # noqa: BLE001 the sentinel itself must never exit
                     logger.error(f"tick 异常: {e}")
                 await asyncio.sleep(interval)
@@ -202,14 +205,14 @@ def build_app(interval: float, fail_threshold: int, auto_restart: bool) -> FastA
 
 if __name__ == "__main__":
     import uvicorn
-    from core.config import get_config
-    get_config()
     ap = argparse.ArgumentParser(description="API 独立心跳哨兵 (WS 出口)")
-    ap.add_argument("--port", type=int, default=8209)
+    ap.add_argument("--port", type=int, default=9000)
     ap.add_argument("--interval", type=float, default=10)
     ap.add_argument("--fail-threshold", type=int, default=3)
     ap.add_argument("--no-auto-restart", action="store_true")
+    ap.add_argument("--no-wecom-guard", action="store_true")
     a = ap.parse_args()
     uvicorn.run(build_app(a.interval, a.fail_threshold,
-                          not a.no_auto_restart),
+                          not a.no_auto_restart,
+                          wecom_guard_enabled=not a.no_wecom_guard),
                 host="127.0.0.1", port=a.port, log_level="warning")

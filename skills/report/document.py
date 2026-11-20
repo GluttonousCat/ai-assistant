@@ -114,6 +114,27 @@ def load_document(row) -> Document:
     )
 
 
+def reading_status(row, document: Document) -> dict:
+    pages = len({s.page for s in document.segments if s.page is not None})
+    if document.segments:
+        partial = document.incomplete_text or bool(document.missing_pages)
+        status = "partial" if partial else "available"
+        note = "部分正文可读，结论限于已读取的内容。" if partial else "正文可读。"
+    elif row.get("extraction_status") == "pending_ocr":
+        status, note = "pending_ocr", "附件正在等待 OCR 结果。"
+    elif document.source == "pdf_ocr" and document.page_count:
+        if row.get("extraction_status") == "extracted" and (row.get("content_text") or "").strip():
+            status, note = "legacy_unverified", "扫描件只有旧版文字，出处和页码待核对，请勿据此引用券商观点。"
+        else:
+            status, note = "needs_ocr", "已找到 PDF，尚无可定位的正文，可在研报详情重新分析以识别扫描页。"
+    elif row.get("source") in ("zsxq", "zsxq_file") and not Path(row.get("file_path") or "").is_file():
+        status, note = "awaiting_attachment", "本地缺少对应附件，尚无可定位的正文。"
+    else:
+        status, note = "unavailable", "当前记录没有可核对的正文。"
+    return {"body_status": status, "body_note": note, "pages_with_text": pages if document.page_count or pages else None,
+            "page_count": document.page_count}
+
+
 def extraction_batches(document: Document):
     batches = []
     batch, size = [], 0
@@ -179,9 +200,9 @@ def _source_hints(analysis, query_terms):
     return hints
 
 
-def qa_context(document: Document, question: str, analysis=None):
+def qa_context(document: Document, question: str, analysis=None, *, max_chars=_QA_CHARS):
     """Rank original passages, including cross-language matches through checked quotes."""
-    if sum(len(segment.render()) + 2 for segment in document.segments) <= _QA_CHARS:
+    if sum(len(segment.render()) + 2 for segment in document.segments) <= max_chars:
         return document.segments
     query_terms = _terms(question)
     hints = _source_hints(analysis, query_terms)
@@ -206,7 +227,7 @@ def qa_context(document: Document, question: str, analysis=None):
     selected, size = [], 0
     for i in ranked:
         n = len(passages[i].render()) + 2
-        if size + n <= _QA_CHARS:
+        if size + n <= max_chars:
             selected.append(i)
             size += n
     return [passages[i] for i in sorted(selected)]

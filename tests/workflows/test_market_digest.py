@@ -35,14 +35,34 @@ def delivery(monkeypatch, tmp_path):
 
 def test_send_is_once_per_local_day_and_accepts_utc_clock(delivery, monkeypatch):
     snapshot, _ = delivery
-    snapshot["data"].append(row("600001.SH", score=60))
+    monkeypatch.setattr(job, "options", lambda: ("reader@example.com", 72., True))
+    snapshot["data"] = [row("600001.SH", score=72), row("600002.SH", score=71.9)]
     calls = []
     monkeypatch.setattr(job, "send", lambda msg, cfg: calls.append(msg))
     utc = datetime(2026, 11, 16, 10, tzinfo=timezone.utc)
     assert job.deliver_once(utc)["status"] == "sent"
     assert job.deliver_once(utc)["already_processed"]
     assert len(calls) == 1 and calls[0]["To"] == "reader@example.com"
-    assert ">60分候选 1只" in str(calls[0]["Subject"])
+    assert "≥72分候选 1只" in str(calls[0]["Subject"])
+
+
+def test_score_change_reuses_sent_legacy_receipt(delivery, monkeypatch):
+    snapshot, root = delivery
+    monkeypatch.setattr(job, "send", lambda *a: pytest.fail("duplicate"))
+    legacy = root / "2026-11-16" / job._profile("reader@example.com", 75., True)
+    parts = job._prepare(legacy / "report", snapshot, [], date(2026, 11, 16), 75.,
+                         "reader@example.com", "sender@example.com")
+    write_json(legacy / "delivery.json", {"status": "sent", "count": 0, "parts": parts})
+    monkeypatch.setattr(job, "options", lambda: ("reader@example.com", 72., True))
+    assert job.deliver_once(datetime(2026, 11, 16, 18))["already_processed"]
+
+
+def test_close_requires_today_1500_minute_snapshot(delivery, monkeypatch):
+    snapshot, _ = delivery
+    snapshot["metadata"]["timeframes"]["60F"]["as_of"] = "2026-11-16 14:00:00"
+    monkeypatch.setattr(job, "send", lambda *a: pytest.fail("not today's close"))
+    assert job.deliver_once(datetime(2026, 11, 16, 18))["status"] == "waiting_data"
+    assert job.deliver_once(datetime(2026, 11, 21, 18))["status"] == "not_due"
 
 
 def test_before_18_does_not_send_or_load_credentials(monkeypatch):

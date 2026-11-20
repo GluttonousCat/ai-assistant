@@ -15,14 +15,14 @@ def at(hour, minute=0, day=16):
     return datetime(2026, 11, day, hour, minute, tzinfo=SHANGHAI)
 
 
-def test_clock_is_shanghai_and_weekends_also_have_a_slot():
+def test_clock_is_shanghai_and_weekends_skip_to_next_session():
     assert module.MarketDigestScheduler.next_slot(
         datetime(2026, 11, 16, 9, 59, tzinfo=timezone.utc)
     ) == at(18)
     assert module.MarketDigestScheduler.next_slot(
         datetime(2026, 11, 16, 10, tzinfo=timezone.utc)
     ) == at(18, day=17)
-    assert module.MarketDigestScheduler.next_slot(at(17, day=14)) == at(18, day=14)
+    assert module.MarketDigestScheduler.next_slot(at(17, day=14)) == at(18, day=16)
 
 
 def test_startup_before_18_waits_without_sending(monkeypatch):
@@ -226,7 +226,7 @@ def test_lifespan_starts_and_stops_mail_even_when_quotes_are_disabled(monkeypatc
         "get_config",
         lambda: SimpleNamespace(
             get=lambda key, default=None: False
-            if key in ("schedule.enabled", "zsxq_schedule.enabled")
+            if key in ("schedule.enabled", "zsxq_schedule.enabled", "offpeak_processing.enabled")
             else default
         ),
     )
@@ -245,6 +245,8 @@ def test_lifespan_starts_and_stops_mail_even_when_quotes_are_disabled(monkeypatc
         lambda: SimpleNamespace(start=lambda: None, stop=noop),
     )
     monkeypatch.setattr(lifespan_module, "get_midday_scheduler",
+                        lambda: SimpleNamespace(start=lambda: None, stop=noop))
+    monkeypatch.setattr(lifespan_module, "get_report_digest_scheduler",
                         lambda: SimpleNamespace(start=lambda: None, stop=noop))
     monkeypatch.setattr(
         zsxq_scheduler, "get_zsxq_scheduler", lambda: SimpleNamespace(stop=noop)

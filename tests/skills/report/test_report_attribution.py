@@ -31,7 +31,7 @@ def test_commentary_forecasts_remain_readable_without_entering_broker_series():
 
 
 def test_material_attribution_needs_a_matching_first_page_quote():
-    doc = Document([Segment(1, 2, "BofA GLOBAL RESEARCH\n知识星球：猫哥的研报圈")], "pdf_ocr", 3, (1, 3))
+    doc = Document([Segment(1, 2, "BofA GLOBAL RESEARCH\n知识星球：示例研报群")], "pdf_ocr", 3, (1, 3))
 
     class LLM:
         def invoke(self, _):
@@ -80,12 +80,17 @@ def test_synthesis_passes_report_identity_and_verified_conditions(monkeypatch):
 
     class LLM:
         def invoke(self, prompt):
-            assert "冶炼厂复产" in prompt and "Watch smelter restarts." in prompt
+            assert "Watch smelter restarts." in prompt and "供应收紧" not in prompt
             assert '"material_type": "commentary"' in prompt and '"report_id": 9' in prompt
-            return "解读材料转述的判断见研报 #9 第 3 页。"
+            claim = {"report_id": 9, "statement": "关注冶炼厂复产。", "attribution": "third_party",
+                     "stance": "observation", "source": {**insight["source"], "page": 99}}
+            return json.dumps({"claims": [claim, {**claim, "report_id": 8}, {**claim, "report_id": "9"}]})
 
     monkeypatch.setattr(skill, "_llm", LLM)
     context = SkillContext(params={"topic": "铝"})
     skill._run_analyze(context, context.params)
     assert context.result["report_count"] == 2
     assert context.result["reports"][1]["material_type"] == "unknown"
+    claim, = context.result["citations"]
+    assert claim["report_id"] == 9 and claim["source"]["page"] == 3
+    assert "二手材料转述" in context.result["summary"] and "Watch smelter restarts." in context.result["summary"]

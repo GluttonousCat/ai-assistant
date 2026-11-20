@@ -95,11 +95,10 @@ def follow_up(signal_date=None, now=None):
     else:
         # Prefer a cohort with at least one completed follow-up session.
         chosen = next((d for d in available if d["date"] < end[:10]), available[0])
-    minimum = 60
-    snapshot = load_dashboard(chosen["run_id"], min_numeric_score=minimum)
+    snapshot = load_dashboard(chosen["run_id"], min_numeric_score=60)
     if not snapshot:
         raise LookupError("历史快照不可用")
-    rows = select_stocks(snapshot, minimum=minimum, observations=True)
+    rows = select_stocks(snapshot)
     calendar = tracking_calendar(chosen["date"], end[:10])
     frame = scan_daily_inputs([r["ts_code"] for r in rows], chosen["date"], end) if rows else None
     grouped = {code: part.to_dict(orient="records") for code, part in frame.groupby("ts_code")} if frame is not None and not frame.empty else {}
@@ -107,7 +106,7 @@ def follow_up(signal_date=None, now=None):
     ready = [r["follow_up"]["latest_return_pct"] for r in results if r["follow_up"]["latest_return_pct"] is not None]
     return {"dates": available, "signal_date": chosen["date"], "run_id": chosen["run_id"],
             "version": snapshot.get("version"), "published_at": snapshot.get("created_at"),
-            "as_of": end, "data": results,
+            "as_of": end, "data": results, "tracking_min_score": snapshot["metadata"].get("tracking_min_score", 60),
             "summary": {"count": len(results), "measured": len(ready),
                         "positive": sum(v > 0 for v in ready),
                         "mean_return_pct": round(sum(ready) / len(ready), 4) if ready else None}}
@@ -116,7 +115,7 @@ def follow_up(signal_date=None, now=None):
 def follow_up_chart(code, run_id, timeframe="1D", now=None):
     snapshot = load_dashboard(run_id, code=code)
     if not snapshot or not any(r["ts_code"] == code for r in select_stocks(snapshot)):
-        raise LookupError("该股票不在所选快照的60分候选名单中")
+        raise LookupError("该股票不在所选快照的候选名单中")
     end = completed_end(now)
     result = stock_detail(code, snapshot["metadata"]["start"], end,
                           snapshot["metadata"]["config"], timeframe)

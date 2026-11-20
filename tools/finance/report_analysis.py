@@ -7,6 +7,7 @@ from storage.repositories.report_analysis import (
     mark_failed,
     save_extraction,
     matched_reports,
+    reports_ingested_between,
 )
 
 __all__ = [
@@ -16,4 +17,5 @@ __all__ = [
     "mark_failed",
     "save_extraction",
     "matched_reports",
+    "reports_ingested_between",
 ]

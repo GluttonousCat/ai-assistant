@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { platformApi } from './platformApi'
+import { claimSections, insightTitles } from './reports/claimSections'
 
 const ANALYSIS_LABEL = { done: '已分析', failed: '失败', none: '未分析' }
 const MARKET_LABEL = { A股: 'A股', H股: 'H股', 台股: 'TW股', TW股: 'TW股', 日股: '日股', 韩股: '韩股', 美股: '美股', 欧洲股: '欧洲股', 东南亚股: '东南亚股', 宏观: '宏观', 商品: '商品', 行业: '行业', 其他: '其他' }
@@ -13,14 +14,9 @@ const EVIDENCE_LABEL = {
   revision: '预期调整', risk: '风险', industry: '行业观察',
 }
 
-const INSIGHT_GROUPS = [
-  ['theses', '研究判断'],
-  ['assumptions', '关键假设'],
-  ['changes', '预期变化'],
-  ['watchpoints', '跟踪与验证'],
-]
-
 const MATERIAL_LABEL = { original: '研报原文', commentary: '二手解读', unknown: '材料性质待核实' }
+const SPEAKER_LABEL = { broker: '券商', management: '公司管理层', survey: '调查受访者', third_party: '第三方', unknown: '发言主体待核实' }
+const STANCE_LABEL = { observation: '观察', expectation: '预期', conditional: '条件判断', risk: '风险提示', unknown: '语气待核实' }
 
 function parseAnalysis(raw) {
   try {
@@ -31,50 +27,52 @@ function parseAnalysis(raw) {
   }
 }
 
-function SourceQuote({ source }) {
+function SourceQuote({ source, label = '原文', expanded = false }) {
   if (typeof source?.quote !== 'string' || !source.quote.trim()) return null
-  const location = source.page ? `PDF 第 ${source.page} 页` : source.segment ? `正文片段 ${source.segment}` : '原文'
+  const location = source.page ? `PDF 第 ${source.page} 页` : source.segment ? `正文片段 ${source.segment}` : ''
   return (
-    <details className="report-source">
-      <summary className="dim">{location} · 查看出处</summary>
+    <details className="report-source" open={expanded}>
+      <summary className="dim">{[label, location].filter(Boolean).join(' · ')}</summary>
       <blockquote>{source.quote}</blockquote>
     </details>
   )
 }
 
-function ResearchInsights({ insights }) {
-  return INSIGHT_GROUPS.map(([group, title]) => {
-    const entries = Array.isArray(insights?.[group])
-      ? insights[group].filter(entry => typeof entry?.statement === 'string' && entry.statement.trim())
-      : []
-    if (!entries.length) return null
-    return (
-      <section key={group} className="research-insights">
-        <h3>{title}</h3>
-        <ul>
-          {entries.map((entry, i) => {
-            const attributes = [
-              ['涉及对象', entry.subject], ['观察指标', entry.indicator],
-              ['条件', entry.condition], ['时间范围', entry.horizon],
-            ].filter(([, value]) => typeof value === 'string' && value.trim())
-            return (
-              <li key={i}>
-                <p>{entry.statement}</p>
-                {attributes.length > 0 && (
-                  <dl>
-                    {attributes.map(([label, value]) => (
-                      <div key={label}><dt>{label}</dt><dd>{value}</dd></div>
-                    ))}
-                  </dl>
-                )}
-                <SourceQuote source={entry.source} />
-              </li>
-            )
-          })}
-        </ul>
-      </section>
-    )
-  })
+function ClaimLabels({ entry, commentary }) {
+  const speaker = SPEAKER_LABEL[entry.attribution] || SPEAKER_LABEL.unknown
+  const stance = STANCE_LABEL[entry.stance] || STANCE_LABEL.unknown
+  return <div className="claim-labels">{commentary ? '材料转述 · ' : ''}{speaker} · {stance}</div>
+}
+
+function ClaimSection({ title, entries, featured, attributed, commentary }) {
+  return (
+    <section className="research-insights">
+      <h3>{title}</h3>
+      <ul>
+        {entries.map((entry, i) => {
+          const verbatim = attributed && entry.statement === entry.source?.quote
+          const attributes = [
+            ['涉及对象', entry.subject], ['观察指标', entry.indicator],
+            ['条件', entry.condition], ['时间范围', entry.horizon],
+          ].filter(([, value]) => typeof value === 'string' && value.trim())
+          return (
+            <li key={i}>
+              {attributed && <ClaimLabels entry={entry} commentary={commentary} />}
+              {!verbatim && <p>{attributed && <span className="dim">中文转述 · </span>}{entry.statement}</p>}
+              {attributes.length > 0 && (
+                <dl>
+                  {attributes.map(([label, value]) => (
+                    <div key={label}><dt>{label}</dt><dd>{value}</dd></div>
+                  ))}
+                </dl>
+              )}
+              <SourceQuote source={entry.source} label={commentary ? '解读材料摘录' : '原文摘录'} expanded={featured || verbatim} />
+            </li>
+          )
+        })}
+      </ul>
+    </section>
+  )
 }
 
 function AnalysisOverview({ data }) {
@@ -82,20 +80,26 @@ function AnalysisOverview({ data }) {
   const { coverage } = data
   const materialLabel = MATERIAL_LABEL[data.material_type]
   const commentary = data.material_type === 'commentary'
+  const attributed = Number(data.analysis_version) >= 4
+  const sections = attributed ? claimSections(data) : []
+  const showRating = typeof data.rating === 'string' && data.rating && data.rating !== '无' &&
+    (!attributed || Boolean(data.rating_source?.quote))
   const keyPoints = Array.isArray(data.key_points) ? data.key_points.filter(point => typeof point === 'string') : []
   const risks = Array.isArray(data.risks) ? data.risks.filter(risk => typeof risk === 'string') : []
   return (
     <div className="ai-result">
-      {(materialLabel || (typeof data.rating === 'string' && data.rating && data.rating !== '无')) && (
+      {(materialLabel || showRating) && (
         <div className="report-meta">
           {materialLabel && <strong>{materialLabel}</strong>}
-          {typeof data.rating === 'string' && data.rating && data.rating !== '无' && (
+          {showRating && (
             <span className="badge EARLY">{commentary ? '材料转述评级' : '材料所列评级'} · {data.rating}</span>
           )}
         </div>
       )}
       {commentary && <p className="report-attribution">下列判断和预测来自这份解读材料的转述，展开出处可核对材料中的表述。</p>}
-      {materialLabel && data.material_source && <SourceQuote source={data.material_source} />}
+      {!attributed && <p className="report-attribution">历史分析尚未逐条标注发言人和语气，可重新分析后对照引文。</p>}
+      {materialLabel && data.material_source && <SourceQuote source={data.material_source} label="材料署名依据" />}
+      {showRating && data.rating_source && <SourceQuote source={data.rating_source} label={commentary ? '转述评级出处' : '评级出处'} />}
       {coverage && (
         <p className="dim">
           已分析 {coverage.analyzed_segments}/{coverage.segment_count} 个正文片段
@@ -108,20 +112,34 @@ function AnalysisOverview({ data }) {
           {coverage.rejected_insights > 0 && ` · ${coverage.rejected_insights} 条研究判断的条件或字段未通过核对`}
         </p>
       )}
-      {typeof data.core_view === 'string' && data.core_view && <p className="ai-coreview">{data.core_view}</p>}
-      {keyPoints.length > 0 && (
+      {attributed && !sections.length && <p className="dim">本次分析没有可逐条对照原文的观点。</p>}
+      {sections.map(section => (
+        <ClaimSection key={section.title} {...section} commentary={commentary} attributed />
+      ))}
+      {attributed && Array.isArray(data.forecast_excerpts) && data.forecast_excerpts.length > 0 && (
+        <details className="report-evidence">
+          <summary>待核实预测口径的原文 · {data.forecast_excerpts.length} 条</summary>
+          {data.forecast_excerpts.map((source, i) => <SourceQuote key={i} source={source} expanded />)}
+        </details>
+      )}
+      {!attributed && typeof data.core_view === 'string' && data.core_view && <p className="ai-coreview">{data.core_view}</p>}
+      {!attributed && keyPoints.length > 0 && (
         <ul className="ai-keypoints">
           {keyPoints.map((point, i) => <li key={i}>{point}</li>)}
         </ul>
       )}
-      <ResearchInsights insights={data.research_insights} />
-      {risks.length > 0 && (
+      {!attributed && Object.entries(insightTitles).map(([group, title]) => {
+        const entries = data.research_insights?.[group]
+        return Array.isArray(entries) && entries.length > 0 &&
+          <ClaimSection key={group} title={title} entries={entries.filter(entry => typeof entry?.statement === 'string')} commentary={commentary} />
+      })}
+      {!attributed && risks.length > 0 && (
         <>
           <div className="panel-title">风险提示</div>
           <ul className="ai-keypoints">{risks.map((risk, i) => <li key={i}>{risk}</li>)}</ul>
         </>
       )}
-      {Array.isArray(data.evidence) && data.evidence.length > 0 && (
+      {!attributed && Array.isArray(data.evidence) && data.evidence.length > 0 && (
         <details className="report-evidence">
           <summary>研究依据 · {data.evidence.length} 条</summary>
           <ul className="ai-keypoints">
@@ -138,7 +156,7 @@ function AnalysisOverview({ data }) {
   )
 }
 
-function ForecastTable({ forecasts, materialType }) {
+function ForecastTable({ forecasts, materialType, analysisVersion }) {
   if (!forecasts?.length) return null
   const showSymbols = forecasts.some(forecast => forecast.ts_code || forecast.symbol)
   return (
@@ -156,7 +174,12 @@ function ForecastTable({ forecasts, materialType }) {
               <td className="dim">{forecast.period === 'NA' ? '—' : forecast.period || '—'}</td>
               <td>{forecast.value}</td>
               <td className="dim">{forecast.unit || '—'}</td>
-              <td className="dim">{forecast.raw_text || '—'}<SourceQuote source={forecast.source} /></td>
+              <td className="dim">
+                {analysisVersion >= 4 && <ClaimLabels entry={forecast} commentary={materialType === 'commentary'} />}
+                {forecast.raw_text || '—'}
+                {forecast.header_source && <SourceQuote source={forecast.header_source} label="预测期表头" />}
+                <SourceQuote source={forecast.source} label={materialType === 'commentary' ? '解读材料摘录' : '预测出处'} />
+              </td>
             </tr>
           ))}
         </tbody>
@@ -465,7 +488,7 @@ export default function Reports() {
                 )}
 
                 <AnalysisOverview data={detail.analysis} />
-                <ForecastTable materialType={detail.analysis?.material_type} forecasts={detail.analysis?.analysis_version >= 2
+                <ForecastTable analysisVersion={detail.analysis?.analysis_version} materialType={detail.analysis?.material_type} forecasts={detail.analysis?.analysis_version >= 2
                   ? detail.analysis.forecasts
                   : detail.forecasts?.map(f => ({
                     ts_code: f.ts_code, symbol: f.symbol,
@@ -513,12 +536,12 @@ export default function Reports() {
             </div>
 
             {ai.text && (
-              <>
-                <div className="panel-title" style={{ marginTop: 16 }}>模型输出 · 流式</div>
+              <details className="report-evidence">
+                <summary>模型提取草稿</summary>
                 <pre ref={streamBoxRef} className={`stream-out${!ai.done && !ai.error ? ' streaming' : ''}`}>
                   {ai.text}
                 </pre>
-              </>
+              </details>
             )}
 
             {ai.data && (
@@ -531,7 +554,7 @@ export default function Reports() {
                   <span className="code">{ai.data.ts_code || (ai.data.symbols || []).join(', ') || '未识别标的'}</span>
                 </div>
                 <AnalysisOverview data={ai.data} />
-                <ForecastTable materialType={ai.data.material_type} forecasts={ai.data.forecasts} />
+                <ForecastTable analysisVersion={ai.data.analysis_version} materialType={ai.data.material_type} forecasts={ai.data.forecasts} />
               </div>
             )}
 

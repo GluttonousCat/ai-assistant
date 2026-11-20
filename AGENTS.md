@@ -39,7 +39,8 @@ workflows/   常驻服务、数据流程、离线研究与自检，按职责分�
              market/：daily_scheduler 交易日17点增量与失败重试；intraday_scheduler 四轮收盘120秒后采集；
                      refresh/collect_intraday/scan_intraday/scan_trend 负责回补、逐股审计与原子发布；
                      digest_scheduler 调度 11:55 午间和18:00盘后两类邮件，分别保留回执
-             reports/：scheduler 每日00:00及12:00触发 fetch，逐篇通过 sync 和 deduplicate 入库及去重
+             reports/：scheduler 每日00:00及12:00触发 fetch，逐篇通过 sync 和 deduplicate 入库及去重；
+                     morning_scheduler 每日北京时间 07:30 发送近 24 小时研报观点、原文出处和入库目录
              quant/：worker 管理持久队列；inputs 准备回测数据，backtests 运行固定对照，
                      studies 按实验组织研究入口，威科夫系列归入 studies/wyckoff。
                      实验口径、冻结声明和验证记录见 docs/agents/quant_backtesting.md
@@ -81,15 +82,11 @@ DB 实时角色校验）、`storage/pg.py`（PgClient 是上下文管理器，�
 ```
 00:00/12:00 调度 → 爬话题 + 逐个下载PDF(反检测,60-120s/个)
   ※ 中文翻译版(文件名"中文版-"等, is_chinese_translated)下载/入库层直接过滤, 保留英文原版
-  → 每下载1个立即(逐篇流水, 下载完即"已分析"前端可用):
-     sync_zxsq_to_pg 入库(返回新report_id) → LLM Analysis(仅文件名→标题/机构/标的/行业/地区/市场)
-     → 深度提取(正文→材料性质/判断/假设/预期变化/跟踪条件/评级/预测，原文引述保留原语言)
-     → 去重按附件身份判定，同话题可保留多份原件，话题文字独立留存；存量分批升级见 docs/frontend/reports.md
-  ※ 深度提取也可由研报中心「AI 分析」按钮 SSE 流式触发(弹窗展示 Agent 流程+模型输出,
-    POST /api/reports/{id}/analyze/stream; 与批量链路共用 _apply_extract_result)
-  ※ 轮末批量提取(限额8/15篇)与 analyze_pending 仅作兜底清积压, 不在主链路上
-图片型PDF(无文本层) → 后台线程 qwen 视觉OCR(状态 pending_ocr, 前端隐藏)
-  → OCR完成后自动接续单篇深度提取(不等下一轮调度)
+  → 逐个附件同步入库、去重，按新 report_id 持久登记待解析任务；启动补抓检查最近一轮完成回执
+北京时间 22:00 至次日 08:00 → 后台提取标题/机构/行业，核对正文观点与预测出处
+  → 扫描件经视觉 OCR 后接续分析；译文与产业链提取在结果提交后排队
+  → 22 点与零点另有定量清积压；08 点起暂停新的后台模型请求，余项下个窗口继续
+研报中心有正文的单篇「AI 分析」和在线问答可实时处理；批量升级与年报模型修复走闲时队列。
 ```
 关键表：`fin.report_meta`（file_name 原名/title 清洗后/org/target/industry/region/market）、
 `fin.report_forecast`（盈利预测）。market 词表：A股/H股/TW股/日股/韩股/美股/欧洲股/东南亚股/商品/宏观/其他。
@@ -106,8 +103,8 @@ sections=三~七节按 L1 小节全量（mdna 全量/治理·事项关键词/股
 
 ## 4. 模型路由（改模型只动 config.yaml）
 
-`config.yaml llm.models.<用途>`：default/agent/extract/analysis=deepseek-v4-flash-0731，
-vision=qwen3.8-flash（deepseek 不收图片）。**思考开关由 `llm.enable_thinking` 全局控制
+`config.yaml llm.models.<用途>`：default/agent/extract/analysis/nl2sql=deepseek-v4.1-flash-1017，
+vision=qwen3.8-omni-flash。**思考开关由 `llm.enable_thinking` 全局控制
 （当前 true=最强思考；vision 用途已覆盖关闭）；`llm.max_tokens` 必须给足（32768，思考与
 正文共用预算）——两者由 `harness/llm.py` 统一注入，业务代码禁止传 `enable_thinking`**。
 代码用 `get_agent_llm()/get_extract_llm()/get_vision_llm()` 工厂，禁止硬编码模型名。详见
@@ -139,7 +136,7 @@ vision=qwen3.8-flash（deepseek 不收图片）。**思考开关由 `llm.enable_
 | 走平均线换复权基准后信号翻转 | 斜率/均线贴合比较使用按ATR缩放的微小数值容差；覆盖前复权展示与首因子回测基准的一致性，不能把1ULP误差当趋势 |
 | 回测原始价被复权计算改写 | `to_numpy`可能返回视图；原始执行价必须`copy=True`，与复权指标数组分离；撮合前校验raw×scale=adjusted，拒绝混合单位；旧失真批次保留并标记替代 |
 | LLM prompt 花括号 | `.format()` 模板里的 JSON 花括号必须转义 `{{}}`（曾致 KeyError） |
-| 视觉 OCR 阻塞请求线程 | OCR 一律后台线程 + 状态 pending_ocr（前端隐藏，完成后自动接续） |
+| 视觉 OCR 阻塞请求线程 | 研报 OCR 使用后台闲时队列 + 状态 pending_ocr（前端隐藏，完成后自动接续） |
 | PG 服务端重启杀数小时批任务 | 长批任务按工作单元（每股）捕获 OperationalError 重连续跑（batch.py `_process_stock`/sync_holders 模式）；注意 PgClient 连接在 `__enter__` 才从池获取，手动管理必须 `PgClient().__enter__()` 成对使用，裸构造 conn/cur 全是 None |
 
 ## 7. 开发规范（提交前自查）
@@ -174,7 +171,7 @@ vision=qwen3.8-flash（deepseek 不收图片）。**思考开关由 `llm.enable_
 | 前端问答 | [docs/frontend/chat.md](docs/frontend/chat.md) | SSE 协议/意图路由 |
 | 股票看板与趋势筛票 | [docs/frontend/stock_dashboard.md](docs/frontend/stock_dashboard.md) | 60F/日K趋势回调与阴跌砸坑反弹/独立截止/全池快照/可解释条件；不宣称已验证收益 |
 | 量化策略与回测 | [docs/agents/quant_backtesting.md](docs/agents/quant_backtesting.md) | 注册策略/真实限价/T+1资金组合/2026样本内研究/固定名单偏差与实际已知名单对照 |
-| 前端研报 | [docs/frontend/reports.md](docs/frontend/reports.md) | 流水线/表结构/去重/LLM Analysis/AI分析流式弹窗 |
+| 研报中心与早报 | [docs/frontend/reports.md](docs/frontend/reports.md) | 研报解析与去重、出处核对、AI 分析弹窗、07:30 观点邮件 |
 | 运行观测 | [docs/frontend/monitor.md](docs/frontend/monitor.md) | 后台采集阶段/跨进程任务历史/日志筛选脱敏/Agent监控，仅管理员 |
 | 前端框架 | [docs/frontend/framework_theme.md](docs/frontend/framework_theme.md) | 品牌/深黑暗棕主题/桌面入口 |
 | 模型体系 | [docs/agents/llm_models.md](docs/agents/llm_models.md) | 用途路由/两个模型的坑 |

@@ -1,7 +1,7 @@
 # LLM 模型体系设计
 
 > Alpha Finance Radar 平台 · 模型路由与用途体系
-> 更新：2026-09-03
+> 更新：2026-11-20
 
 ## 一、系统设计
 
@@ -9,8 +9,8 @@
 
 | 类别 | 模型 | 说明 |
 |------|------|------|
-| **文本模型（统一）** | `deepseek-v4-flash-0731` | 思考型模型，**开启最强思考**（`llm.enable_thinking: true`，2026-09-03 起全局默认）；开思考必须配足 `llm.max_tokens`（16384，思考与正文共用预算） |
-| **多模态模型（统一）** | `qwen3.8-flash` | 视觉输入（图片型 PDF OCR / 图片理解）。deepseek-v4-flash 在 Dashscope 网关**不接收图片输入**（实测返回"未收到图片"），视觉用途必须走 qwen；用途级 `enable_thinking: false`（OCR 逐页高频，关思考省时省钱） |
+| **文本模型（统一）** | `deepseek-v4.1-flash-1017` | 思考型模型，**开启最强思考**（`llm.enable_thinking: true`，2026-09-03 起全局默认）；开思考必须配足 `llm.max_tokens`（32768，思考与正文共用预算） |
+| **多模态模型（统一）** | `qwen3.8-omni-flash` | 视觉输入（图片型 PDF OCR / 图片理解）。视觉用途单独配置；用途级 `enable_thinking: false`（OCR 逐页高频，关思考省时省钱） |
 | embedding（预留） | `text-embedding-v3` | 向量化（未来研报 RAG） |
 
 网关：`https://dashscope.aliyuncs.com/compatible-mode/v1`（阿里云百炼，OpenAI 兼容协议，key 在 `.env OPENAI_API_KEY`）。
@@ -36,14 +36,15 @@
 
 ```yaml
 llm:
-  enable_thinking: true          # 思考开关全局默认: 最强思考
-  max_tokens: 16384              # 输出预算 (思考+正文共用, 勿设小)
+  enable_thinking: true          # Default for text models.
+  max_tokens: 32768              # Shared reasoning and output budget.
   models:
-    default:   {model: deepseek-v4-flash-0731}   # 兜底
-    agent:     {model: deepseek-v4-flash-0731}   # Skill/Agent 推理
-    extract:   {model: deepseek-v4-flash-0731}   # 结构化提取
-    analysis:  {model: deepseek-v4-flash-0731}   # 轻量元数据
-    vision:    {model: qwen3.8-flash, enable_thinking: false}  # 多模态
+    default:   {model: deepseek-v4.1-flash-1017}
+    agent:     {model: deepseek-v4.1-flash-1017}
+    extract:   {model: deepseek-v4.1-flash-1017}
+    analysis:  {model: deepseek-v4.1-flash-1017}
+    nl2sql:    {model: deepseek-v4.1-flash-1017, enable_thinking: false}
+    vision:    {model: qwen3.8-omni-flash, enable_thinking: false}
     embedding: {model: text-embedding-v3}
 ```
 
@@ -53,6 +54,7 @@ llm:
 | `agent` | 意图识别 L2、SQL 生成/解读、研报综合解读、扫描件解读 | `get_agent_llm()` |
 | `extract` | 研报长文本结构化 JSON 提取 | `get_extract_llm()` |
 | `analysis` | 文件名→机构/标的/行业/地区（LLM Analysis） | 直接读 `llm.models.analysis.model` |
+| `nl2sql` | 自然语言转 SQL 快速路径 | `get_nl2sql_llm()` |
 | `vision` | 图片型 PDF 逐页 OCR、图片理解 | `get_vision_llm()` |
 
 **换模型只改 config.yaml 一处**。每个用途还可单独覆盖 `api_key`/`base_url`（不同厂商混布，如 agent 用 Claude、extract 用 deepseek）：
@@ -76,6 +78,7 @@ OpenAI SDK (dashscope compatible-mode)
 
 | 问题 | 根因 | 处理方案 | 状态 |
 |------|------|---------|------|
+| `.env` 设为 `-1017` 后，百炼仍收到旧模型调用 | 用途级模型配置优先用于已命名用途，在线实例也从独立发布目录读取配置 | 同步文本、视觉的用途配置和发布目录，重启在线服务 | 2026-11-20 已验证文本及读图调用 |
 | deepseek-v4-flash 视觉调用返回"我没有收到图片" | 该模型在 dashscope 网关不接收图片输入（三种消息格式实测均失败） | 视觉用途独立路由到 qwen 多模态（purpose 体系由此建立） | ✅ 已修复 |
 | deepseek 提取整批"解析失败"、content 为空 | 思考模型默认开思考，`max_tokens=200` 被思考过程耗尽，`finish_reason=length` | 当时方案=全局关思考；**2026-09-03 反转**：开最强思考 + `llm.max_tokens=16384` + client 统一注入（根因本就是预算太小，不是思考本身） | ✅ 已修复 (2026-09-03 重新定性) |
 | qwen-flash 小模型元数据提取质量差（标的硬凑） | 模型能力 + prompt 规则弱 | 换回 deepseek-v4-flash + 规范化 prompt（词表约束），见 frontend/reports.md | ✅ 已修复 |

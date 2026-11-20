@@ -34,6 +34,7 @@ from openai import OpenAI
 
 from core.config import get_config
 from core.metrics import record as metrics_record
+from core.offpeak import check_model_window
 
 MessageList = List[Dict[str, Any]]
 
@@ -96,8 +97,9 @@ class LLMClient:
         """create() with monitoring instrumentation: latency / success / tokens (core.metrics; exceptions swallowed so business flow is unaffected)."""
         t0 = time.time()
         merged = {**self._default_kwargs(), **create_kwargs}
+        client = self.client.with_options(max_retries=0) if check_model_window() else self.client
         try:
-            response = self.client.chat.completions.create(
+            response = client.chat.completions.create(
                 model=self.model, stream=stream, **merged)
         except Exception as e:
             metrics_record("llm", purpose=self.purpose, ok=False,

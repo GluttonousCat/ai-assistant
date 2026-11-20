@@ -5,6 +5,23 @@ from jobs import scan_trend
 from tests.skills.trend.test_dual_setups import make_setup
 
 
+def test_close_scan_removes_failed_opportunity_before_counting_candidates(monkeypatch):
+    cfg = scan_trend.MtfConfig(fresh_reversal=True, risk_setups=True)
+    day = date(2026, 11, 19)
+    member = {"ts_code": "600001.SH", "name": "示例", "board": "主板"}
+    row = {**member, "eligible": True, "setup_watch": True, "score": 85, "state": "候选",
+           "trend60": {"fresh": True, "ready": True}}
+    monkeypatch.setattr(scan_trend, "scan_cutoffs", lambda now: {
+        "bar_end": datetime(2026, 11, 19, 15), "daily_end": day, "factor_date": day})
+    monkeypatch.setattr(scan_trend, "scan_universe", lambda *a, **kw: [member])
+    monkeypatch.setattr(scan_trend, "_scan_batch", lambda *args: [row])
+    monkeypatch.setattr(scan_trend, "retired_signals", lambda candidates, *a, **kw: {r["ts_code"] for r in candidates})
+    _, meta, rows = scan_trend.scan(cfg=cfg, workers=1)
+    assert rows[0]["state"] == "原机会已失效" and not rows[0]["eligible"]
+    assert meta["tracking_min_score"] == 72
+    assert meta["eligible"] == meta["opportunity_watch"] == meta["reversal_watch"] == 0
+
+
 def test_requested_date_cannot_exceed_verified_factor_cutoff(monkeypatch):
     monkeypatch.setattr(
         scan_trend,

@@ -1,27 +1,30 @@
 """Group repeated daily selections into stable, first-observed opportunities."""
 from hashlib import sha256
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 from zoneinfo import ZoneInfo
 
 from skills.trend.digest import select_stocks
+from skills.trend.episode_support import bars_by_close, market_timestamp, positive, support_exit
 from skills.trend.tracking import completed_end, performance
-from tools.market.trend_data import scan_daily_inputs, tracking_calendar, tracking_history
+from tools.market.trend_data import scan_daily_inputs, scan_inputs, tracking_calendar, tracking_history
 
 ARCHIVE_SESSIONS = 20
 
 
-def _origin(row):
-    value = row.get("trend60", {}).get("origin") or row.get("startup", {}).get("start")
+def signal_origin(row):
+    value = (row.get("trend60") or {}).get("origin") or (row.get("startup") or {}).get("start")
     if not value:
-        return f'unknown:{row.get("pattern") or row.get("family") or ""}'
+        return None
+    if len(str(value)) <= 10:
+        return None
     try:
         stamp = datetime.fromisoformat(str(value))
         if stamp.tzinfo:
             stamp = stamp.astimezone(ZoneInfo("Asia/Shanghai")).replace(tzinfo=None)
         return stamp.isoformat()
     except ValueError:
-        return str(value).replace(" ", "T")
+        return None
 
 
 def group_episodes(snapshots):
@@ -32,7 +35,8 @@ def group_episodes(snapshots):
         current = {}
         for row in select_stocks(snapshot):
             code = row["ts_code"]
-            origin = _origin(row)
+            origin = (signal_origin(row) or (row.get("trend60") or {}).get("origin")
+                      or (row.get("startup") or {}).get("start") or f'unknown:{row.get("pattern") or row.get("family") or ""}')
             key = (code, source, origin)
             episode = previous.get(key)
             if episode is None:
@@ -64,6 +68,51 @@ def group_episodes(snapshots):
     return [{**episode, "in_latest_scan": episode["last_seen"] == latest} for episode in episodes]
 
 
+def _exit_times(episodes, calendar, end):
+    # Load at most two adjacent 20-session windows per group, including for archive views.
+    sessions = {day: i for i, day in enumerate(calendar)}
+    cohorts = {}
+    for row in episodes:
+        index = sessions.get(row["first_seen"])
+        if index is not None and positive(row.get("stop_price")) and index < len(calendar) - 1:
+            cohorts.setdefault(index // ARCHIVE_SESSIONS, []).append(row)
+    exits = {}
+    for cohort in cohorts.values():
+        start = min(r["first_seen"] for r in cohort)
+        last_index = max(sessions[r["first_seen"]] for r in cohort)
+        last = calendar[min(last_index + ARCHIVE_SESSIONS, len(calendar) - 1)]
+        cutoff = min(end, last + " 15:00:00")
+        codes = sorted({r["ts_code"] for r in cohort})
+        daily = bars_by_close(scan_daily_inputs(codes, start, cutoff))
+        minute = bars_by_close(scan_inputs(codes, start, cutoff))
+        for row in cohort:
+            index = sessions[row["first_seen"]]
+            days = calendar[index:index + ARCHIVE_SESSIONS + 1]
+            retired_at = support_exit(row, days, cutoff, daily, minute)
+            if retired_at:
+                exits[row["episode_id"]] = retired_at
+    return exits
+
+
+def retired_signals(rows, as_of, *, version, config):
+    """Reject only still-matching structures from an earlier published selection."""
+    origins = {r["ts_code"]: origin for r in rows if (origin := signal_origin(r))}
+    if not origins:
+        return set()
+    end = str(as_of).replace("T", " ")[:19]
+    prior = datetime.fromisoformat(end).date() - timedelta(days=1)
+    history = [s for s in tracking_history(f"{prior} 15:00:00")
+               if (market_timestamp(s.get("created_at")) or str(s["as_of"])) <= end]
+    sources = {s["run_id"] for s in history if s.get("version") == version and s["metadata"]["config"] == config}
+    matches = [r for r in group_episodes(history) if r["last_run_id"] in sources and r["ts_code"] in origins
+               and signal_origin(r) == origins[r["ts_code"]]]
+    if not matches:
+        return set()
+    calendar = tracking_calendar(min(r["first_seen"] for r in matches), end[:10])
+    exits = _exit_times(matches, calendar, end)
+    return {r["ts_code"] for r in matches if r["episode_id"] in exits}
+
+
 def episode_tracking(view="active", now=None):
     end = completed_end(now)
     snapshots = tracking_history(end)
@@ -74,6 +123,12 @@ def episode_tracking(view="active", now=None):
         age = sum(day > episode["first_seen"] for day in calendar)
         episode["age_sessions"] = age
         episode["archived"] = age >= ARCHIVE_SESSIONS
+    inspect = episodes if view == "archive" else [r for r in episodes if not r["archived"]]
+    exits = _exit_times(inspect, calendar, end)
+    for episode in inspect:
+        if episode["episode_id"] in exits:
+            episode["retired_at"] = exits[episode["episode_id"]]
+            episode["archived"] = True
     selected = [r for r in episodes if r["archived"] == (view == "archive")]
     codes = sorted({r["ts_code"] for r in selected})
     frame = scan_daily_inputs(codes, min(r["first_seen"] for r in selected), end) if selected else None

@@ -294,7 +294,7 @@ class FileDownloader:
         self._sleep(delay)
         self.log(f"😴 休眠结束")
 
-    def collect_files(self, max_pages: int = 100) -> Dict[str, int]:
+    def collect_files(self, max_pages: int = 100) -> Dict[str, int | str]:
         """Collect the file list into the database."""
         self.log(f"📊 开始收集文件列表...")
         stats = {'total': 0, 'new': 0}
@@ -308,6 +308,7 @@ class FileDownloader:
 
             data = self.fetch_file_list(count=20, index=current_index)
             if not data:
+                stats['error'] = '文件清单请求失败'
                 break
 
             files = data.get('resp_data', {}).get('files', [])

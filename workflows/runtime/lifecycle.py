@@ -13,6 +13,7 @@ from core.logger import get_logger
 from workflows.market.daily_scheduler import get_scheduler
 from workflows.market.digest_scheduler import get_digest_scheduler, get_midday_scheduler
 from workflows.market.intraday_scheduler import get_intraday_scheduler
+from workflows.reports.morning_scheduler import get_report_digest_scheduler
 from workflows.runtime.operations import BackendOperations
 
 logger = get_logger(__name__)
@@ -23,7 +24,7 @@ async def lifespan(app: FastAPI):
     config = get_config()
     app.state.operations = BackendOperations()
     from workflows.quant.worker import run_worker
-    from workflows.reports.scheduler import get_zsxq_scheduler
+    from workflows.reports.scheduler import get_offpeak_scheduler, get_zsxq_scheduler
     from tools.auth.users import ensure_auth_schema
 
     quant_stop = asyncio.Event()
@@ -41,11 +42,9 @@ async def lifespan(app: FastAPI):
             (get_intraday_scheduler, "盘中60F", True),
             (get_digest_scheduler, "趋势邮件", True),
             (get_midday_scheduler, "午间60F邮件", True),
-            (
-                get_zsxq_scheduler,
-                "知识星球研报",
-                config.get("zsxq_schedule.enabled", True),
-            ),
+            (get_report_digest_scheduler, "研报观点早报", True),
+            (get_zsxq_scheduler, "知识星球研报", config.get("zsxq_schedule.enabled", True)),
+            (get_offpeak_scheduler, "闲时模型解析", config.get("offpeak_processing.enabled", True)),
         )
         for factory, label, enabled in schedulers:
             if not enabled:

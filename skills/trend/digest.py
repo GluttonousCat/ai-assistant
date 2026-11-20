@@ -6,16 +6,17 @@ from io import StringIO
 import math
 from operator import ge, gt
 
+from skills.trend import MIN_CANDIDATE_SCORE
 from skills.trend.chart_history import stock_chart as stock_detail
 from tools.market.chart_image import DIGEST_DAILY_BARS, MINUTE_BARS, render_digest_chart
 from tools.market.trend_data import digest_stock_context
 from tools.market.universe import risk_name
 
-DEFAULT_EMAIL_MIN_SCORE = 75
+DEFAULT_EMAIL_MIN_SCORE = MIN_CANDIDATE_SCORE
 TYPES = {"trend_pullback": ("↑ 趋势回调", "#80b8ff"), "base_rebound": ("■ 底部反转", "#c6a0f6")}
 CHARTS = {
-    "1D": ("日 K", f"最近 {DIGEST_DAILY_BARS} 个交易日详图 · 近 5 年价格与波动概览"),
-    "60F": ("60F", f"最近 {MINUTE_BARS} 根 · 查看趋势结构和局部触发"),
+    "1D": ("日 K", f"最近 {DIGEST_DAILY_BARS} 日 · ▲ 入场标记"),
+    "60F": ("60F", f"最近 {MINUTE_BARS} 根 · ● 观察标记"),
 }
 
 
@@ -31,8 +32,10 @@ def opportunity(row):
     return TYPES.get(kind, ("· 待识别", "#aaa294"))
 
 
-def select_stocks(snapshot, minimum=60., observations=True, *, exclusive=False):
+def select_stocks(snapshot, minimum=None, observations=True, *, exclusive=False):
     cfg = snapshot["metadata"]["config"]
+    if minimum is None:
+        minimum = snapshot["metadata"].get("tracking_min_score", 60.)
     meets_threshold = gt if exclusive else ge
     selected = []
     for row in snapshot["data"]:
@@ -142,86 +145,83 @@ def stock_notes(row, context):
     }
 
 
-def _candidate_cards(cards):
-    groups = []
-    for eligible, anchor, title in ((True, "entries", "入场候选"), (False, "observations", "观察候选")):
-        members = [(number, card) for number, card in enumerate(cards, 1)
-                   if bool(card["row"].get("eligible")) == eligible]
-        if not members:
-            continue
-        groups.append(f'<a id="{anchor}" name="{anchor}"></a><h2 style="font-size:21px;margin:28px 0 8px;color:#172b40">{title} · {len(members)}只</h2>')
-        for number, card in members:
-            row = card["row"]
-            label, _ = opportunity(row)
-            notes = "".join(
-                f'<p style="margin:5px 0;color:#25364a;font-size:15px;line-height:1.65">'
-                f'<strong>{escape(heading)}</strong>　{escape(text)}</p>'
-                for heading, text in card["notes"].items()
-            )
-            links = "　".join(
-                f'<a href="#chart-{number}-{period.lower()}" style="color:#185694;text-decoration:underline">{title}图</a>'
-                for period, (title, _) in CHARTS.items()
-            )
-            identity = " · ".join(escape(str(value)) for value in (row["ts_code"], row.get("board")) if value)
-            groups.append(f'''<a id="brief-{number}" name="brief-{number}"></a><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #dce4ec;background:#ffffff"><tr><td style="padding:14px 0 15px">
-<h3 style="font-size:18px;color:#152c43;margin:0 0 4px">{number:02d}　{escape(row["name"])}</h3>
-<p style="font-size:13px;color:#4b5d71;margin:0 0 8px">{identity}　<strong style="color:#234d76">{float(row["score"]):.1f} 分</strong>　{escape(label)}</p>
-{notes}<p style="margin:8px 0 0;font-size:13px">{links}</p>
-{_stock_figures(card, number)}
-</td></tr></table>''')
-    return "".join(groups)
-
-
 def _stock_figures(card, number):
     name = escape(card["row"]["name"])
-    sections = []
+    figures = []
     for period, (title, caption) in CHARTS.items():
         cid = escape(card["charts"][period]["cid"], quote=True)
         anchor = f"chart-{number}-{period.lower()}"
-        sections.append(f'''<a id="{anchor}" name="{anchor}"></a><p style="margin:12px 0 7px;color:#4b5d71;font-size:13px">
-<strong style="color:#172b40">{title}</strong>　{caption}</p>
-<img src="cid:{cid}" width="936" alt="{name} {title}前复权K线" style="display:block;width:100%;max-width:100%;height:auto;border:0">''')
-    return "".join(sections)
+        figures.append(f'''<a id="{anchor}" name="{anchor}"></a>
+<p style="margin:16px 0 6px;color:#52645f;font-size:14px;line-height:1.55"><strong style="color:#17392f">{title}</strong> · {caption}</p>
+<img src="cid:{cid}" width="644" alt="{name} {title}前复权K线" style="display:block;width:100%;max-width:644px;height:auto;border:0">''')
+    return "".join(figures)
+
+
+def _stock_card(card, number):
+    row = card["row"]
+    label, _ = opportunity(row)
+    identity = " · ".join(escape(str(value)) for value in (row["ts_code"], row.get("board"), label) if value)
+    notes = card["notes"]
+    signal = escape(notes.get("信号与风险", "")).replace("。 ", "。<br>")
+    paragraphs = "".join(
+        f'<p style="margin:8px 0 0;font-size:16px;line-height:1.65;color:#253c34">'
+        f'<strong>{heading}</strong>　{escape(notes[heading])}</p>'
+        for heading in ("走势解读", "标的概况") if notes.get(heading)
+    )
+    return f'''<a id="brief-{number}" name="brief-{number}"></a>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" bgcolor="#ffffff" style="width:100%;border:1px solid #d8e1db"><tr><td class="stock-pad" style="padding:16px">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
+<td valign="middle"><h3 style="font-size:23px;line-height:1.35;margin:0;color:#15372d">{escape(row["name"])}</h3></td>
+<td width="76" align="right" valign="middle" style="font-size:18px;line-height:1.4;color:#15634d;white-space:nowrap"><strong>{float(row["score"]):.1f}</strong> 分</td>
+</tr></table>
+<p style="margin:4px 0 12px;color:#52645f;font-size:14px;line-height:1.5">{identity}</p>
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" bgcolor="#eef4ef"><tr><td style="padding:9px 12px;border-left:3px solid #37745d;font-size:16px;line-height:1.65">
+<strong style="color:#214a3b">信号与风险</strong><br>{signal}</td></tr></table>
+{paragraphs}{_stock_figures(card, number)}
+<p style="margin:8px 0 0;text-align:right;font-size:14px"><a style="color:#36594c" href="#directory">返回候选名单</a></p>
+</td></tr></table><p aria-hidden="true" style="margin:0;font-size:10px;line-height:10px">&nbsp;</p>'''
 
 
 def render_html(snapshot, cards, report_day: date, minimum=DEFAULT_EMAIL_MIN_SCORE, *, preview=False, delayed=False, test=False):
     cutoff = str(snapshot["as_of"]).replace("T", " ")[:16] if snapshot else "暂无"
-    entries = sum(bool(card["row"].get("eligible")) for card in cards)
-    observations = len(cards) - entries
-    links = []
-    for number, anchor, label in ((entries, "entries", "入场候选"), (observations, "observations", "观察候选")):
-        if number:
-            links.append(f'<a href="#{anchor}" style="color:#185694;text-decoration:underline">{label} {number} 只</a>')
-    navigation = "　·　".join(links)
     alert = ("测试邮件" if test else "本地预览" if preview else "行情更新延迟" if delayed else
              "休市日报" if snapshot and cutoff[:10] != report_day.isoformat() else "盘后日报")
+    directory, groups = [], []
+    for eligible, anchor, title, color in (
+        (True, "entries", "入场候选", "#14634c"),
+        (False, "observations", "观察候选", "#3d587a"),
+    ):
+        members = [(i, card) for i, card in enumerate(cards, 1) if bool(card["row"].get("eligible")) == eligible]
+        if not members:
+            continue
+        names = "　".join(
+            f'<a href="#brief-{i}" style="display:inline-block;color:#244c41;text-decoration:underline">{escape(card["row"]["name"])}</a>'
+            for i, card in members
+        )
+        directory.append(f'<p style="margin:5px 0;font-size:15px;line-height:1.8"><strong>{title} {len(members)} 只</strong>　{names}</p>')
+        groups.append(f'<h2 id="{anchor}" style="margin:16px 0 8px;color:{color};font-size:20px;line-height:1.4">{title} · {len(members)}只</h2>')
+        groups.extend(_stock_card(card, i) for i, card in members)
+
     if delayed:
-        summary = "当天行情与快照尚未齐全。正式日报将在数据更新后发送。"
-    elif cards:
-        summary = navigation
-    else:
+        summary = "当天行情与快照尚未齐全，本次仅发送数据延迟通知。"
+    elif not cards:
         summary = "本期没有符合评分门槛的候选。"
-    patterns = {}
-    for card in cards:
-        label, _ = opportunity(card["row"])
-        name = label.split(maxsplit=1)[-1]
-        patterns[name] = patterns.get(name, 0) + 1
-    overview = "，".join(f"{escape(name)} {count} 只" for name, count in patterns.items())
-    overview_html = f'<p style="margin:6px 0 0;color:#365c80;font-size:13px">{overview}</p>' if overview else ""
-    legend = '<p style="margin:6px 0 0;color:#4b5d71;font-size:12px">前复权 · M8 / M13 / M21　▲ 日 K 入场标记　● 60F 观察标记</p>' if cards else ""
-    return f'''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Alpha Finance Radar · {report_day}</title></head>
-<body style="margin:0;padding:0;background:#edf2f7;color:#25364a;font-family:'Microsoft YaHei',Arial,sans-serif">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" bgcolor="#edf2f7" style="table-layout:fixed"><tr><td align="center" style="padding:18px 8px">
-<!--[if mso]><table role="presentation" width="960" cellpadding="0" cellspacing="0"><tr><td><![endif]-->
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" bgcolor="#ffffff" style="width:100%;max-width:960px;table-layout:fixed">
-<tr><td style="padding:22px 12px 14px;border-top:5px solid #1c5680">
-<p style="color:#365c80;font-size:12px;margin:0 0 8px">Alpha Finance Radar · {alert} · {report_day}</p>
-<h1 style="font-size:28px;color:#142a40;margin:0 0 8px">盘后选股简报</h1>
-<p style="margin:0 0 10px;color:#4b5d71;font-size:13px;line-height:1.6">数据截至 {escape(cutoff)} · 评分 &gt; {minimum:g}</p>
-<p style="margin:0;font-size:15px;line-height:1.75">{summary}</p>
-{overview_html}{legend}
-</td></tr>
-<tr><td style="padding:0 12px 24px">{_candidate_cards(cards)}</td></tr>
+    else:
+        summary = "".join(directory)
+    return f'''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Alpha Finance Radar · {report_day}</title>
+<style>@media (max-width:480px){{.page-pad{{padding:6px 4px!important}}.stock-pad{{padding:12px 8px!important}}}}</style></head>
+<body style="margin:0;padding:0;background:#f1f4f0;color:#233e34;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Microsoft YaHei',Arial,sans-serif">
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" bgcolor="#f1f4f0" style="table-layout:fixed"><tr><td class="page-pad" align="center" style="padding:12px 6px">
+<!--[if mso]><table role="presentation" width="680" cellpadding="0" cellspacing="0"><tr><td><![endif]-->
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:680px;table-layout:fixed;text-align:left">
+<tr><td bgcolor="#183d33" style="padding:16px 18px;color:#ffffff">
+<p style="margin:0 0 6px;color:#d8e9df;font-size:14px;line-height:1.5">Alpha Finance Radar · {alert}</p>
+<h1 style="margin:0;font-size:26px;line-height:1.35">盘后选股简报</h1>
+<p style="margin:8px 0 0;color:#eef4f0;font-size:15px;line-height:1.6">{report_day}　·　评分 ≥ {minimum:g} 分</p></td></tr>
+<tr><td id="directory" bgcolor="#e4ece6" style="padding:10px 16px;color:#213c32;font-size:16px;line-height:1.65">
+<p style="margin:0;color:#496056;font-size:14px;line-height:1.6">数据截至 {escape(cutoff)}（上海时间）</p>
+{summary}</td></tr>
+<tr><td>{"".join(groups)}</td></tr>
 </table><!--[if mso]></td></tr></table><![endif]--></td></tr></table></body></html>'''
 
 

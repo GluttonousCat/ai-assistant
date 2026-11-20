@@ -300,3 +300,48 @@ def test_execute_batch_parallel_and_ordered():
         assert elapsed < 0.8, f"疑似串行: {elapsed:.2f}s"  # serial would be ~0.9s
     finally:
         loop_mod._run_tool = orig
+
+
+def test_parallel_report_reads_charge_one_batch_and_keep_call_ids(monkeypatch):
+    import asyncio
+    import json
+    from types import SimpleNamespace
+    from harness import loop
+
+    monkeypatch.setattr(loop, "MAX_SAME_TOOL_CALLS", 2)
+    monkeypatch.setattr(loop, "MAX_REPORT_BATCH_SIZE", 5)
+    groups = [[1, 2, 3, 4, 5, 6], [7], [8]]
+    def invoke(messages, tools):
+        if not groups:
+            return SimpleNamespace(content="完成", tool_calls=[])
+        calls = [SimpleNamespace(id=f"id-{rid}", function=SimpleNamespace(
+            name="read_report", arguments=json.dumps({"report_id": rid}))) for rid in groups.pop(0)]
+        return SimpleNamespace(content=None, tool_calls=calls)
+
+    entered = set()
+    async def run():
+        first_batch = asyncio.Event()
+        async def read(name, args):
+            rid = args["report_id"]
+            entered.add(rid)
+            if rid <= 5:
+                if len(entered) == 5:
+                    first_batch.set()
+                await asyncio.wait_for(first_batch.wait(), 2)
+            return {"ok": rid != 2, "tool": name, "data": {"id": rid}}
+        monkeypatch.setattr(loop, "_run_tool", read)
+        messages = []
+        holder = {}
+        async for _ in loop._decision_loop(SimpleNamespace(invoke_with_tools=invoke),
+                [{"function": {"name": "read_report"}}], messages, lambda *_: "", holder):
+            pass
+        assert holder["final_text"] == "完成"
+        return messages
+
+    messages = asyncio.run(run())
+    assert entered == {1, 2, 3, 4, 5, 7}
+    batches = [m["tool_calls"] for m in messages if m["role"] == "assistant"]
+    assert [len(batch) for batch in batches] == [6, 1, 1]
+    responses = [m for m in messages if m["role"] == "tool"]
+    assert [m["tool_call_id"] for m in responses] == [c["id"] for batch in batches for c in batch]
+    assert [json.loads(m["content"])["ok"] for m in responses] == [True, False, True, True, True, False, True, False]

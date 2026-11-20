@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from workflows.reports import reanalyze
@@ -8,9 +10,9 @@ def test_preview_filters_versions_and_sources_and_returns_stable_cursor(monkeypa
     original.touch()
     rows = [
         {"report_id": rid, "title": str(rid), "file_path": None,
-         "analysis_json": json, "has_body": body}
-        for rid, json, body in [(5, '{"analysis_version":99}', True),
-                                (4, '{"analysis_version":"3"}', True),
+         "analysis_json": stored, "has_body": body}
+        for rid, stored, body in [(5, '{"analysis_version":99}', True),
+                                (4, json.dumps({"analysis_version": str(reanalyze.ANALYSIS_VERSION)}), True),
                                 (3, '{}', False), (2, '{bad', True), (1, None, False)]
     ]
     rows[-1]["file_path"] = str(original)
@@ -30,15 +32,15 @@ def test_preview_filters_versions_and_sources_and_returns_stable_cursor(monkeypa
 def test_explicit_apply_continues_after_individual_failure(monkeypatch, capsys):
     monkeypatch.setattr(reanalyze, "candidates", lambda *args: ([(8, "甲", 1), (7, "乙", 2)], None))
 
-    def apply(rid):
-        if rid == 8:
+    def submit(kind, report_id):
+        assert kind == "report_upgrade"
+        if report_id == 8:
             raise ValueError("model unavailable")
-        return "已升级"
 
-    monkeypatch.setattr(reanalyze, "upgrade", apply)
+    monkeypatch.setattr(reanalyze, "enqueue", submit)
     assert reanalyze.main(["--apply"]) == 1
     output = capsys.readouterr().out
-    assert "--report-id 8 --apply" in output and "#7 已升级" in output
+    assert "--report-id 8 --apply" in output and "#7 已排队" in output
 
 
 def test_upgrade_rechecks_version_before_model_call(monkeypatch):
@@ -46,7 +48,8 @@ def test_upgrade_rechecks_version_before_model_call(monkeypatch):
     from skills.report.skill import ReportSkill
 
     monkeypatch.setattr(reanalyze.report_analysis, "extraction_candidates", lambda *args: [
-        {"report_id": 7, "analysis_status": "done", "analysis_json": '{"analysis_version":4}'},
+        {"report_id": 7, "analysis_status": "done",
+         "analysis_json": json.dumps({"analysis_version": reanalyze.ANALYSIS_VERSION})},
     ])
     skill = ReportSkill()
     monkeypatch.setattr(skill, "_extract_one", lambda *args: pytest.fail("newer result must be preserved"))

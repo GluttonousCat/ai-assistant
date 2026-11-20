@@ -371,6 +371,24 @@ class FakeRegistry:
 
 
 class TestCollectOffline:
+    def test_qa_uses_only_cited_broker_statements_when_attribution_is_available(self, monkeypatch, tmp_path):
+        class CitedRegistry(FakeRegistry):
+            def call(self, name, arguments=None):
+                if name == "read_report" and arguments.get("question"):
+                    source = {"page": 2, "segment": 2, "quote": "We see some upside if restocking resumes."}
+                    return {"ok": True, "data": {"answer": "评级: 买入", "citations": [
+                        {"material_type": "original", "attribution": "broker", "stance": "conditional", "source": source,
+                         "statement": "核心观点: 若补库恢复，则存在上行空间。"},
+                        {"material_type": "original", "attribution": "management", "source": source,
+                         "statement": "核心观点: 公司预计增长。"},
+                    ]}}
+                return super().call(name, arguments)
+
+        monkeypatch.setattr(rs, "_mcp", CitedRegistry)
+        shard = rs.collect_report_views("贵州茅台", out_dir=tmp_path)
+        from_qa = [view for view in shard.views if view.report_id == 102]
+        assert [v.statement for v in from_qa] == ["【券商·条件判断】若补库恢复，则存在上行空间。（PDF 第2页）"]
+
     def _collect(self, monkeypatch, tmp_path, **kw):
         fake = FakeRegistry()
         monkeypatch.setattr(rs, "_mcp", lambda: fake)

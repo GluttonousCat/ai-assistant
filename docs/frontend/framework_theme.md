@@ -1,7 +1,7 @@
 # 前端框架与主题设计文档
 
 > Alpha Finance Radar 平台 · 整体前端架构 / 品牌 / 视觉主题
-> 更新：2026-11-13
+> 更新：2026-11-20
 
 ## 一、系统设计
 
@@ -40,7 +40,7 @@ hash 路由（`window.location.hash`）：`#chat`（默认）→ 智能对话；
 
 ### 1.4 导航收起与展开
 
-`Platform.jsx`统一管理导航状态，品牌区按钮切换展开216px / 收起64px。
+`Platform.jsx` 统一管理导航状态。展开宽 260px，收起时桌面宽 88px，1200px 及以下宽 78px。
 收起时隐藏品牌文字、菜单名称和用户详情，保留导航图标、头像、退出按钮；
 图标入口保留中文`aria-label`和悬停提示，当前页带`aria-current`。
 收起状态通过浏览器`localStorage`的`alpha:sidebar-collapsed`保存，存储不可用时仍可切换。
@@ -53,6 +53,7 @@ hash 路由（`window.location.hash`）：`#chat`（默认）→ 智能对话；
 | 位置 | 文案 |
 |------|------|
 | 浏览器标题（index.html） | Alpha Finance Radar |
+| 标签页图标、登录页与对话头像 | 共用 `web/src/assets/favicon.svg`，暖棕底配米白色 A；构建时生成带内容哈希的图标 URL |
 | 登录页主标题 | Alpha Finance Radar |
 | 登录页副标题 | 上市公司财务与研报智能分析平台 |
 | 侧边栏品牌名 / 副名 | Alpha Finance Radar / Insight Engine |
@@ -106,7 +107,7 @@ hash 路由（`window.location.hash`）：`#chat`（默认）→ 智能对话；
 | 研报中心副标题冗余（功能说明堆砌） | 初版文案 | 移除副标题，仅保留页面标题 | ✅ 本轮 |
 | 需要桌面双击启动平台（非打开浏览器） | 初版快捷方式指向 URL | 桌面快捷方式 → `start_platform.bat`：未运行则拉起服务（窗口内实时日志）+6s 后自动开浏览器；已在运行则直接开页面。bat 全 ASCII（中文 GBK 断句坑）；日志同时写 `logs\server.log` | ✅ 本轮 |
 | 导航需按角色分级（区间看板/用户管理 admin 专属） | 初版导航无权限概念 | NAV 项加 `adminOnly`：非 admin 置灰 🔒；新增 UserAdmin 页（角色切换）；hash 直达回落 | ✅ 本轮 |
-| 用户管理仅 Gluttonouscat 可见 | 所有 admin 均可管理用户过宽 | NAV 加 `superOnly`（非超管不渲染该项）+ API `_require_super`；区间看板维持 admin 可见 | ✅ 本轮 |
+| 用户管理仅超级管理员可见 | 所有 admin 均可管理用户过宽 | NAV 加 `superOnly`（非超管不渲染该项）+ API `_require_super`；区间看板维持 admin 可见 | ✅ 本轮 |
 
 2026-11-17历史问题与处理：静态导入所有业务导致入口包含未使用的图表；改为会话hook独立、
 页面lazy/Suspense与FeatureBoundary隔离，绘图与纯数据模块分开。JSON/SSE/下载共用http鉴权，旧API出口兼容。
@@ -123,7 +124,7 @@ cd web && npm run build     # 产物 → web/dist
 # 改前端后必须重新 build（uvicorn 不热载 dist）
 ```
 
-开发模式：`npm run dev`（Vite 代理 /api → 127.0.0.1:8208）。
+开发模式：`npm run dev`（Vite 代理 /api → 127.0.0.1:9001）。
 
 2026-11-17：入口JS由498.10KB降至200.53KB，图表库在需要时加载；25项前端测试、构建和lint零告警通过。
 浏览器覆盖四个主要入口、hash直达、会话恢复及390px无溢出；687项Python测试通过。

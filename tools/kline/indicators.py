@@ -1,9 +1,5 @@
 # -*- encoding: utf-8 -*-
-"""
-@date: 2026/03/23
-@file: indicators.py
-@author: GluttonousCat
-"""
+"""Price and volume indicators."""
 from __future__ import annotations
 
 import warnings

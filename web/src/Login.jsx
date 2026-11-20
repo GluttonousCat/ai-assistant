@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { platformApi, auth } from './platformApi'
+import brandMark from './assets/favicon.svg?no-inline'
 
 // Login/register page: authenticated platform entry
 // Validation rules: username must be alphanumeric/underscore only and >=6 chars; password >=8 chars
@@ -55,7 +56,7 @@ export default function Login({ onLogin }) {
     <div className="login-page">
       <div className="login-card">
         <div className="login-brand">
-          <span className="logo-mark">◎</span>
+          <img className="logo-mark" src={brandMark} alt="" width="44" height="44" />
           <h1>Alpha Finance Radar</h1>
         </div>
 

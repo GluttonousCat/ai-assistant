@@ -13,6 +13,14 @@ const EMPTY = []
 const OBSERVATION = { selection_mode: 'tracking' }
 const SLOTS = ['10:30', '11:30', '14:00', '15:00']
 
+function observationLabel(row) {
+  if (row.watch_status === 'unknown') return '首次达标时间待核验'
+  if (!row.new_today) return '延续观察'
+  if (!row.watch_since) return '今日新结构'
+  const clock = row.watch_since.slice(11, 16)
+  return row.watch_status === 'new_structure' ? `${clock} 新结构达标` : `${clock} 转入观察`
+}
+
 export default function IntradayWatch({ industries }) {
   const [report, setReport] = useState(null)
   const [busy, setBusy] = useState(true)
@@ -78,12 +86,12 @@ export default function IntradayWatch({ industries }) {
         <div><span>采集范围</span><strong>{report.universe}<small>只</small></strong><p>当前已保存的非ST股票池</p></div>
         <div><span>已完成前缀可得</span><strong>{report.collected}<small>只</small></strong><p>{report.collection_failed}只获取不完整，未据此推荐</p></div>
         <div><span>盘中观察候选 · ≥{MIN_DISPLAY_SCORE}分</span><strong>{candidates.length}<small>只</small></strong><p>复用现行60F结构 · 保留风险门槛</p></div>
-        <div><span>今天出现新起点</span><strong>{candidates.filter((r) => r.new_today).length}<small>只</small></strong><p>其余为前一阶段结构继续观察</p></div>
+        <div><span>今日新达标</span><strong>{candidates.filter((r) => r.new_today).length}<small>只</small></strong><p>包括新结构和本日转入的既有结构</p></div>
       </div>
-      <div className="intraday-filters"><input aria-label="搜索盘中观察" placeholder="名称 / 代码 / 二级行业" value={query} onChange={(e) => setQuery(e.target.value)} /><select aria-label="盘中机会类型" value={kind} onChange={(e) => setKind(e.target.value)}><option value="">全部机会</option><option value="trend_pullback">趋势回调</option><option value="base_rebound">底部反转</option></select><select aria-label="盘中起点" value={stage} onChange={(e) => setStage(e.target.value)}><option value="">全部起点</option><option value="new">今天新起点</option><option value="continued">延续观察</option></select><span>{rows.length}只 · 免费网页行情快照，非实时推送</span></div>
+      <div className="intraday-filters"><input aria-label="搜索盘中观察" placeholder="名称 / 代码 / 二级行业" value={query} onChange={(e) => setQuery(e.target.value)} /><select aria-label="盘中机会类型" value={kind} onChange={(e) => setKind(e.target.value)}><option value="">全部机会</option><option value="trend_pullback">趋势回调</option><option value="base_rebound">底部反转</option></select><select aria-label="盘中观察阶段" value={stage} onChange={(e) => setStage(e.target.value)}><option value="">全部观察</option><option value="new">今日新达标</option><option value="continued">其他观察</option></select><span>{rows.length}只 · 免费网页行情快照，非实时推送</span></div>
       <div className="trend-workspace">
         <div className="trend-stock-panel"><div className="trend-list-heading">评分 ≥{MIN_DISPLAY_SCORE} · 从高到低</div><div className="trend-stock-list">
-          {rows.map((r) => <div key={r.ts_code} className={`trend-stock-row ${r.ts_code === code ? 'selected' : ''}`}><button className="trend-stock-select" onClick={() => setCode(r.ts_code)}><span><span className="stock-name-line"><b>{r.name}</b><IndustryLabel code={r.ts_code} industries={industries} /></span><small>{r.ts_code} · {r.board}</small><OpportunityBadge value={r} /><small>{r.new_today ? '今天新起点' : '延续观察'} · 第{r.trend60.age_bars}根</small></span><span><b>{r.score.toFixed(1)}<small>/ 80分</small></b><small>风险 {r.risk_pct.toFixed(2)}%</small></span></button></div>)}
+          {rows.map((r) => <div key={r.ts_code} className={`trend-stock-row ${r.ts_code === code ? 'selected' : ''}`}><button className="trend-stock-select" onClick={() => setCode(r.ts_code)}><span><span className="stock-name-line"><b>{r.name}</b><IndustryLabel code={r.ts_code} industries={industries} /></span><small>{r.ts_code} · {r.board}</small><OpportunityBadge value={r} /><small>{observationLabel(r)} · 第{r.trend60.age_bars}根</small></span><span><b>{r.score.toFixed(1)}<small>/ 80分</small></b><small>风险 {r.risk_pct.toFixed(2)}%</small></span></button></div>)}
           {!rows.length && <div className="intraday-empty">没有符合本次条件的观察候选。</div>}
         </div></div>
         <div className="trend-detail-panel">

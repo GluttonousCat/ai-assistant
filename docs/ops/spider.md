@@ -81,14 +81,14 @@
 ```env
 # 知识星球 (可选, 也可用 accounts.db 管理多个账号)
 ZSXQ_COOKIE=你的cookie
-ZSXQ_GROUP_ID=51288148188224
+ZSXQ_GROUP_ID=your-group-id
 ```
 
 **Cookie 获取**: 登录 wx.zsxq.com → DevTools → Network → 任意请求 → Cookie。
 
 **多账号**: 用 `POST /accounts` 或 CLI 菜单 8 添加，群组可绑定账号（`group_account_map` 表）。
 
-**当前默认群组**: `51288148188224` (猫哥的研报圈，每日四时段抓取主目标)。
+默认采集群组由本地 `ZSXQ_GROUP_ID` 指定。
 
 ## 4. 反检测机制
 
@@ -140,22 +140,22 @@ CREATE TABLE collection_log(id PK, start_time, end_time, total_files, new_files,
 ```sql
 CREATE TABLE fin.report_meta (
     report_id SERIAL PK,
-    topic_id BIGINT,                    -- 知识星球话题ID
-    file_id BIGINT,                     -- 知识星球文件ID
-    ts_code VARCHAR(16),                -- 标的股票 (F4 抽取后填充)
+    topic_id BIGINT,                   -- 知识星球话题ID
+    file_id BIGINT,                    -- 知识星球文件ID
+    ts_code VARCHAR(16),               -- 标的股票 (F4 抽取后填充)
     title VARCHAR(256),
     author VARCHAR(64), org_name VARCHAR(64),
     publish_date DATE,
-    report_type VARCHAR(16),            -- deep/comment/weekly
-    source VARCHAR(32),                 -- zsxq / zsxq_topic / zsxq_file / upload
-    file_path TEXT,                     -- 本地文件路径
+    report_type VARCHAR(16),           -- deep/comment/weekly
+    source VARCHAR(32),                -- zsxq / zsxq_topic / zsxq_file / upload
+    file_path TEXT,                    -- 本地文件路径
     file_name VARCHAR(256), file_size BIGINT,
-    content_text TEXT,                  -- 提取的文本
-    content_chars INTEGER,              -- 文本长度 (质量检查)
-    extraction_status VARCHAR(16),      -- pending / extracted / failed
+    content_text TEXT,                 -- 提取的文本
+    content_chars INTEGER,             -- 文本长度 (质量检查)
+    extraction_status VARCHAR(16),     -- pending / extracted / failed
     created_at TIMESTAMP
 );
-CREATE TABLE fin.report_forecast (...);  -- M4 研报预测抽取 (待做)
+CREATE TABLE fin.report_forecast (...); -- M4 研报预测抽取 (待做)
 CREATE TABLE fin.report_sync_meta (...); -- 同步水位线
 ```
 
@@ -181,14 +181,14 @@ CREATE TABLE fin.report_sync_meta (...); -- 同步水位线
 
 **手动同步**:
 ```bash
-# 指定群组
-.venv/Scripts/python.exe -m scripts.sync_zxsq_to_pg --group 51288148188224
+# Use a specific group.
+.venv/Scripts/python.exe -m workflows.reports.sync --group YOUR_GROUP_ID
 
-# 或使用 .env 的 ZSXQ_GROUP_ID
-.venv/Scripts/python.exe -m scripts.sync_zxsq_to_pg
+# Use the configured group.
+.venv/Scripts/python.exe -m workflows.reports.sync
 
-# 只处理新增 N 条 (调试)
-.venv/Scripts/python.exe -m scripts.sync_zxsq_to_pg --group 51288148188224 --limit 50
+# Limit the batch size.
+.venv/Scripts/python.exe -m workflows.reports.sync --limit 50
 ```
 
 ## 6. 研报文本提取
@@ -208,7 +208,7 @@ text = get_extractor().extract("path/to/report.pdf")
 ```
 
 **扫描版 PDF 的处理**:
-- 猫哥群的研报 PDF 为**扫描图片版** (16 页 fitz 提取文本为空)
+- 抽样的研报 PDF 为**扫描图片版** (16 页 fitz 提取文本为空)
 - 当前策略: **用关联话题文本 (核心观点全文) 作为研报正文**, PDF 附件作为原始文件保存
 - OCR 支持 (PaddleOCR) 未引入 (依赖较重, 后续按需加)
 
@@ -232,16 +232,17 @@ text = get_extractor().extract("path/to/report.pdf")
 ### 7.2 手动运行
 
 ```bash
-# 完整抓取 (下载10个文件)
-.venv/Scripts/python.exe -m scripts.daily_fetch_zxsq --group 51288148188224 --max-fetch 10
+# Fetch up to ten files.
+.venv/Scripts/python.exe -m workflows.reports.fetch --max-fetch 10
 
-# 仅检查今天新增
-.venv/Scripts/python.exe -m scripts.daily_fetch_zxsq --group 51288148188224 --check
+# Check today's new files.
+.venv/Scripts/python.exe -m workflows.reports.fetch --check
 
-# 调试: 跳过下载
+# Skip downloads.
 .venv/Scripts/python.exe - <<'PY'
-from scripts.daily_fetch_zxsq import run_once
-run_once("51288148188224", max_fetch=0)
+from core.config import get_config
+from workflows.reports.fetch import run_once
+run_once(get_config().zsxq_group_id, max_fetch=0)
 PY
 ```
 
@@ -250,7 +251,7 @@ PY
 **Windows schtasks** (按需设定时段, 如 6/12/18/24):
 
 ```bat
-schtasks /Create /TN "ZSXQ_0600" /SC DAILY /ST 06:00 /TR "C:\path\.venv\Scripts\python.exe C:\path\scripts\daily_fetch_zxsq.py --group 51288148188224 --max-fetch 10"
+schtasks /Create /TN "ZSXQ_0600" /SC DAILY /ST 06:00 /TR "C:\path\.venv\Scripts\python.exe C:\path\jobs\daily_fetch_zxsq.py --max-fetch 10"
 schtasks /Create /TN "ZSXQ_1200" /SC DAILY /ST 12:00 /TR "... 同上 ..."
 schtasks /Create /TN "ZSXQ_1800" /SC DAILY /ST 18:00 /TR "... 同上 ..."
 schtasks /Create /TN "ZSXQ_2400" /SC DAILY /ST 00:00 /TR "... 同上 ..."
@@ -258,7 +259,7 @@ schtasks /Create /TN "ZSXQ_2400" /SC DAILY /ST 00:00 /TR "... 同上 ..."
 
 **Linux cron**:
 ```cron
-0 6,12,18,0 * * * cd /path/ai-assistant && .venv/bin/python -m scripts.daily_fetch_zxsq --group 51288148188224 --max-fetch 10 >> logs/daily_fetch.log 2>&1
+0 6,12,18,0 * * * cd /path/ai-assistant && .venv/bin/python -m workflows.reports.fetch --max-fetch 10 >> logs/daily_fetch.log 2>&1
 ```
 
 ### 单次运行容量估算
@@ -284,7 +285,7 @@ schtasks /Create /TN "ZSXQ_2400" /SC DAILY /ST 00:00 /TR "... 同上 ..."
 ### 方式二: API (后台任务)
 
 ```bash
-uvicorn app:app --port 8208
+uvicorn app:app --port 9001
 ```
 
 ## 9. API 接口
@@ -307,16 +308,16 @@ uvicorn app:app --port 8208
 
 **示例**:
 ```bash
-curl "http://localhost:8208/reports?source=zsxq_file&limit=5"
-curl "http://localhost:8208/reports/207?include_text=true"
-curl -X POST "http://localhost:8208/crawl/latest" -H "Content-Type: application/json" -d '{"group_id":"51288148188224","per_page":20}'
+curl "http://localhost:9001/reports?source=zsxq_file&limit=5"
+curl "http://localhost:9001/reports/207?include_text=true"
+curl -X POST "http://localhost:9001/crawl/latest" -H "Content-Type: application/json" -d '{"group_id":"YOUR_GROUP_ID","per_page":20}'
 ```
 
 ## 10. 实测接入情况
 
-**目标群组** (Cookie 已配置, 付费群已加入):
+以下是两类研报来源的验证记录。
 
-### 群组 A: `51288148188224` (猫哥的研报圈) — 外资研报文件为主 (每日更新)
+### 附件型研报来源
 
 | 指标 | 数值 |
 |------|------|
@@ -333,17 +334,17 @@ curl -X POST "http://localhost:8208/crawl/latest" -H "Content-Type: application/
 - 两个文件通道（topic_files / files）并存，幂等去重
 - 多个文件共享同一 topic 时，该 topic 无正文（纯附件说明）
 
-### 群组 B: `51115521812114` (纳指星球调研) — 行业研报话题型
+### 话题型研报来源
 
 | 指标 | 状态 |
 |------|------|
-| 访问 | ✅ 可访问 (已加入) |
+| 访问 | 已验证 |
 | 内容 | 申万/TMT 行业研报、公司点评、周观点 |
-| 接入 | 待抓取 (按需运行 `daily_fetch_zxsq.py --group 51115521812114`) |
+| 接入 | 待抓取 (按需运行 `daily_fetch_zxsq.py --group YOUR_GROUP_ID`) |
 
 **内容形态**: 行业/个股研报话题（含申万消费/TMT、良信股份等公司点评），正文在话题文本中。无独立文件列表 API 访问，走 `zsxq_topic` 通道。
 
-> 两个群组定时任务可分别配置 (不同 group_id)。当前 `.env` 默认群组为猫哥研报圈。
+> 两个群组定时任务可分别配置 (不同 group_id)。
 
 ## 11. 已修复的 Bug 清单
 
@@ -365,7 +366,7 @@ curl -X POST "http://localhost:8208/crawl/latest" -H "Content-Type: application/
 
 ### Q: 如何验证 Cookie 有效？
 ```bash
-curl "http://localhost:8208/reports"  # 或直接用 Python 请求群组接口
+curl "http://localhost:9001/reports"  # See the group API.
 ```
 
 ### Q: 同步报"话题库不存在"怎么办？
@@ -405,7 +406,7 @@ SELECT report_id, title, file_path, publish_date FROM fin.report_meta WHERE ts_c
 
 ### 短期 (M4 前置)
 1. **定时任务落地**: 在 Windows schtasks / Linux cron 配置 4 个每日任务
-2. **多群组支持**: `daily_fetch_zxsq.py` 支持一次跑多个群组 (猫哥 + 纳指星球)
+2. **多群组支持**: `daily_fetch_zxsq.py` 支持一次跑多个群组
 3. **OCR 支持**: 对扫描版 PDF 做全文提取 (PaddleOCR / RapidOCR)，提升 failed 文件可用率
 4. **研报正文结构化**: 从话题文本中提取「标题/机构/日期/核心观点/盈利预测」结构化字段（供 F4 直接消费）
 
